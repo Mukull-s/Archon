@@ -7,7 +7,22 @@ import CinematicCursor from '../components/CinematicCursor'
 import FAQSection from '../components/sections/FAQSection'
 import Footer from '../components/sections/Footer'
 
-const PLANS = [
+interface PlanFeature {
+  text: string
+  included: boolean
+}
+
+interface Plan {
+  name: string
+  price: string
+  period: string
+  desc: string
+  popular: boolean
+  features: PlanFeature[]
+  cta: string
+}
+
+const PLANS: Plan[] = [
   {
     name: 'Free',
     price: '$0',
@@ -65,18 +80,20 @@ const PLANS = [
 ]
 
 export default function Pricing() {
-  const heroRef = useRef(null)
-  const cardsRef = useRef([])
+  const heroRef = useRef<HTMLDivElement>(null)
+  const cardsRef = useRef<(HTMLDivElement | null)[]>([])
 
   useEffect(() => {
     window.scrollTo(0, 0)
 
     const ctx = gsap.context(() => {
       // Hero entrance
-      gsap.from(heroRef.current, {
-        y: 40, opacity: 0,
-        duration: 0.8, ease: 'power2.out', delay: 0.2,
-      })
+      if (heroRef.current) {
+        gsap.from(heroRef.current, {
+          y: 40, opacity: 0,
+          duration: 0.8, ease: 'power2.out', delay: 0.2,
+        })
+      }
 
       // Cards staggered entrance
       cardsRef.current.forEach((card, i) => {
@@ -143,7 +160,7 @@ export default function Pricing() {
             <PricingCard
               key={plan.name}
               plan={plan}
-              ref={el => cardsRef.current[i] = el}
+              ref={(el: HTMLDivElement | null) => { cardsRef.current[i] = el }}
             />
           ))}
         </div>
@@ -156,7 +173,11 @@ export default function Pricing() {
   )
 }
 
-const PricingCard = React.forwardRef(({ plan }, ref) => {
+interface PricingCardProps {
+  plan: Plan
+}
+
+const PricingCard = React.forwardRef<HTMLDivElement, PricingCardProps>(({ plan }, ref) => {
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -273,3 +294,5 @@ const PricingCard = React.forwardRef(({ plan }, ref) => {
     </motion.div>
   )
 })
+
+PricingCard.displayName = 'PricingCard'
