@@ -10,7 +10,11 @@ import CTASection from '../components/sections/CTASection'
 import Footer from '../components/sections/Footer'
 
 /* Subtle glow separator */
-function GlowDivider({ intensity = 0.1 }) {
+interface GlowDividerProps {
+  intensity?: number
+}
+
+function GlowDivider({ intensity = 0.1 }: GlowDividerProps) {
   return (
     <div style={{
       height: '1px', margin: '0 auto', maxWidth: '50%',
