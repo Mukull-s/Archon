@@ -1,7 +1,11 @@
 import React from 'react'
-import { motion } from 'framer-motion'
 
-const TECH = [
+interface TechItem {
+  name: string
+  icon: string
+}
+
+const TECH: TechItem[] = [
   { name: 'React', icon: '⚛️' },
   { name: 'Node.js', icon: '🟢' },
   { name: 'LangChain', icon: '🔗' },

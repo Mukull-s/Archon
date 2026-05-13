@@ -1,20 +1,31 @@
 import React from 'react'
 
+interface FooterGroupProps {
+  title: string
+  links: string[]
+}
+
+function FooterGroup({ title, links }: FooterGroupProps) {
+  return (
+    <div>
+      <div style={{
+        fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em',
+        textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '12px',
+      }}>{title}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {links.map(l => <a key={l} href="#" className="footer-link">{l}</a>)}
+      </div>
+    </div>
+  )
+}
+
 export default function Footer() {
   return (
-    <footer style={{
-      borderTop: '1px solid var(--border)',
-      padding: '48px 24px 32px',
-    }}>
+    <footer style={{ borderTop: '1px solid var(--border)', padding: '48px 24px 32px' }}>
       <div style={{ maxWidth: '1120px', margin: '0 auto' }}>
-
         <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          marginBottom: '40px',
-          flexWrap: 'wrap',
-          gap: '32px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+          marginBottom: '40px', flexWrap: 'wrap', gap: '32px',
         }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
@@ -42,32 +53,14 @@ export default function Footer() {
         </div>
 
         <div style={{
-          paddingTop: '20px',
-          borderTop: '1px solid var(--border)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontSize: '12px',
-          color: 'var(--text-muted)',
+          paddingTop: '20px', borderTop: '1px solid var(--border)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          fontSize: '12px', color: 'var(--text-muted)',
         }}>
           <span>© {new Date().getFullYear()} Archon</span>
           <span>MIT License</span>
         </div>
       </div>
     </footer>
-  )
-}
-
-function FooterGroup({ title, links }) {
-  return (
-    <div>
-      <div style={{
-        fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em',
-        textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '12px',
-      }}>{title}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {links.map(l => <a key={l} href="#" className="footer-link">{l}</a>)}
-      </div>
-    </div>
   )
 }
