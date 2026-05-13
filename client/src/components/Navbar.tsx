@@ -2,6 +2,12 @@ import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Link, useLocation } from 'react-router-dom'
 
+interface NavLink {
+  label: string
+  href: string
+  type: 'anchor' | 'route'
+}
+
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const location = useLocation()
@@ -12,14 +18,14 @@ export default function Navbar() {
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
-  const navLinks = [
+  const navLinks: NavLink[] = [
     { label: 'Features', href: '#features', type: 'anchor' },
     { label: 'How It Works', href: '#how-it-works', type: 'anchor' },
     { label: 'Pricing', href: '/pricing', type: 'route' },
     { label: 'Docs', href: '#', type: 'anchor' },
   ]
 
-  const scrollToAnchor = (href) => {
+  const scrollToAnchor = (href: string) => {
     if (location.pathname !== '/') {
       window.location.href = '/' + href
       return
@@ -99,8 +105,8 @@ export default function Navbar() {
                   borderRadius: '100px', transition: 'color 0.2s',
                   letterSpacing: '-0.01em',
                 }}
-                onMouseEnter={(e) => e.target.style.color = 'var(--text-primary)'}
-                onMouseLeave={(e) => e.target.style.color = 'var(--text-secondary)'}
+                onMouseEnter={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-primary)'}
+                onMouseLeave={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-secondary)'}
               >
                 {link.label}
               </button>

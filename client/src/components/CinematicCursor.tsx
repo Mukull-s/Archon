@@ -1,11 +1,16 @@
 import { useEffect, useRef } from 'react'
 
+interface MousePos {
+  x: number
+  y: number
+}
+
 export default function CinematicCursor() {
-  const dotRef = useRef(null)
-  const ringRef = useRef(null)
-  const mouse = useRef({ x: -100, y: -100 })
-  const ring = useRef({ x: -100, y: -100 })
-  const raf = useRef(null)
+  const dotRef = useRef<HTMLDivElement>(null)
+  const ringRef = useRef<HTMLDivElement>(null)
+  const mouse = useRef<MousePos>({ x: -100, y: -100 })
+  const ring = useRef<MousePos>({ x: -100, y: -100 })
+  const raf = useRef<number | null>(null)
 
   useEffect(() => {
     // Hide on touch devices
@@ -15,7 +20,7 @@ export default function CinematicCursor() {
     const ringEl = ringRef.current
     if (!dot || !ringEl) return
 
-    const onMove = (e) => {
+    const onMove = (e: MouseEvent) => {
       mouse.current.x = e.clientX
       mouse.current.y = e.clientY
       // Dot follows instantly
@@ -36,7 +41,7 @@ export default function CinematicCursor() {
     }
 
     // Lerp loop for the ring
-    const lerp = (a, b, t) => a + (b - a) * t
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t
     const animate = () => {
       ring.current.x = lerp(ring.current.x, mouse.current.x, 0.12)
       ring.current.y = lerp(ring.current.y, mouse.current.y, 0.12)
@@ -68,7 +73,7 @@ export default function CinematicCursor() {
 
     return () => {
       window.removeEventListener('mousemove', onMove)
-      cancelAnimationFrame(raf.current)
+      if (raf.current) cancelAnimationFrame(raf.current)
       observer.disconnect()
       interactives.forEach((el) => {
         el.removeEventListener('mouseenter', onEnterInteractive)

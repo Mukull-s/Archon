@@ -15,7 +15,7 @@ function App() {
     // ── Lenis smooth scroll, wired into GSAP ticker ──
     const lenis = new Lenis({
       duration: 1.2,
-      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+      easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
       smoothWheel: true,
       touchMultiplier: 1.5,
     })
@@ -23,7 +23,7 @@ function App() {
     // Sync Lenis → GSAP so ScrollTrigger reads Lenis's scroll position
     lenis.on('scroll', ScrollTrigger.update)
 
-    gsap.ticker.add((time) => {
+    gsap.ticker.add((time: number) => {
       lenis.raf(time * 1000) // Lenis expects ms, GSAP ticker gives seconds
     })
     gsap.ticker.lagSmoothing(0) // Prevent GSAP from throttling on lag
