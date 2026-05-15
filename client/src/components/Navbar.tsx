@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import React, { useState, useEffect, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Link, useLocation } from 'react-router-dom'
+import { useAuthStore } from '../stores/authStore'
 
 interface NavLink {
   label: string
@@ -10,12 +11,27 @@ interface NavLink {
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const { user, isAuthenticated, loginWithGitHub, logout } = useAuthStore()
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 40)
     window.addEventListener('scroll', handleScroll)
     return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
   const navLinks: NavLink[] = [
@@ -114,14 +130,153 @@ export default function Navbar() {
           ))}
         </div>
 
-        {/* Right actions */}
+        {/* Right actions — changes based on auth state */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button className="btn-ghost" style={{ padding: '7px 16px', fontSize: '13px' }}>
-            Sign In
-          </button>
-          <button className="btn-primary" style={{ padding: '7px 16px', fontSize: '13px' }}>
-            Get Started
-          </button>
+          {isAuthenticated && user ? (
+            /* Logged in — show avatar + dropdown */
+            <div ref={menuRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => setMenuOpen(!menuOpen)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: '100px', padding: '4px 12px 4px 4px',
+                  cursor: 'pointer', transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(176,38,255,0.3)'
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(255,255,255,0.08)'
+                }}
+              >
+                <img
+                  src={user.avatarUrl}
+                  alt={user.login}
+                  style={{
+                    width: '26px', height: '26px',
+                    borderRadius: '50%',
+                    border: '1.5px solid rgba(176,38,255,0.3)',
+                  }}
+                />
+                <span style={{
+                  fontSize: '13px', fontWeight: 500,
+                  color: 'var(--text-primary)',
+                  fontFamily: 'var(--font-sans)',
+                }}>
+                  {user.login}
+                </span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+                  style={{
+                    color: 'var(--text-muted)',
+                    transform: menuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s',
+                  }}>
+                  <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+
+              {/* Dropdown menu */}
+              <AnimatePresence>
+                {menuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                    transition={{ duration: 0.15, ease: 'easeOut' }}
+                    style={{
+                      position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+                      minWidth: '180px',
+                      background: 'rgba(15, 10, 25, 0.98)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      borderRadius: '12px',
+                      padding: '6px',
+                      boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+                      backdropFilter: 'blur(20px)',
+                      zIndex: 100,
+                    }}
+                  >
+                    {/* User info */}
+                    <div style={{
+                      padding: '10px 12px',
+                      borderBottom: '1px solid rgba(255,255,255,0.05)',
+                      marginBottom: '4px',
+                    }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+                        {user.name || user.login}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        @{user.login}
+                      </div>
+                    </div>
+
+                    {/* GitHub Profile link */}
+                    <a
+                      href={user.htmlUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '8px 12px', borderRadius: '8px',
+                        color: 'var(--text-secondary)', fontSize: '13px',
+                        textDecoration: 'none', transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
+                        <path d="M9 18c-4.51 2-5-2-7-2"/>
+                      </svg>
+                      GitHub Profile
+                    </a>
+
+                    {/* Logout */}
+                    <button
+                      onClick={() => { logout(); setMenuOpen(false) }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        width: '100%', padding: '8px 12px', borderRadius: '8px',
+                        background: 'transparent', border: 'none',
+                        color: '#ef4444', fontSize: '13px',
+                        cursor: 'pointer', textAlign: 'left',
+                        fontFamily: 'var(--font-sans)',
+                        transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <polyline points="16 17 21 12 16 7"/>
+                        <line x1="21" y1="12" x2="9" y2="12"/>
+                      </svg>
+                      Sign Out
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ) : (
+            /* Not logged in — show Sign In + Get Started */
+            <>
+              <button
+                className="btn-ghost"
+                onClick={loginWithGitHub}
+                style={{ padding: '7px 16px', fontSize: '13px' }}
+              >
+                Sign In
+              </button>
+              <button
+                className="btn-primary"
+                onClick={loginWithGitHub}
+                style={{ padding: '7px 16px', fontSize: '13px' }}
+              >
+                Get Started
+              </button>
+            </>
+          )}
         </div>
       </div>
     </motion.nav>
