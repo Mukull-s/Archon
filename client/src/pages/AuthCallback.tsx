@@ -5,12 +5,13 @@ import { useAuthStore } from '../stores/authStore'
 /**
  * OAuth Callback Page
  * 
- * GitHub redirects here with ?code=xxx after user consents.
- * This page exchanges the code for a JWT, then redirects to home.
+ * Works in 2 modes:
+ * 1. POPUP mode: sends message back to parent window and closes
+ * 2. DIRECT mode: exchanges code directly (fallback if popup is blocked)
  */
 export default function AuthCallback() {
   const navigate = useNavigate()
-  const handleCallback = useAuthStore((s) => s.handleCallback)
+  const handleOAuthCallback = useAuthStore((s) => s.handleOAuthCallback)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -18,71 +19,67 @@ export default function AuthCallback() {
     const code = params.get('code')
 
     if (!code) {
-      setError('No authorization code received from GitHub.')
+      setError('No authorization code received.')
       return
     }
 
-    handleCallback(code)
-      .then(() => {
-        navigate('/', { replace: true })
-      })
-      .catch(() => {
-        setError('Authentication failed. Please try again.')
-      })
-  }, [handleCallback, navigate])
+    // Detect provider from the URL or state
+    // GitHub uses 'code' param, Google also uses 'code'
+    // We'll determine provider from referrer or pass via state
+    const isPopup = window.opener !== null
+
+    if (isPopup) {
+      // Send code back to parent window
+      // Determine provider by checking URL patterns
+      const provider = window.location.href.includes('google') ? 'google' : 'github'
+      window.opener.postMessage(
+        { type: 'oauth_callback', provider, code },
+        window.location.origin
+      )
+      window.close()
+    } else {
+      // Direct mode (popup was blocked) — try GitHub first
+      handleOAuthCallback('github', code)
+        .then(() => navigate('/', { replace: true }))
+        .catch(() => {
+          // Try Google if GitHub fails
+          handleOAuthCallback('google', code)
+            .then(() => navigate('/', { replace: true }))
+            .catch(() => setError('Authentication failed. Please try again.'))
+        })
+    }
+  }, [handleOAuthCallback, navigate])
 
   return (
     <div style={{
       minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: 'var(--bg-primary)',
     }}>
       <div style={{ textAlign: 'center' }}>
         {error ? (
           <>
-            <div style={{
-              fontSize: '48px', marginBottom: '16px',
-            }}>⚠️</div>
-            <p style={{
-              color: '#ef4444', fontSize: '16px', fontWeight: 600,
-              marginBottom: '12px',
-            }}>{error}</p>
-            <button
-              className="btn-primary"
-              onClick={() => navigate('/')}
-              style={{ padding: '10px 24px', fontSize: '14px' }}
-            >
-              Back to Home
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+            <p style={{ color: '#ef4444', fontSize: '16px', fontWeight: 600, marginBottom: '12px' }}>{error}</p>
+            <button className="btn-primary" onClick={() => navigate('/auth')} style={{ padding: '10px 24px', fontSize: '14px' }}>
+              Back to Sign In
             </button>
           </>
         ) : (
           <>
-            {/* Spinning loader */}
             <div style={{
               width: '40px', height: '40px',
-              border: '3px solid rgba(176,38,255,0.15)',
-              borderTopColor: 'var(--accent)',
-              borderRadius: '50%',
-              animation: 'spin 0.8s linear infinite',
+              border: '3px solid rgba(176,38,255,0.15)', borderTopColor: 'var(--accent)',
+              borderRadius: '50%', animation: 'spin 0.8s linear infinite',
               margin: '0 auto 20px',
             }} />
-            <p style={{
-              color: 'var(--text-secondary)', fontSize: '15px',
-              fontWeight: 500,
-            }}>
-              Authenticating with GitHub...
+            <p style={{ color: 'var(--text-secondary)', fontSize: '15px', fontWeight: 500 }}>
+              Authenticating...
             </p>
           </>
         )}
       </div>
-
-      <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }
