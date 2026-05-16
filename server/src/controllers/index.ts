@@ -1,1 +1,1 @@
-export { githubLogin, githubCallback, getMe, logout } from './auth.controller';
+export { signup, login, getOAuthUrl, oauthCallback, verifyEmail, getMe, logout } from './auth.controller';
