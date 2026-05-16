@@ -6,21 +6,20 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import Landing from './pages/Landing'
 import Pricing from './pages/Pricing'
+import AuthPage from './pages/AuthPage'
 import AuthCallback from './pages/AuthCallback'
+import EmailVerify from './pages/EmailVerify'
 import { useAuthStore } from './stores/authStore'
 import './index.css'
 
-// Register GSAP plugins once
 gsap.registerPlugin(ScrollTrigger)
 
 function App() {
   const hydrate = useAuthStore((s) => s.hydrate)
 
   useEffect(() => {
-    // Rehydrate auth state from localStorage
     hydrate()
 
-    // ── Lenis smooth scroll, wired into GSAP ticker ──
     const lenis = new Lenis({
       duration: 1.2,
       easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
@@ -28,13 +27,12 @@ function App() {
       touchMultiplier: 1.5,
     })
 
-    // Sync Lenis → GSAP so ScrollTrigger reads Lenis's scroll position
     lenis.on('scroll', ScrollTrigger.update)
 
     gsap.ticker.add((time: number) => {
-      lenis.raf(time * 1000) // Lenis expects ms, GSAP ticker gives seconds
+      lenis.raf(time * 1000)
     })
-    gsap.ticker.lagSmoothing(0) // Prevent GSAP from throttling on lag
+    gsap.ticker.lagSmoothing(0)
 
     return () => {
       lenis.destroy()
@@ -60,7 +58,9 @@ function App() {
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/pricing" element={<Pricing />} />
+        <Route path="/auth" element={<AuthPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/auth/verify" element={<EmailVerify />} />
       </Routes>
     </BrowserRouter>
   )
