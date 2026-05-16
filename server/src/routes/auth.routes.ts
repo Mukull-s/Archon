@@ -1,19 +1,25 @@
 import { Router } from 'express';
-import { githubLogin, githubCallback, getMe, logout } from '../controllers';
+import { signup, login, getOAuthUrl, oauthCallback, verifyEmail, getMe, logout } from '../controllers';
 import { requireAuth } from '../middlewares';
 
 const router = Router();
 
 /**
- * Auth routes — GitHub OAuth flow.
- * 
- * GET  /api/auth/github           → Returns GitHub consent screen URL
- * POST /api/auth/github/callback  → Exchange code for JWT + user
- * GET  /api/auth/me               → Get current user (requires auth)
- * POST /api/auth/logout           → Clear session
+ * Auth Routes — Full authentication system.
+ *
+ * POST /api/auth/signup              → Email + password signup
+ * POST /api/auth/login               → Email + password login
+ * GET  /api/auth/oauth/url?provider= → Get OAuth redirect URL
+ * POST /api/auth/oauth/callback      → Exchange OAuth code for JWT
+ * POST /api/auth/verify              → Email verification with OTP
+ * GET  /api/auth/me                  → Get current user (protected)
+ * POST /api/auth/logout              → Logout
  */
-router.get('/github', githubLogin);
-router.post('/github/callback', githubCallback);
+router.post('/signup', signup);
+router.post('/login', login);
+router.get('/oauth/url', getOAuthUrl);
+router.post('/oauth/callback', oauthCallback);
+router.post('/verify', verifyEmail);
 router.get('/me', requireAuth, getMe);
 router.post('/logout', logout);
 

@@ -25,7 +25,9 @@ export function createApp(): express.Application {
   }));
 
   app.use(cors({
-    origin: env.CLIENT_URL,
+    origin: env.NODE_ENV === 'development'
+      ? [env.CLIENT_URL, 'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175']
+      : env.CLIENT_URL,
     credentials: true,                 // Allow cookies for JWT
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],

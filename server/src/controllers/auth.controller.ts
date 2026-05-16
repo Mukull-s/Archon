@@ -18,8 +18,8 @@ export async function signup(req: Request, res: Response, next: NextFunction) {
 
     res.status(201).json({
       success: true,
-      data: result,
-      message: 'Account created. Please check your email to verify.',
+      data: { user: result.user },
+      message: result.message,
     });
   } catch (err) { next(err); }
 }
@@ -79,15 +79,20 @@ export async function oauthCallback(req: Request, res: Response, next: NextFunct
   } catch (err) { next(err); }
 }
 
-/** GET /api/auth/verify/:token — Verify email */
+/** POST /api/auth/verify — Verify email with code */
 export async function verifyEmail(req: Request, res: Response, next: NextFunction) {
   try {
-    const token = req.params.token as string;
-    const user = await authService.verifyEmail(token);
+    const { email, code } = req.body;
+    
+    if (!email || !code) {
+      throw new AppError('Email and code are required', 400);
+    }
+
+    const result = await authService.verifyEmail(email, code);
 
     res.status(200).json({
       success: true,
-      data: { user },
+      data: result,
       message: 'Email verified successfully!',
     });
   } catch (err) { next(err); }
