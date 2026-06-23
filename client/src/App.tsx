@@ -9,6 +9,7 @@ import Pricing from './pages/Pricing'
 import AuthPage from './pages/AuthPage'
 import AuthCallback from './pages/AuthCallback'
 import EmailVerify from './pages/EmailVerify'
+import GoogleMockPage from './pages/GoogleMockPage'
 import { useAuthStore } from './stores/authStore'
 import './index.css'
 
@@ -61,6 +62,7 @@ function App() {
         <Route path="/auth" element={<AuthPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/auth/verify" element={<EmailVerify />} />
+        <Route path="/auth/google-mock" element={<GoogleMockPage />} />
       </Routes>
     </BrowserRouter>
   )
