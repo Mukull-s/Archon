@@ -1,33 +1,51 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuthStore } from '../stores/authStore'
 import Beams from '../components/Beams'
+import CinematicCursor from '../components/CinematicCursor'
 
-type AuthMode = 'login' | 'signup' | 'verify'
+type AuthMode = 'login' | 'signup'
 
 export default function AuthPage() {
-  const [mode, setMode] = useState<AuthMode>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [code, setCode] = useState('')
   const navigate = useNavigate()
 
-  const { signupWithEmail, loginWithEmail, loginWithOAuth, verifyEmailCode, isLoading } = useAuthStore()
+  const { signupWithEmail, loginWithEmail, loginWithOAuth, isLoading, isAuthenticated, authMode, setAuthMode } = useAuthStore()
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/')
+    }
+  }, [isAuthenticated, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    // Strict email format validation on frontend
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      toast.error('Please enter a valid email address format (e.g. user@example.com)')
+      return
+    }
+
+    if (authMode === 'signup') {
+      // Password complexity check: 8+ chars, 1 uppercase, 1 lowercase, 1 number, 1 special character
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^.()_+={}[\]|\\:;"'<>,?/~`-])[A-Za-z\d@$!%*?&#^.()_+={}[\]|\\:;"'<>,?/~`-]{8,}$/
+      if (!passwordRegex.test(password)) {
+        toast.error('Password must contain at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character.')
+        return
+      }
+    }
+
     try {
-      if (mode === 'signup') {
+      if (authMode === 'signup') {
         const message = await signupWithEmail(email, password, name)
         toast.success(message)
-        setMode('verify')
-      } else if (mode === 'verify') {
-        await verifyEmailCode(email, code)
-        toast.success('Email verified successfully!')
         navigate('/')
       } else {
         await loginWithEmail(email, password)
@@ -35,12 +53,19 @@ export default function AuthPage() {
         navigate('/')
       }
     } catch (err: any) {
-      toast.error(err.message)
+      // If user is not registered, toast and auto-switch to signup!
+      const errMsg = err.message || ''
+      if (errMsg.includes('not registered') || errMsg.includes('sign up first') || errMsg.includes('not found')) {
+        toast.error('No account registered with this email. Switched to Sign Up.')
+        setAuthMode('signup')
+      } else {
+        toast.error(errMsg)
+      }
     }
   }
 
   const handleOAuth = (provider: 'github' | 'google') => {
-    loginWithOAuth(provider)
+    loginWithOAuth(provider, authMode)
   }
 
   return (
@@ -51,6 +76,7 @@ export default function AuthPage() {
       position: 'relative',
       overflow: 'hidden',
     }}>
+      <CinematicCursor />
       {/* ── LEFT SIDE: Beams Background + Headline ── */}
       <div style={{
         flex: 1,
@@ -65,6 +91,7 @@ export default function AuthPage() {
         <div style={{
           position: 'absolute', inset: 0, zIndex: 0,
           opacity: 0.7,
+          pointerEvents: 'none',
         }}>
           <Beams
             beamWidth={3}
@@ -179,18 +206,16 @@ export default function AuthPage() {
             fontSize: '24px', fontWeight: 700, color: '#fff',
             margin: '0 0 4px', letterSpacing: '-0.03em',
           }}>
-            {mode === 'login' ? 'Welcome back' : mode === 'verify' ? 'Check your email' : 'Create your account'}
+            {authMode === 'login' ? 'Welcome back' : 'Create your account'}
           </h2>
           <p style={{
             fontSize: '13px', color: 'var(--text-muted)',
             margin: '0 0 28px',
           }}>
-            {mode === 'login' ? 'Sign in to continue to Archon' : mode === 'verify' ? 'Enter the 6-digit verification code' : 'Start analyzing your codebase with AI'}
+            {authMode === 'login' ? 'Sign in to continue to Archon' : 'Start analyzing your codebase with AI'}
           </p>
 
-          {mode !== 'verify' && (
-            <>
-              {/* OAuth buttons */}
+          {/* OAuth buttons */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
             <button onClick={() => handleOAuth('github')} disabled={isLoading}
               style={{
@@ -236,20 +261,11 @@ export default function AuthPage() {
             <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>or</span>
             <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
           </div>
-          </>
-          )}
 
           {/* Email form */}
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <AnimatePresence mode="wait">
-              {mode === 'verify' && (
-                <motion.div key="code" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
-                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Verification Code</label>
-                  <input type="text" value={code} onChange={(e) => setCode(e.target.value)} placeholder="000000" required maxLength={6}
-                    className="auth-input" style={{ letterSpacing: '0.2em', textAlign: 'center', fontSize: '18px' }} />
-                </motion.div>
-              )}
-              {mode === 'signup' && (
+              {authMode === 'signup' && (
                 <motion.div key="name" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
                   <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Full name</label>
                   <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" required
@@ -258,39 +274,35 @@ export default function AuthPage() {
               )}
             </AnimatePresence>
 
-            {mode !== 'verify' && (
-              <>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Email address</label>
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required
-                    className="auth-input" />
-                </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Email address</label>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required
+                className="auth-input" />
+            </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Password</label>
-                  <div style={{ position: 'relative' }}>
-                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)}
-                      placeholder={mode === 'signup' ? 'Min 8 characters' : 'Enter your password'} required minLength={mode === 'signup' ? 8 : undefined}
-                      className="auth-input" style={{ paddingRight: '42px' }} />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)}
-                      style={{
-                        position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
-                        background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px',
-                      }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        {showPassword ? (
-                          <><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/>
-                            <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/>
-                            <line x1="1" y1="1" x2="23" y2="23"/></>
-                        ) : (
-                          <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
-                        )}
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Password</label>
+              <div style={{ position: 'relative' }}>
+                <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)}
+                  placeholder={authMode === 'signup' ? 'Min 8 characters' : 'Enter your password'} required minLength={authMode === 'signup' ? 8 : undefined}
+                  className="auth-input" style={{ paddingRight: '42px' }} />
+                <button type="button" onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px',
+                  }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    {showPassword ? (
+                      <><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/>
+                        <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/>
+                        <line x1="1" y1="1" x2="23" y2="23"/></>
+                    ) : (
+                      <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
+                    )}
+                  </svg>
+                </button>
+              </div>
+            </div>
 
             <button type="submit" disabled={isLoading}
               style={{
@@ -303,31 +315,24 @@ export default function AuthPage() {
               {isLoading ? (
                 <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                   <span className="auth-spinner" />
-                  {mode === 'signup' ? 'Creating account...' : mode === 'verify' ? 'Verifying...' : 'Signing in...'}
+                  {authMode === 'signup' ? 'Creating account...' : 'Signing in...'}
                 </span>
               ) : (
-                mode === 'signup' ? 'Create Account' : mode === 'verify' ? 'Verify Email' : 'Sign In'
+                authMode === 'signup' ? 'Create Account' : 'Sign In'
               )}
             </button>
           </form>
 
           {/* Toggle mode */}
-          {mode !== 'verify' && (
-            <p style={{ textAlign: 'center', marginTop: '20px', marginBottom: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
-              {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-              <button onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
-                style={{
-                  background: 'none', border: 'none', color: '#FF9FFC', cursor: 'pointer',
-                  fontSize: '13px', fontWeight: 600, fontFamily: 'var(--font-sans)', padding: 0,
-                }}>
-                {mode === 'login' ? 'Sign up' : 'Sign in'}
-              </button>
-            </p>
-          )}
-
-          {/* Footer */}
-          <p style={{ textAlign: 'center', marginTop: '24px', fontSize: '11px', color: 'rgba(255,255,255,0.2)' }}>
-            By continuing, you agree to Archon's Terms of Service.
+          <p style={{ textAlign: 'center', marginTop: '20px', marginBottom: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
+            {authMode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+              style={{
+                background: 'none', border: 'none', color: '#FF9FFC', cursor: 'pointer',
+                fontSize: '13px', fontWeight: 600, fontFamily: 'var(--font-sans)', padding: 0,
+              }}>
+              {authMode === 'login' ? 'Sign up' : 'Sign in'}
+            </button>
           </p>
         </motion.div>
       </div>
