@@ -10,6 +10,13 @@ export async function signup(req: Request, res: Response, next: NextFunction) {
     if (!email || !password || !name) {
       throw new AppError('Email, password, and name are required', 400);
     }
+    
+    // Strict email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      throw new AppError('Please enter a valid email address format (e.g. user@example.com)', 400);
+    }
+
     if (password.length < 8) {
       throw new AppError('Password must be at least 8 characters', 400);
     }
@@ -18,8 +25,8 @@ export async function signup(req: Request, res: Response, next: NextFunction) {
 
     res.status(201).json({
       success: true,
-      data: { user: result.user },
-      message: result.message,
+      data: { user: result.user, token: result.token },
+      message: 'Account created successfully!',
     });
   } catch (err) { next(err); }
 }
@@ -31,6 +38,12 @@ export async function login(req: Request, res: Response, next: NextFunction) {
 
     if (!email || !password) {
       throw new AppError('Email and password are required', 400);
+    }
+
+    // Strict email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      throw new AppError('Please enter a valid email address format (e.g. user@example.com)', 400);
     }
 
     const result = await authService.login({ email, password });
@@ -60,7 +73,7 @@ export async function getOAuthUrl(req: Request, res: Response, next: NextFunctio
 /** POST /api/auth/oauth/callback — Handle OAuth code exchange */
 export async function oauthCallback(req: Request, res: Response, next: NextFunction) {
   try {
-    const { provider, code } = req.body;
+    const { provider, code, mode, email, name } = req.body;
 
     if (!code || typeof code !== 'string') {
       throw new AppError('Authorization code is required', 400);
@@ -68,9 +81,9 @@ export async function oauthCallback(req: Request, res: Response, next: NextFunct
 
     let result;
     if (provider === 'github') {
-      result = await authService.handleGitHubCallback(code);
+      result = await authService.handleGitHubCallback(code, mode);
     } else if (provider === 'google') {
-      result = await authService.handleGoogleCallback(code);
+      result = await authService.handleGoogleCallback(code, mode, email, name);
     } else {
       throw new AppError('Invalid provider. Use "github" or "google".', 400);
     }
