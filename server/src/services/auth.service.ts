@@ -17,15 +17,19 @@ export class AuthService {
   // EMAIL / PASSWORD
   // ─────────────────────────────────────────────
 
-  async signup(input: SignupInput): Promise<{ user: AuthUser; message: string }> {
+  async signup(input: SignupInput): Promise<{ user: AuthUser; token: string }> {
     const existing = await prisma.user.findUnique({ where: { email: input.email } });
     if (existing) {
       throw new AppError('An account with this email already exists', 409);
     }
 
+    // Password strength check
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^.()_+={}[\]|\\:;"'<>,?/~`-])[A-Za-z\d@$!%*?&#^.()_+={}[\]|\\:;"'<>,?/~`-]{8,}$/;
+    if (!passwordRegex.test(input.password)) {
+      throw new AppError('Password must contain at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character.', 400);
+    }
+
     const passwordHash = await bcrypt.hash(input.password, 12);
-    // 6-digit verification code
-    const verifyToken = Math.floor(100000 + Math.random() * 900000).toString();
 
     const user = await prisma.user.create({
       data: {
@@ -33,32 +37,20 @@ export class AuthService {
         name: input.name,
         passwordHash,
         provider: 'email',
-        emailVerified: false,
-        verifyToken,
+        emailVerified: true,
+        verifyToken: null,
       },
     });
 
-    console.log(`\n==============================================`);
-    console.log(`[AUTH] Verification code for ${input.email}: ${verifyToken}`);
-    console.log(`==============================================\n`);
-
-    // Send verification email (non-blocking)
-    emailService.sendVerificationEmail(input.email, input.name, verifyToken);
-
-    // In development, show the code directly in the frontend toast notification
-    // since Resend free tier won't send to unverified emails
-    const message = env.NODE_ENV === 'development'
-      ? `DEV MODE: Your code is ${verifyToken}`
-      : 'Verification code sent to your email.';
-
-    return { user: this.toAuthUser(user), message };
+    const token = this.generateJWT(user.id, user.email, 'email');
+    return { user: this.toAuthUser(user), token };
   }
 
   async login(input: LoginInput): Promise<{ user: AuthUser; token: string }> {
     const user = await prisma.user.findUnique({ where: { email: input.email } });
 
     if (!user) {
-      throw new AppError('Invalid email or password', 401);
+      throw new AppError('This email is not registered. Please sign up first.', 404);
     }
 
     if (!user.passwordHash) {
@@ -102,11 +94,12 @@ export class AuthService {
       client_id: env.GITHUB_CLIENT_ID,
       redirect_uri: `${env.CLIENT_URL}/auth/callback`,
       scope: 'read:user user:email repo',
+      prompt: 'login',
     });
     return `https://github.com/login/oauth/authorize?${params.toString()}`;
   }
 
-  async handleGitHubCallback(code: string): Promise<{ user: AuthUser; token: string }> {
+  async handleGitHubCallback(code: string, mode: string = 'login'): Promise<{ user: AuthUser; token: string }> {
     // Exchange code for token
     const tokenRes = await fetch(GITHUB_TOKEN_URL, {
       method: 'POST',
@@ -140,6 +133,12 @@ export class AuthService {
       email = primary?.email || emails[0]?.email || `${profile.login}@github.noreply.com`;
     }
 
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
+      throw new AppError('The email associated with this GitHub account is invalid or missing', 400);
+    }
+
     // Find or create user
     let user = await prisma.user.findUnique({ where: { email } });
 
@@ -157,6 +156,9 @@ export class AuthService {
         },
       });
     } else {
+      if (mode === 'login') {
+        throw new AppError('No account registered with this email. Please sign up first.', 404);
+      }
       user = await prisma.user.create({
         data: {
           email,
@@ -181,7 +183,8 @@ export class AuthService {
 
   getGoogleAuthUrl(): string {
     if (!env.GOOGLE_CLIENT_ID) {
-      throw new AppError('Google OAuth is not configured yet', 501);
+      // Return a local mock URL that will trigger Google Mock Sign-In Chooser UI
+      return `${env.CLIENT_URL}/auth/google-mock`;
     }
     const params = new URLSearchParams({
       client_id: env.GOOGLE_CLIENT_ID,
@@ -189,13 +192,56 @@ export class AuthService {
       response_type: 'code',
       scope: 'openid email profile',
       access_type: 'offline',
+      prompt: 'select_account',
     });
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
 
-  async handleGoogleCallback(code: string): Promise<{ user: AuthUser; token: string }> {
-    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
-      throw new AppError('Google OAuth is not configured', 501);
+  async handleGoogleCallback(code: string, mode: string = 'login', email?: string, name?: string): Promise<{ user: AuthUser; token: string }> {
+    // If it is mock or if Google is not configured, run simulated fallback
+    if (code === 'mock_google_code' || !env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+      const profile = {
+        email: email || 'google.mock.user@example.com',
+        name: name || 'Mock Google User',
+        picture: 'https://lh3.googleusercontent.com/a/default-user=s96-c',
+        sub: 'mock_google_sub_id_12345',
+      };
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!profile.email || !emailRegex.test(profile.email)) {
+        throw new AppError('The email associated with this Google account is invalid or missing', 400);
+      }
+
+      let user = await prisma.user.findUnique({ where: { email: profile.email } });
+
+      if (user) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            avatarUrl: user.avatarUrl || profile.picture,
+            name: user.name || profile.name,
+            emailVerified: true,
+            ...(user.provider === 'email' ? {} : { provider: 'google', providerId: profile.sub }),
+          },
+        });
+      } else {
+        if (mode === 'login') {
+          throw new AppError('No account registered with this email. Please sign up first.', 404);
+        }
+        user = await prisma.user.create({
+          data: {
+            email: profile.email,
+            name: profile.name,
+            avatarUrl: profile.picture,
+            provider: 'google',
+            providerId: profile.sub,
+            emailVerified: true,
+          },
+        });
+      }
+
+      const token = this.generateJWT(user.id, user.email, 'google');
+      return { user: this.toAuthUser(user), token };
     }
 
     const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
@@ -220,6 +266,12 @@ export class AuthService {
     });
     const profile = await profileRes.json() as GoogleProfile;
 
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!profile.email || !emailRegex.test(profile.email)) {
+      throw new AppError('The email associated with this Google account is invalid or missing', 400);
+    }
+
     let user = await prisma.user.findUnique({ where: { email: profile.email } });
 
     if (user) {
@@ -233,6 +285,9 @@ export class AuthService {
         },
       });
     } else {
+      if (mode === 'login') {
+        throw new AppError('No account registered with this email. Please sign up first.', 404);
+      }
       user = await prisma.user.create({
         data: {
           email: profile.email,
