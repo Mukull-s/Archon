@@ -110,7 +110,7 @@ export default function Pricing() {
   }, [])
 
   return (
-    <div style={{ position: 'relative', zIndex: 1 }}>
+    <div id="pricing-wrapper" style={{ position: 'relative', zIndex: 1, minHeight: '100vh', background: '#050308', overflowX: 'hidden' }}>
       <CinematicCursor />
       <Navbar />
 
@@ -151,9 +151,8 @@ export default function Pricing() {
 
       {/* Pricing Grid */}
       <section style={{ padding: '0 24px 80px' }}>
-        <div style={{
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3" style={{
           maxWidth: '1040px', margin: '0 auto',
-          display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
           gap: '20px', alignItems: 'start',
         }}>
           {PLANS.map((plan, i) => (
