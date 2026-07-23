@@ -20,6 +20,8 @@ export default function CinematicCursor() {
     const ringEl = ringRef.current
     if (!dot || !ringEl) return
 
+    document.body.classList.add('custom-cursor-active')
+
     const onMove = (e: MouseEvent) => {
       mouse.current.x = e.clientX
       mouse.current.y = e.clientY
@@ -72,6 +74,7 @@ export default function CinematicCursor() {
     observer.observe(document.body, { childList: true, subtree: true })
 
     return () => {
+      document.body.classList.remove('custom-cursor-active')
       window.removeEventListener('mousemove', onMove)
       if (raf.current) cancelAnimationFrame(raf.current)
       observer.disconnect()

@@ -76,7 +76,7 @@ function extendMaterial<T extends THREE.Material = THREE.Material>(
 }
 
 const CanvasWrapper: FC<{ children: ReactNode }> = ({ children }) => (
-  <Canvas dpr={[1, 2]} frameloop="always" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
+  <Canvas dpr={[1, 2]} frameloop="always" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}>
     {children}
   </Canvas>
 );
@@ -177,6 +177,44 @@ interface BeamsProps {
   rotation?: number;
 }
 
+const FloatingParticles: FC<{ count?: number }> = ({ count = 80 }) => {
+  const pointsRef = useRef<THREE.Points>(null!);
+  const particles = useMemo(() => {
+    const temp = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      temp[i * 3] = (Math.random() - 0.5) * 16;
+      temp[i * 3 + 1] = (Math.random() - 0.5) * 16;
+      temp[i * 3 + 2] = (Math.random() - 0.5) * 12;
+    }
+    return temp;
+  }, [count]);
+
+  useFrame((state, delta) => {
+    if (!pointsRef.current) return;
+    pointsRef.current.rotation.y += 0.04 * delta;
+    pointsRef.current.rotation.x += 0.02 * delta;
+  });
+
+  return (
+    <points ref={pointsRef}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          args={[particles, 3]}
+        />
+      </bufferGeometry>
+      <pointsMaterial
+        size={0.12}
+        color="#D98CFF"
+        transparent
+        opacity={0.45}
+        sizeAttenuation
+        depthWrite={false}
+      />
+    </points>
+  );
+};
+
 const Beams: FC<BeamsProps> = ({
   beamWidth = 2,
   beamHeight = 15,
@@ -252,6 +290,7 @@ const Beams: FC<BeamsProps> = ({
         <PlaneNoise ref={meshRef} material={beamMaterial} count={beamNumber} width={beamWidth} height={beamHeight} />
         <DirLight color={lightColor} position={[0, 3, 10]} />
       </group>
+      <FloatingParticles count={150} />
       <ambientLight intensity={1} />
       <color attach="background" args={['#000000']} />
       <PerspectiveCamera makeDefault position={[0, 0, 20]} fov={30} />
