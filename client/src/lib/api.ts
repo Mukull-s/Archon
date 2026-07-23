@@ -30,9 +30,17 @@ api.interceptors.response.use(
       // Token expired or invalid — clear auth state
       localStorage.removeItem('archon_token');
       localStorage.removeItem('archon_user');
-      // Only redirect if not already on landing
-      if (window.location.pathname !== '/') {
-        window.location.href = '/';
+
+      // Sync tabs that token is gone
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'archon_token',
+        newValue: null,
+      }));
+
+      // Only redirect if not already on landing or auth page
+      if (window.location.pathname !== '/' && window.location.pathname !== '/auth') {
+        const currentPath = window.location.pathname + window.location.search;
+        window.location.href = `/auth?redirect=${encodeURIComponent(currentPath)}`;
       }
     }
     return Promise.reject(error);
