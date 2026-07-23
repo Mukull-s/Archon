@@ -2,36 +2,31 @@ import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services';
 import { AppError } from '../utils';
 
-/** POST /api/auth/signup — Email + password signup */
+/** POST /api/auth/signup — Register user */
 export async function signup(req: Request, res: Response, next: NextFunction) {
   try {
     const { email, password, name } = req.body;
-
-    if (!email || !password || !name) {
-      throw new AppError('Email, password, and name are required', 400);
-    }
     
-    // Strict email format validation
+    if (!email || !password) {
+      throw new AppError('Email and password are required', 400);
+    }
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       throw new AppError('Please enter a valid email address format (e.g. user@example.com)', 400);
-    }
-
-    if (password.length < 8) {
-      throw new AppError('Password must be at least 8 characters', 400);
     }
 
     const result = await authService.signup({ email, password, name });
 
     res.status(201).json({
       success: true,
-      data: { user: result.user, token: result.token },
-      message: 'Account created successfully!',
+      data: result,
+      message: 'Verification code sent to your email. Please verify to continue.',
     });
   } catch (err) { next(err); }
 }
 
-/** POST /api/auth/login — Email + password login */
+/** POST /api/auth/login — Sign in user */
 export async function login(req: Request, res: Response, next: NextFunction) {
   try {
     const { email, password } = req.body;
@@ -40,7 +35,6 @@ export async function login(req: Request, res: Response, next: NextFunction) {
       throw new AppError('Email and password are required', 400);
     }
 
-    // Strict email format validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       throw new AppError('Please enter a valid email address format (e.g. user@example.com)', 400);
@@ -56,12 +50,13 @@ export async function login(req: Request, res: Response, next: NextFunction) {
 export async function getOAuthUrl(req: Request, res: Response, next: NextFunction) {
   try {
     const provider = req.query.provider as string;
+    const csrfToken = (req.query.csrfToken as string) || '';
 
     let url: string;
     if (provider === 'github') {
-      url = authService.getGitHubAuthUrl();
+      url = authService.getGitHubAuthUrl(csrfToken);
     } else if (provider === 'google') {
-      url = authService.getGoogleAuthUrl();
+      url = authService.getGoogleAuthUrl(csrfToken);
     } else {
       throw new AppError('Invalid provider. Use "github" or "google".', 400);
     }
@@ -124,4 +119,22 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
 /** POST /api/auth/logout — Stateless logout */
 export async function logout(_req: Request, res: Response) {
   res.status(200).json({ success: true, data: { message: 'Logged out successfully' } });
+}
+
+/** PATCH /api/auth/profile — Update user name or avatarUrl */
+export async function updateProfile(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { name, avatarUrl } = req.body;
+    const user = await authService.updateProfile(req.user!.userId, { name, avatarUrl });
+    res.status(200).json({ success: true, data: { user }, message: 'Profile updated successfully' });
+  } catch (err) { next(err); }
+}
+
+/** POST /api/auth/change-password — Update password */
+export async function changePassword(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    await authService.changePassword(req.user!.userId, currentPassword, newPassword);
+    res.status(200).json({ success: true, message: 'Password updated successfully' });
+  } catch (err) { next(err); }
 }
