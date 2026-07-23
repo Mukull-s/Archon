@@ -6,6 +6,7 @@ export interface AuthUser {
   provider: string;
   emailVerified: boolean;
   githubLogin: string | null;
+  createdAt: string;
 }
 
 export interface JWTPayload {
@@ -40,7 +41,7 @@ export interface OAuthTokenResponse {
 export interface SignupInput {
   email: string;
   password: string;
-  name: string;
+  name?: string;
 }
 
 export interface LoginInput {
