@@ -88,15 +88,15 @@ export default function StatsSection() {
   }, [])
 
   return (
-    <section className="section" style={{ padding: '100px 0' }} ref={sectionRef}>
+    <section className="section" ref={sectionRef}>
       <div className="container">
         <div style={{ textAlign: 'center', marginBottom: '56px' }}>
           <p style={{ fontSize: '13px', color: 'rgba(235,235,245,0.3)',
             letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600 }}>Built for scale</p>
         </div>
 
-        <div ref={gridRef} style={{
-          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1px',
+        <div ref={gridRef} className="grid grid-cols-2 lg:grid-cols-4" style={{
+          gap: '1px',
           background: 'var(--border)', borderRadius: 'var(--radius-xl)', overflow: 'hidden',
         }}>
           {STATS.map((stat, i) => (
