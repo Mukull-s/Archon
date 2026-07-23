@@ -10,6 +10,8 @@ import AuthPage from './pages/AuthPage'
 import AuthCallback from './pages/AuthCallback'
 import EmailVerify from './pages/EmailVerify'
 import GoogleMockPage from './pages/GoogleMockPage'
+import Dashboard from './pages/Dashboard'
+import ProfilePage from './pages/Profile'
 import { useAuthStore } from './stores/authStore'
 import './index.css'
 
@@ -63,6 +65,8 @@ function App() {
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/auth/verify" element={<EmailVerify />} />
         <Route path="/auth/google-mock" element={<GoogleMockPage />} />
+        <Route path="/dashboard/:id" element={<Dashboard />} />
+        <Route path="/profile" element={<ProfilePage />} />
       </Routes>
     </BrowserRouter>
   )

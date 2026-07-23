@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   /* Backgrounds — deep purple-black */
   --bg-primary: #06010B;
@@ -50,6 +54,38 @@
   --radius-xl: 20px;
 }
 
+#landing-wrapper,
+#pricing-wrapper,
+#auth-wrapper {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-heading: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--font-sans) !important;
+}
+
+#landing-wrapper h1,
+#landing-wrapper h2,
+#landing-wrapper h3,
+#landing-wrapper h4,
+#landing-wrapper h5,
+#landing-wrapper h6,
+#landing-wrapper .font-heading,
+#pricing-wrapper h1,
+#pricing-wrapper h2,
+#pricing-wrapper h3,
+#pricing-wrapper h4,
+#pricing-wrapper h5,
+#pricing-wrapper h6,
+#pricing-wrapper .font-heading,
+#auth-wrapper h1,
+#auth-wrapper h2,
+#auth-wrapper h3,
+#auth-wrapper h4,
+#auth-wrapper h5,
+#auth-wrapper h6,
+#auth-wrapper .font-heading {
+  font-family: var(--font-heading) !important;
+}
+
 /* Reset */
 *, *::before, *::after {
   box-sizing: border-box;
@@ -69,7 +105,16 @@ body {
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  cursor: none;
+}
+
+body.custom-cursor-active,
+body.custom-cursor-active a,
+body.custom-cursor-active button,
+body.custom-cursor-active input,
+body.custom-cursor-active select,
+body.custom-cursor-active textarea,
+body.custom-cursor-active [role="button"] {
+  cursor: none !important;
 }
 
 /* Cinematic atmospheric background — purple energy depth */
@@ -130,13 +175,20 @@ body::after {
    SCROLLBAR
    =========================== */
 
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.01); }
 ::-webkit-scrollbar-thumb {
-  background: rgba(176, 38, 255, 0.25);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+::-webkit-scrollbar-thumb:hover { background: rgba(59, 130, 246, 0.5); }
+
+.tree-node-row {
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.tree-node-row:hover {
+  background: rgba(255, 255, 255, 0.025) !important;
+}
 
 /* ===========================
    BUTTONS
@@ -294,6 +346,7 @@ body::after {
 .repo-input-wrapper {
   position: relative;
   display: flex;
+  align-items: center;
   gap: 10px;
   padding: 5px 5px 5px 18px;
   background: rgba(12, 12, 18, 0.8);
@@ -319,9 +372,10 @@ body::after {
   font-family: var(--font-mono);
   font-size: 13px;
   min-width: 0;
+  padding: 8px 0;
 }
 
-.repo-input::placeholder { color: var(--text-muted); }
+.repo-input::placeholder { color: rgba(255, 255, 255, 0.45); }
 
 /* ===========================
    MARQUEE
@@ -419,19 +473,19 @@ body::after {
   left: 0;
   right: 0;
   z-index: 1000;
-  padding: 14px 0;
-  transition: all 0.3s ease;
+  padding: 12px 0;
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition: background-color 0.3s ease, border-color 0.3s ease, backdrop-filter 0.3s ease;
 }
 
 .navbar.scrolled {
-  background: rgba(6, 6, 9, 0.8);
+  background: rgba(6, 6, 9, 0.85);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
-  padding: 10px 0;
-}
-
-/* ===========================
+  padding: 12px 0;
+}/* ===========================
    FOOTER
    =========================== */
 
@@ -466,3 +520,131 @@ body::after {
   0% { background-position: -200% center; }
   100% { background-position: 200% center; }
 }
+
+/* ===========================
+   CHAT CONSOLE CUSTOM SCROLLBAR
+   =========================== */
+.chat-messages-container {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(176, 38, 255, 0.3) rgba(0, 0, 0, 0.1);
+  overflow-y: auto !important;
+}
+
+.chat-messages-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.chat-messages-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.chat-messages-container::-webkit-scrollbar-thumb {
+  background: rgba(176, 38, 255, 0.4);
+  border-radius: 4px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+}
+
+.chat-messages-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(176, 38, 255, 0.6);
+}
+
+/* ==========================================================================
+   STITCH IDE DESIGN SYSTEM THEME
+   ========================================================================== */
+
+.stitch-theme {
+  --stitch-font-heading: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --stitch-font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --stitch-font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+
+  --stitch-bg: #09090b;
+  --stitch-surface: #131316;
+  --stitch-surface-dim: #131316;
+  --stitch-surface-bright: #39393c;
+  
+  --stitch-surface-lowest: #0e0e11;
+  --stitch-surface-low: #1b1b1e;
+  --stitch-surface-container: #1f1f22;
+  --stitch-surface-high: #2a2a2d;
+  --stitch-surface-highest: #353437;
+  
+  --stitch-on-surface: #e4e1e5;
+  --stitch-on-surface-variant: #c8c5ca;
+  --stitch-inverse-surface: #e4e1e5;
+  --stitch-inverse-on-surface: #303033;
+  
+  --stitch-outline: #27272a;
+  --stitch-outline-variant: #47464a;
+  
+  --stitch-primary: #c8c6c8;
+  --stitch-on-primary: #313032;
+  --stitch-primary-container: #09090b;
+  
+  --stitch-secondary: #3b82f6;
+  --stitch-secondary-hover: #2563eb;
+  --stitch-on-secondary: #ffffff;
+  --stitch-secondary-container: #0566d9;
+  --stitch-on-secondary-container: #e6ecff;
+  
+  --stitch-tertiary: #a855f7;
+  --stitch-on-tertiary: #ffffff;
+  --stitch-tertiary-container: #120027;
+  
+  --stitch-error: #ffb4ab;
+  --stitch-error-container: #93000a;
+  --stitch-on-error-container: #ffdad6;
+  
+  --stitch-radius-sm: 4px;
+  --stitch-radius-md: 6px;
+  --stitch-radius-lg: 8px;
+  --stitch-radius-xl: 12px;
+  
+  --stitch-sidebar-width: 240px;
+
+  /* Custom scrollbar override within stitch-theme */
+  scrollbar-width: thin;
+  scrollbar-color: var(--stitch-outline) var(--stitch-surface);
+}
+
+.stitch-theme ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.stitch-theme ::-webkit-scrollbar-track {
+  background: var(--stitch-surface-lowest);
+}
+
+.stitch-theme ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 3px;
+}
+
+.stitch-theme ::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@media (max-width: 1024px) {
+  #landing-wrapper, #pricing-wrapper, #auth-wrapper {
+    --section-pad: 90px;
+  }
+}
+@media (max-width: 768px) {
+  #landing-wrapper, #pricing-wrapper, #auth-wrapper {
+    --section-pad: 60px;
+  }
+}
+
+
