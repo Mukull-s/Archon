@@ -26,9 +26,77 @@ model User {
   githubToken   String?
   githubLogin   String?
   
+  repositories  Repository[]
+  
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
   @@index([provider, providerId])
   @@index([verifyToken])
 }
+
+/// Cache of scanned repository structure and resolved dependencies/ASTs
+model Repository {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  owner           String?
+  name            String
+  isLocal         Boolean  @default(false)
+  localPath       String?  // path to extracted files on server
+  
+  // Scanned intelligence metrics
+  framework       String?
+  languages       String[]
+  entryPoints     String[]
+  importantFiles  String[]
+  fileCount       Int
+  totalSize       Int
+  confidence      Int      @default(0)
+  
+  // Stored JSON structures
+  scannedFiles    Json     @default("[]")
+  astMetadata     Json     @default("{}")
+  dependencyGraph Json     @default("{}")
+  
+  // Relations
+  codeChunks      CodeChunk[]
+  chatMessages    ChatMessage[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+model CodeChunk {
+  id           String   @id @default(uuid())
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  filePath     String
+  chunkIndex   Int
+  content      String   @db.Text
+  startLine    Int
+  endLine      Int
+  symbolName   String?  // Name of class, function, or "file-level"
+  
+  // 384-dimension vector matching Xenova/all-MiniLM-L6-v2
+  embedding    Unsupported("vector(384)")? 
+  
+  createdAt    DateTime @default(now())
+
+  @@index([repositoryId])
+}
+
+model ChatMessage {
+  id           String   @id @default(uuid())
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  sender       String   // "USER" | "AI"
+  message      String   @db.Text
+  modelUsed    String?  // e.g. "qwen/qwen3-coder:free"
+  createdAt    DateTime @default(now())
+
+  @@index([repositoryId])
+}
+
