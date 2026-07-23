@@ -20,3 +20,10 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Runtime temp folder (downloaded repos, extracted archives)
+# These are generated at runtime by the ingestion pipeline — never commit
+temp/downloads/*
+temp/extracted/*
+!temp/downloads/.gitkeep
+!temp/extracted/.gitkeep
