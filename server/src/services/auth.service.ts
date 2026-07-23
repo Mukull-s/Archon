@@ -89,12 +89,13 @@ export class AuthService {
   // GITHUB OAUTH
   // ─────────────────────────────────────────────
 
-  getGitHubAuthUrl(): string {
+  getGitHubAuthUrl(csrfToken?: string): string {
     const params = new URLSearchParams({
       client_id: env.GITHUB_CLIENT_ID,
       redirect_uri: `${env.CLIENT_URL}/auth/callback`,
       scope: 'read:user user:email repo',
       prompt: 'login',
+      ...(csrfToken ? { state: `github:${csrfToken}` } : {}),
     });
     return `https://github.com/login/oauth/authorize?${params.toString()}`;
   }
@@ -181,10 +182,12 @@ export class AuthService {
   // GOOGLE OAUTH
   // ─────────────────────────────────────────────
 
-  getGoogleAuthUrl(): string {
+  getGoogleAuthUrl(csrfToken?: string): string {
     if (!env.GOOGLE_CLIENT_ID) {
       // Return a local mock URL that will trigger Google Mock Sign-In Chooser UI
-      return `${env.CLIENT_URL}/auth/google-mock`;
+      const mockParams = new URLSearchParams();
+      if (csrfToken) mockParams.set('state', `google:${csrfToken}`);
+      return `${env.CLIENT_URL}/auth/google-mock${mockParams.toString() ? '?' + mockParams.toString() : ''}`;
     }
     const params = new URLSearchParams({
       client_id: env.GOOGLE_CLIENT_ID,
@@ -193,6 +196,7 @@ export class AuthService {
       scope: 'openid email profile',
       access_type: 'offline',
       prompt: 'select_account',
+      ...(csrfToken ? { state: `google:${csrfToken}` } : {}),
     });
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
@@ -326,9 +330,49 @@ export class AuthService {
     return user ? this.toAuthUser(user) : null;
   }
 
+  async updateProfile(userId: string, data: { name?: string; avatarUrl?: string }): Promise<AuthUser> {
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(data.name && { name: data.name }),
+        ...(data.avatarUrl && { avatarUrl: data.avatarUrl }),
+      },
+    });
+    return this.toAuthUser(user);
+  }
+
+  async changePassword(userId: string, currentPassword?: string, newPassword?: string): Promise<void> {
+    if (!newPassword) {
+      throw new AppError('New password is required', 400);
+    }
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new AppError('User not found', 404);
+    }
+    if (user.provider !== 'email') {
+      throw new AppError('Password updates are only allowed for email/password accounts', 400);
+    }
+
+    if (user.passwordHash) {
+      const isMatch = await bcrypt.compare(currentPassword || '', user.passwordHash);
+      if (!isMatch) {
+        throw new AppError('Incorrect current password', 400);
+      }
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+  }
+
   private toAuthUser(user: {
     id: string; email: string; name: string | null; avatarUrl: string | null;
     provider: string; emailVerified: boolean; githubLogin: string | null;
+    createdAt: Date;
   }): AuthUser {
     return {
       id: user.id,
@@ -338,6 +382,7 @@ export class AuthService {
       provider: user.provider,
       emailVerified: user.emailVerified,
       githubLogin: user.githubLogin,
+      createdAt: user.createdAt.toISOString(),
     };
   }
 }
