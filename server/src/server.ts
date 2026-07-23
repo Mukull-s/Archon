@@ -14,6 +14,11 @@ const server = app.listen(env.PORT, () => {
   logger.info(`📋 Health check: http://localhost:${env.PORT}/api/health`);
 });
 
+// Set connection and header timeouts to 10 minutes to avoid premature drop on large repositories
+server.timeout = 600000;
+server.keepAliveTimeout = 600000;
+server.headersTimeout = 605000;
+
 
 function gracefulShutdown(signal: string) {
   logger.info(`${signal} received. Shutting down gracefully...`);
