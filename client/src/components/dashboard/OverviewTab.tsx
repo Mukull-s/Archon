@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import api from '../../lib/api';
-import { Panel, Typography, Button, Loading } from '../ui/DesignSystem';
+import { Panel, Typography, Button, Loading, ErrorState } from '../ui/DesignSystem';
 import { toast } from 'sonner';
 
 interface OverviewTabProps {
@@ -31,48 +31,116 @@ export default function OverviewTab({
   const [insights, setInsights] = useState<any>(null);
   const [repoDetails, setRepoDetails] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [checkedOnboarding, setCheckedOnboarding] = useState<Record<number, boolean>>({
     0: true,
   });
 
-  // Fetch story, onboarding, insights, and repository details in parallel
+  // Individual loading/error states so partial data still renders
+  const [storyLoading, setStoryLoading] = useState(true);
+  const [onboardingLoading, setOnboardingLoading] = useState(true);
+  const [insightsLoading, setInsightsLoading] = useState(true);
+  const [detailsLoading, setDetailsLoading] = useState(true);
+
+  // Guard against React StrictMode double-mount and stale closures
+  const fetchIdRef = useRef(0);
+
   useEffect(() => {
-    let active = true;
-    (async () => {
-      setLoading(true);
-      try {
-        const [storyRes, onboardingRes, insightsRes, repoRes] = await Promise.all([
-          api.get(`/repos/${repositoryId}/story`),
-          api.get(`/repos/${repositoryId}/onboarding`),
-          api.get(`/repos/${repositoryId}/insights`),
-          api.get(`/repos/${repositoryId}`),
-        ]);
-        if (active) {
-          setStory(storyRes.data.data);
-          setOnboarding(onboardingRes.data.data);
-          setInsights(insightsRes.data.data);
-          
-          const repository = repoRes.data.data;
-          const parsedRepo = {
-            ...repository,
-            scannedFiles: typeof repository.scannedFiles === 'string' ? JSON.parse(repository.scannedFiles) : repository.scannedFiles,
-            languages: typeof repository.languages === 'string' ? JSON.parse(repository.languages) : repository.languages,
-            entryPoints: typeof repository.entryPoints === 'string' ? JSON.parse(repository.entryPoints) : repository.entryPoints,
-            dependencyGraph: typeof repository.dependencyGraph === 'string' ? JSON.parse(repository.dependencyGraph) : repository.dependencyGraph,
-          };
-          setRepoDetails(parsedRepo);
-        }
-      } catch (err) {
-        console.error('Failed to load Overview data:', err);
-        toast.error('Failed to load codebase overview metrics.');
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
+    // Increment fetch generation — any in-flight request from a prior generation is ignored
+    const fetchId = ++fetchIdRef.current;
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    // Per-request 20 s timeout (lower than Axios default 30 s so we fail fast)
+    const withTimeout = <T,>(promise: Promise<T>, ms = 20_000): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout>;
+      return new Promise<T>((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Request timed out after ${ms / 1000}s`)), ms);
+        promise.then(
+          (v) => { clearTimeout(timer); resolve(v); },
+          (e) => { clearTimeout(timer); reject(e); },
+        );
+      });
     };
-  }, [repositoryId]);
+
+    setLoading(true);
+    setError(null);
+    setStoryLoading(true);
+    setOnboardingLoading(true);
+    setInsightsLoading(true);
+    setDetailsLoading(true);
+
+    let storySucceeded = false;
+    let onboardingSucceeded = false;
+    let insightsSucceeded = false;
+    let detailsSucceeded = false;
+
+    // Each request is independent — a timeout on one does NOT cancel the others
+    const fetchStory = withTimeout(api.get(`/repos/${repositoryId}/story`, { signal }))
+      .then((res) => {
+        if (fetchIdRef.current === fetchId) {
+          setStory(res.data.data);
+          storySucceeded = true;
+        }
+      })
+      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] story:', err.message); })
+      .finally(() => { if (fetchIdRef.current === fetchId) setStoryLoading(false); });
+
+    const fetchOnboarding = withTimeout(api.get(`/repos/${repositoryId}/onboarding`, { signal }))
+      .then((res) => {
+        if (fetchIdRef.current === fetchId) {
+          setOnboarding(res.data.data);
+          onboardingSucceeded = true;
+        }
+      })
+      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] onboarding:', err.message); })
+      .finally(() => { if (fetchIdRef.current === fetchId) setOnboardingLoading(false); });
+
+    const fetchInsights = withTimeout(api.get(`/repos/${repositoryId}/insights`, { signal }))
+      .then((res) => {
+        if (fetchIdRef.current === fetchId) {
+          setInsights(res.data.data);
+          insightsSucceeded = true;
+        }
+      })
+      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] insights:', err.message); })
+      .finally(() => { if (fetchIdRef.current === fetchId) setInsightsLoading(false); });
+
+    const fetchDetails = withTimeout(api.get(`/repos/${repositoryId}`, { signal }))
+      .then((res) => {
+        if (fetchIdRef.current !== fetchId) return;
+        const repository = res.data.data;
+        setRepoDetails({
+          ...repository,
+          scannedFiles: typeof repository.scannedFiles === 'string' ? JSON.parse(repository.scannedFiles) : repository.scannedFiles,
+          languages: typeof repository.languages === 'string' ? JSON.parse(repository.languages) : repository.languages,
+          entryPoints: typeof repository.entryPoints === 'string' ? JSON.parse(repository.entryPoints) : repository.entryPoints,
+          dependencyGraph: typeof repository.dependencyGraph === 'string' ? JSON.parse(repository.dependencyGraph) : repository.dependencyGraph,
+        });
+        detailsSucceeded = true;
+      })
+      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] details:', err.message); })
+      .finally(() => { if (fetchIdRef.current === fetchId) setDetailsLoading(false); });
+
+    // Global loading flag clears when all four settle
+    Promise.allSettled([fetchStory, fetchOnboarding, fetchInsights, fetchDetails]).then(() => {
+      if (fetchIdRef.current === fetchId) {
+        setLoading(false);
+        // Only show the top-level error banner if every single request failed
+        const allFailed = !storySucceeded && !onboardingSucceeded && !insightsSucceeded && !detailsSucceeded;
+        if (allFailed) {
+          const msg = 'Failed to load codebase overview. Please retry.';
+          setError(msg);
+          toast.error(msg);
+        }
+      }
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [repositoryId, retryCount]);
 
   const formatSize = (bytes: number) => {
     if (!bytes) return '0 B';
@@ -94,6 +162,18 @@ export default function OverviewTab({
     return (
       <div className="flex items-center justify-center py-20">
         <Loading message="Assembling repository overview..." type="skeleton" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <ErrorState
+          title="Repository Analysis Failed"
+          description={error}
+          onRetry={() => setRetryCount(prev => prev + 1)}
+        />
       </div>
     );
   }
@@ -290,44 +370,44 @@ export default function OverviewTab({
       </section>
 
       {/* ── Main Canvas Grid ── */}
-      <div className="grid grid-cols-12 gap-gutter">
+      <div className="grid grid-cols-12 gap-6">
         
         {/* LEFT COLUMN: Narrative, Entry Points, & Visualizer */}
-        <div className="col-span-12 lg:col-span-8 space-y-gutter">
+        <div className="col-span-12 lg:col-span-8 space-y-6">
           
           {/* Section 1: Repository Story */}
           {story && (
-            <article className="bg-surface-container-low border border-outline-variant p-8 relative overflow-hidden group">
-              <h3 className="font-label-caps text-label-caps text-secondary mb-4">REPOSITORY STORY</h3>
+            <Panel className="p-6 relative overflow-hidden group" variant="lowest">
+              <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-4">REPOSITORY STORY</h3>
               <div className="space-y-4 max-w-2xl">
-                <p className="font-body-base text-on-surface leading-relaxed">
+                <p className="text-[13px] leading-relaxed text-[#fafafa]">
                   This repository implements a <strong>{story.architectureType}</strong> paradigm. It contains {calculatedNodesCount} source files with active dependency bounds spanning multiple integration modules.
                 </p>
-                <p className="font-body-base text-on-surface-variant leading-relaxed">
+                <p className="text-[13px] leading-relaxed text-[#c8c5ca]">
                   {story.domain}. The structural narrative follows automated system execution paradigms resolved directly from AST imports and dependency centralities.
                 </p>
               </div>
-            </article>
+            </Panel>
           )}
 
           {/* Section 2: Entry Points Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Primary Controllers */}
-            <div className="bg-surface-container-low border border-outline-variant p-6">
+            <Panel className="p-6" variant="lowest">
               <div className="flex items-center justify-between mb-6">
-                <h3 className="font-label-caps text-label-caps text-secondary">PRIMARY CONTROLLERS</h3>
-                <span className="text-on-surface-variant font-code-base text-[11px]">{entryPoints.length} Active</span>
+                <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">PRIMARY CONTROLLERS</h3>
+                <span className="text-[#919095] font-mono text-[11px]">{entryPoints.length} Active</span>
               </div>
               <ul className="space-y-3">
                 {entryPoints.slice(0, 5).map((file) => (
                   <li key={file} className="flex items-center justify-between group cursor-pointer" onClick={() => setActiveTab('explorer')}>
                     <div className="flex items-center gap-3">
-                      <svg className="w-4 h-4 text-on-surface-variant group-hover:text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <svg className="w-4 h-4 text-[#919095] group-hover:text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                         <rect x="4" y="4" width="6" height="6" rx="1" />
                         <rect x="14" y="14" width="6" height="6" rx="1" />
                         <path d="M10 7h2a2 2 0 012 2v5m-4-7V5a2 2 0 00-2-2H4M14 17h2a2 2 0 002-2v-2" />
                       </svg>
-                      <span className="font-code-base text-code-base group-hover:underline truncate max-w-[200px]">{file.split('/').pop()}</span>
+                      <span className="font-mono text-[12px] text-[#c8c5ca] group-hover:text-[#fafafa] group-hover:underline truncate max-w-[200px]">{file.split('/').pop()}</span>
                     </div>
                     <svg className="w-4 h-4 text-current opacity-0 group-hover:opacity-100 transition-opacity shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -335,25 +415,25 @@ export default function OverviewTab({
                   </li>
                 ))}
                 {entryPoints.length === 0 && (
-                  <li className="text-on-surface-variant font-body-sm italic">No active entry controllers detected.</li>
+                  <li className="text-[#919095] text-[11px] italic">No active entry controllers detected.</li>
                 )}
               </ul>
-            </div>
+            </Panel>
 
             {/* Core Services */}
-            <div className="bg-surface-container-low border border-outline-variant p-6">
+            <Panel className="p-6" variant="lowest">
               <div className="flex items-center justify-between mb-6">
-                <h3 className="font-label-caps text-label-caps text-secondary">CORE SERVICES</h3>
-                <span className="text-on-surface-variant font-code-base text-[11px]">{story?.coreHotspots?.length || 0} Registered</span>
+                <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">CORE SERVICES</h3>
+                <span className="text-[#919095] font-mono text-[11px]">{story?.coreHotspots?.length || 0} Registered</span>
               </div>
               <ul className="space-y-3">
                 {(story?.coreHotspots || []).slice(0, 5).map((file: string) => (
                   <li key={file} className="flex items-center justify-between group cursor-pointer" onClick={() => setActiveTab('explorer')}>
                     <div className="flex items-center gap-3">
-                      <svg className="w-4 h-4 text-on-surface-variant group-hover:text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <svg className="w-4 h-4 text-[#919095] group-hover:text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                       </svg>
-                      <span className="font-code-base text-code-base group-hover:underline truncate max-w-[200px]">{file.split('/').pop()}</span>
+                      <span className="font-mono text-[12px] text-[#c8c5ca] group-hover:text-[#fafafa] group-hover:underline truncate max-w-[200px]">{file.split('/').pop()}</span>
                     </div>
                     <svg className="w-4 h-4 text-current opacity-0 group-hover:opacity-100 transition-opacity shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -361,24 +441,24 @@ export default function OverviewTab({
                   </li>
                 ))}
                 {(!story?.coreHotspots || story.coreHotspots.length === 0) && (
-                  <li className="text-on-surface-variant font-body-sm italic">No core services resolved.</li>
+                  <li className="text-[#919095] text-[11px] italic">No core services resolved.</li>
                 )}
               </ul>
-            </div>
+            </Panel>
           </div>
 
           {/* Section 3: Technical Visualizer Space */}
-          <div className="h-64 border border-outline-variant relative bg-[#131316] overflow-hidden rounded-sm">
+          <div className="h-64 border border-[#27272a] relative bg-[#131316] overflow-hidden rounded-[8px]">
             <div className="absolute inset-0">
               {renderMiniGraph()}
             </div>
             <div className="absolute bottom-4 left-4 z-10">
-              <p className="font-label-caps text-[10px] text-on-surface-variant mb-1">REAL-TIME DEPENDENCY MAPPING</p>
+              <p className="text-[9px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-1">REAL-TIME DEPENDENCY MAPPING</p>
               <div className="flex gap-2">
-                <div className="px-2 py-1 bg-surface-container-highest/80 border border-outline-variant text-[10px] font-code-base text-on-surface">
+                <div className="px-2 py-0.5 bg-[#131316]/80 border border-[#27272a] rounded text-[10px] font-mono text-[#c8c5ca]">
                   Nodes: {calculatedNodesCount}
                 </div>
-                <div className="px-2 py-1 bg-surface-container-highest/80 border border-outline-variant text-[10px] font-code-base text-on-surface">
+                <div className="px-2 py-0.5 bg-[#131316]/80 border border-[#27272a] rounded text-[10px] font-mono text-[#c8c5ca]">
                   Edges: {calculatedEdgesCount}
                 </div>
               </div>
@@ -388,89 +468,89 @@ export default function OverviewTab({
         </div>
 
         {/* RIGHT COLUMN: Stats & Onboarding Checklist */}
-        <div className="col-span-12 lg:col-span-4 space-y-gutter">
+        <div className="col-span-12 lg:col-span-4 space-y-6">
           
           {/* Card 1: Complexity & Health */}
-          <section className="bg-surface-container-low border border-outline-variant p-6">
-            <h3 className="font-label-caps text-label-caps text-secondary mb-6">COMPLEXITY & HEALTH</h3>
+          <Panel className="p-6" variant="lowest">
+            <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-6">COMPLEXITY & HEALTH</h3>
             <div className="space-y-6">
               {/* Cyclomatic Complexity */}
               <div>
                 <div className="flex justify-between items-end mb-2">
-                  <span className="font-body-sm text-on-surface-variant">Cyclomatic Complexity</span>
-                  <span className="font-code-base text-headline-md text-on-surface">
-                    14.2 <span className="text-xs text-error">↑2%</span>
+                  <span className="text-[12px] text-[#c8c5ca]">Cyclomatic Complexity</span>
+                  <span className="font-mono text-[14px] font-bold text-[#fafafa]">
+                    14.2 <span className="text-xs text-red-400">↑2%</span>
                   </span>
                 </div>
-                <div className="h-1 bg-surface-container-highest rounded-full overflow-hidden">
-                  <div className="h-full bg-secondary w-[65%]" />
+                <div className="h-1 bg-[#1f1f22] rounded-full overflow-hidden">
+                  <div className="h-full bg-[#facc15] w-[65%]" />
                 </div>
               </div>
 
               {/* Test Coverage */}
               <div>
                 <div className="flex justify-between items-end mb-2">
-                  <span className="font-body-sm text-on-surface-variant">Test Coverage</span>
-                  <span className="font-code-base text-headline-md text-on-surface">
+                  <span className="text-[12px] text-[#c8c5ca]">Test Coverage</span>
+                  <span className="font-mono text-[14px] font-bold text-[#fafafa]">
                     {testCoveragePct}%
                   </span>
                 </div>
-                <div className="h-1 bg-surface-container-highest rounded-full overflow-hidden">
-                  <div className="h-full bg-green-500" style={{ width: `${testCoveragePct}%` }} />
+                <div className="h-1 bg-[#1f1f22] rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-500" style={{ width: `${testCoveragePct}%` }} />
                 </div>
               </div>
 
               {/* Build Success Rate */}
               <div>
                 <div className="flex justify-between items-end mb-2">
-                  <span className="font-body-sm text-on-surface-variant">Build Success Rate</span>
-                  <span className="font-code-base text-headline-md text-on-surface">
+                  <span className="text-[12px] text-[#c8c5ca]">Build Success Rate</span>
+                  <span className="font-mono text-[14px] font-bold text-[#fafafa]">
                     {confidence}%
                   </span>
                 </div>
-                <div className="h-1 bg-surface-container-highest rounded-full overflow-hidden">
+                <div className="h-1 bg-[#1f1f22] rounded-full overflow-hidden">
                   <div className="h-full bg-blue-500" style={{ width: `${confidence}%` }} />
                 </div>
               </div>
 
               {/* Footer Row */}
-              <div className="pt-4 border-t border-outline-variant grid grid-cols-2 gap-4">
+              <div className="pt-4 border-t border-[#27272a] grid grid-cols-2 gap-4">
                 <div>
-                  <p className="text-[10px] font-label-caps text-on-surface-variant mb-1">MAINTAINABILITY</p>
-                  <p className="font-code-base text-lg text-on-surface">{maintainabilityGrade}</p>
+                  <p className="text-[9px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-1">MAINTAINABILITY</p>
+                  <p className="font-mono text-[13px] font-semibold text-[#fafafa]">{maintainabilityGrade}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] font-label-caps text-on-surface-variant mb-1">TECH DEBT</p>
-                  <p className="font-code-base text-lg text-on-surface">{techDebtLevel}</p>
+                  <p className="text-[9px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-1">TECH DEBT</p>
+                  <p className="font-mono text-[13px] font-semibold text-[#fafafa]">{techDebtLevel}</p>
                 </div>
               </div>
             </div>
-          </section>
+          </Panel>
 
           {/* Card 2: Engineering Onboarding */}
-          <section className="bg-surface-container-low border border-outline-variant p-6">
+          <Panel className="p-6" variant="lowest">
             <div className="flex items-center gap-2 mb-6">
-              <svg className="w-4 h-4 text-secondary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <svg className="w-4 h-4 text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 14l9-5-9-5-9 5 9 5z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
               </svg>
-              <h3 className="font-label-caps text-label-caps text-secondary">ENGINEERING ONBOARDING</h3>
+              <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">ENGINEERING ONBOARDING</h3>
             </div>
             
             <div className="space-y-4">
               {onboardingSteps.map((step, idx) => {
                 const isChecked = !!checkedOnboarding[idx];
                 return (
-                  <label key={idx} className="flex items-start gap-3 group cursor-pointer">
+                  <label key={idx} className="flex items-start gap-3 group cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={isChecked}
                       onChange={() => handleToggleOnboarding(idx)}
-                      className="mt-1 w-4 h-4 bg-background border-outline-variant text-secondary focus:ring-0 rounded-sm cursor-pointer shrink-0"
+                      className="mt-1 w-4 h-4 bg-[#09090b] border border-[#27272a] text-[#3b82f6] focus:ring-0 rounded-sm cursor-pointer shrink-0"
                     />
                     <div className="flex-1 min-w-0">
-                      <p className="font-body-base text-on-surface group-hover:text-primary transition-colors">{step.title}</p>
-                      <p className="text-[11px] text-on-surface-variant mt-0.5">{step.desc}</p>
+                      <p className="text-[12.5px] font-medium text-[#c8c5ca] group-hover:text-[#fafafa] transition-colors">{step.title}</p>
+                      <p className="text-[11px] text-[#919095] mt-0.5">{step.desc}</p>
                     </div>
                   </label>
                 );
@@ -479,38 +559,38 @@ export default function OverviewTab({
             
             <button 
               onClick={() => setActiveTab('chat')}
-              className="w-full mt-8 border border-outline-variant py-2 font-label-caps text-[12px] text-on-surface hover:bg-surface-container-high transition-colors cursor-pointer"
+              className="w-full mt-6 border border-[#27272a] hover:border-[#3b82f6]/40 py-2 rounded text-[10px] font-mono font-bold tracking-wider text-[#fafafa] hover:bg-[#1f1f22] transition-colors cursor-pointer"
             >
               VIEW FULL LEARNING PATH
             </button>
-          </section>
+          </Panel>
 
           {/* Card 3: System Meta */}
           {repoDetails && (
-            <div className="bg-[#18181b] border border-outline-variant p-4 font-code-base text-[11px] text-on-surface-variant space-y-2 rounded-sm">
+            <Panel className="p-4 font-mono text-[11px] text-[#919095] space-y-2" variant="lowest">
               <div className="flex justify-between">
                 <span>Repository Type</span>
-                <span className="text-on-surface">{repoDetails.isLocal ? 'Local Directory' : 'Remote GitHub'}</span>
+                <span className="text-[#fafafa]">{repoDetails.isLocal ? 'Local Directory' : 'Remote GitHub'}</span>
               </div>
               {!!repoDetails.totalSize && (
                 <div className="flex justify-between">
                   <span>Total Size</span>
-                  <span className="text-on-surface">{formatSize(repoDetails.totalSize)}</span>
+                  <span className="text-[#fafafa]">{formatSize(repoDetails.totalSize)}</span>
                 </div>
               )}
               {calculatedNodesCount > 0 && (
                 <div className="flex justify-between">
                   <span>File Count</span>
-                  <span className="text-on-surface">{calculatedNodesCount} files</span>
+                  <span className="text-[#fafafa]">{calculatedNodesCount} files</span>
                 </div>
               )}
               {repoDetails.isIndexed !== undefined && (
                 <div className="flex justify-between">
                   <span>Scanned Status</span>
-                  <span className="text-on-surface">{repoDetails.isIndexed ? 'Fully Indexed' : 'Partially Scanned'}</span>
+                  <span className="text-[#fafafa]">{repoDetails.isIndexed ? 'Fully Indexed' : 'Partially Scanned'}</span>
                 </div>
               )}
-            </div>
+            </Panel>
           )}
 
         </div>

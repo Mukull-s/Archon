@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
-import { Typography, Panel, Badge, Button } from '../ui/DesignSystem';
+import { Typography, Panel, Badge, Button, Loading, Empty, ErrorState } from '../ui/DesignSystem';
 
 interface FileItem {
   path: string;
@@ -446,13 +446,13 @@ ${traceSteps.map((s, i) => `${i + 1}. **[${s.type.toUpperCase()}]** \`${s.name}\
         
         {/* Canvas Controls */}
         <div className="absolute top-3 left-3 z-10 flex gap-1.5 bg-[#0e0e11]/80 p-1 rounded-[6px] border border-[#27272a] backdrop-blur-sm">
-          <button onClick={() => handleZoom(1.15)} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Zoom In">
+          <button onClick={() => handleZoom(1.15)} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Zoom In" aria-label="Zoom In">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
           </button>
-          <button onClick={() => handleZoom(0.85)} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Zoom Out">
+          <button onClick={() => handleZoom(0.85)} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Zoom Out" aria-label="Zoom Out">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" /></svg>
           </button>
-          <button onClick={handleResetZoom} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Reset view">
+          <button onClick={handleResetZoom} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Reset view" aria-label="Reset view">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89M9 11l3-3m-3 3l-3-3" /></svg>
           </button>
         </div>
@@ -468,16 +468,11 @@ ${traceSteps.map((s, i) => `${i + 1}. **[${s.type.toUpperCase()}]** \`${s.name}\
           style={{ backgroundImage: 'radial-gradient(#27272a 1px, transparent 1px)', backgroundSize: '20px 20px', backgroundPosition: `${pan.x}px ${pan.y}px` }}
         >
           {traceSteps.length === 0 ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 max-w-sm mx-auto text-center gap-4 select-none pointer-events-none">
-              <div className="w-12 h-12 rounded-full bg-[#1f1f22]/50 border border-[#27272a] flex items-center justify-center text-[#919095]">
-                <span className="material-symbols-outlined text-2xl">schema</span>
-              </div>
-              <div>
-                <h4 className="text-[14px] font-bold text-[#fafafa] font-mono">Execution Flow Canvas</h4>
-                <p className="text-[11.5px] text-[#919095] mt-1.5 leading-relaxed font-mono">
-                  Select an entry point to visualize the execution flow.
-                </p>
-              </div>
+            <div className="absolute inset-0 flex items-center justify-center p-8">
+              <Empty
+                title="Select an Entry Point"
+                description="Select an entry point from the list to visualize the request execution flow path."
+              />
             </div>
           ) : (
             <svg className="w-full h-full drop-shadow-2xl">
@@ -583,14 +578,25 @@ ${traceSteps.map((s, i) => `${i + 1}. **[${s.type.toUpperCase()}]** \`${s.name}\
         <div className="p-3 border-b border-[#27272a] flex items-center justify-between shrink-0 select-none">
           <span className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">Details &amp; Timeline</span>
           {traceSteps.length > 0 && (
-            <div className="flex gap-1">
+            <div className="flex gap-1.5">
               <button
                 onClick={() => handleExport('md')}
                 className="p-1 text-[#919095] hover:text-[#fafafa] hover:bg-[#1f1f22] rounded-[4px] cursor-pointer"
                 title="Export as Markdown"
+                aria-label="Export as Markdown"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => handleExport('json')}
+                className="p-1 text-[#919095] hover:text-[#fafafa] hover:bg-[#1f1f22] rounded-[4px] cursor-pointer"
+                title="Export as JSON"
+                aria-label="Export as JSON"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
               </button>
             </div>

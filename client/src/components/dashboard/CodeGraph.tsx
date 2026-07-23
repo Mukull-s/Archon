@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GraphEngine, GraphNode, GraphLink } from './GraphEngine';
 import { LayoutEngine, PositionedNode, ClusterBoundary } from './LayoutEngine';
-import { Panel, Typography, Button } from '../ui/DesignSystem';
+import { Panel, Typography, Button, Loading, Empty, ErrorState } from '../ui/DesignSystem';
 import { toast } from 'sonner';
 import api from '../../lib/api';
 
@@ -289,17 +289,36 @@ export default function CodeGraph({
     };
   }, [selectedNode, positionedNodes, graphEngine, scannedFiles, insights]);
 
+  // Render loading skeleton during initial insights fetch
+  if (insightsLoading && !insights) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-140px)]" data-lenis-prevent>
+        <Loading message="Building architecture graph..." type="skeleton" />
+      </div>
+    );
+  }
+
+  // Render error state if insights failed
+  if (insightsError && !insights) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-140px)]" data-lenis-prevent>
+        <ErrorState
+          title="Architecture analysis failed"
+          description={insightsError}
+          onRetry={() => fetchInsights(true)}
+        />
+      </div>
+    );
+  }
+
   // Render Empty State if no files or nodes resolved
   if (!scannedFiles || scannedFiles.length === 0 || rawNodes.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-[calc(100vh-140px)] border border-[#27272a] rounded-[8px] bg-[#131316] p-8 text-center" data-lenis-prevent>
-        <svg className="w-12 h-12 text-[#71717a] mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94-3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-        </svg>
-        <Typography variant="headline" as="h3" className="text-on-surface mb-2 font-mono">No Mapped Architecture</Typography>
-        <Typography variant="body-sm" className="text-[#c8c5ca] max-w-md leading-relaxed">
-          No files or dependencies were resolved for this repository. Please verify that the workspace contains parsed code files (JS, TS, Python, etc.) and try scanning again.
-        </Typography>
+      <div className="flex items-center justify-center h-[calc(100vh-140px)]" data-lenis-prevent>
+        <Empty
+          title="No Mapped Architecture"
+          description="Select a repository to generate the architecture graph. Ensure the workspace contains parsed code files (JS, TS, Python, etc.)."
+        />
       </div>
     );
   }
@@ -345,7 +364,7 @@ export default function CodeGraph({
             className="bg-transparent border-none focus:ring-0 text-[12px] text-[#fafafa] placeholder-[#71717a] w-full p-0"
           />
           {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="text-[#71717a] text-[11px] hover:text-[#fafafa] cursor-pointer">
+            <button onClick={() => setSearchQuery('')} className="text-[#71717a] text-[11px] hover:text-[#fafafa] cursor-pointer" title="Clear search" aria-label="Clear search">
               ✕
             </button>
           )}
@@ -556,6 +575,8 @@ export default function CodeGraph({
             {/* Minimap Toggle Button */}
             <button 
               onClick={() => setIsMinimapOpen(!isMinimapOpen)}
+              title={isMinimapOpen ? 'Hide minimap' : 'Show minimap'}
+              aria-label={isMinimapOpen ? 'Hide minimap' : 'Show minimap'}
               className="bg-[#1f1f22]/90 backdrop-blur border border-[#27272a] px-3 py-1.5 rounded-[4px] text-[#c8c5ca] hover:text-[#fafafa] hover:bg-[#2a2a2d] transition-colors flex items-center gap-2 cursor-pointer shadow-lg"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -737,28 +758,6 @@ export default function CodeGraph({
                     </section>
                   )}
 
-                  {/* Actions Block */}
-                  <div className="pt-4 border-t border-[#27272a] space-y-3 flex-shrink-0">
-                    <button 
-                      onClick={() => toast.success(`Optimization cascade triggered for ${nodeDetails.label}`)}
-                      className="w-full bg-[#3b82f6] text-white font-medium py-2 px-4 rounded-sm text-body-base hover:bg-blue-600 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-blue-500/10"
-                    >
-                      <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 21l-1.81-5.096L2.094 14.1 7.2 13.287 9 8.192l1.8 5.095 5.106.816-5.093.801z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.071 4.929a10 10 0 00-14.142 0M12 3v3" />
-                      </svg>
-                      Optimize Module
-                    </button>
-                    <button 
-                      onClick={() => toast.success(`Opened ${nodeDetails.label} in local editor.`)}
-                      className="w-full bg-transparent border border-[#27272a] text-[#c8c5ca] hover:text-[#fafafa] hover:bg-[#1f1f22] py-2 px-4 rounded-sm text-body-base transition-all flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
-                      </svg>
-                      Open in Editor
-                    </button>
-                  </div>
 
                 </div>
               </motion.div>

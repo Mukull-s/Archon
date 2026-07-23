@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import api from '../../lib/api';
 import { toast } from 'sonner';
+import { Loading, Empty, ErrorState, Typography } from '../ui/DesignSystem';
 
 interface FileItem {
   path: string;
@@ -16,6 +17,8 @@ interface ScopeSelectorProps {
   repositoryId: string;
   astMetadata: any;
   dependencyGraph: any;
+  selectedExplorerFile: string | null;
+  setSelectedExplorerFile: (filePath: string | null) => void;
 }
 
 interface TreeNode {
@@ -76,10 +79,11 @@ export default function ScopeSelector({
   repositoryId,
   astMetadata,
   dependencyGraph,
+  selectedExplorerFile,
+  setSelectedExplorerFile,
 }: ScopeSelectorProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['']));
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   
   // LocalStorage state trackers
   const [recentlyViewed, setRecentlyViewed] = useState<RecentViewItem[]>([]);
@@ -140,7 +144,7 @@ export default function ScopeSelector({
 
   // Update Recently Viewed history
   const trackFileView = (filePath: string) => {
-    setSelectedFile(filePath);
+    setSelectedExplorerFile(filePath);
     const recentKey = `archon_recent_${repositoryId}`;
     
     setRecentlyViewed(prev => {
@@ -378,19 +382,19 @@ export default function ScopeSelector({
 
   // Selected file details
   const fileDetails = useMemo(() => {
-    if (!selectedFile) return null;
-    const fileItem = files.find(f => f.path === selectedFile);
-    const ast = astMetadata && astMetadata[selectedFile];
+    if (!selectedExplorerFile) return null;
+    const fileItem = files.find(f => f.path === selectedExplorerFile);
+    const ast = astMetadata && astMetadata[selectedExplorerFile];
     const classes = ast?.classes || [];
     const functions = ast?.functions || [];
 
     const graph = dependencyGraph || { adjacencyList: {}, dependents: {} };
-    const dependencies = graph.adjacencyList?.[selectedFile] || [];
-    const dependents = graph.dependents?.[selectedFile] || [];
+    const dependencies = graph.adjacencyList?.[selectedExplorerFile] || [];
+    const dependents = graph.dependents?.[selectedExplorerFile] || [];
 
     return {
-      path: selectedFile,
-      name: selectedFile.split('/').pop() || '',
+      path: selectedExplorerFile,
+      name: selectedExplorerFile.split('/').pop() || '',
       size: fileItem?.size || 0,
       lines: fileItem?.lines || 0,
       classes,
@@ -398,7 +402,7 @@ export default function ScopeSelector({
       dependencies,
       dependents,
     };
-  }, [selectedFile, files, astMetadata, dependencyGraph]);
+  }, [selectedExplorerFile, files, astMetadata, dependencyGraph]);
 
   // Recursive Tree Node Renderer
   const renderNode = (node: TreeNode, depth = 0) => {
@@ -415,7 +419,7 @@ export default function ScopeSelector({
 
     const allChecked = node.isDirectory ? isFolderSelected(node) : selectedFiles.has(node.path);
     const partialChecked = node.isDirectory ? isFolderPartiallySelected(node) : false;
-    const isSelected = selectedFile === node.path;
+    const isSelected = selectedExplorerFile === node.path;
 
     return (
       <div key={node.path} className="flex flex-col">
@@ -519,6 +523,17 @@ export default function ScopeSelector({
     );
   };
 
+  if (!files || files.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8 bg-[#0e0e11] border border-[#27272a] rounded-[8px] h-[calc(100vh-140px)]">
+        <Empty
+          title="No Repository Indexed"
+          description="No repository has been indexed yet. Return to the repositories page to scan and index a codebase."
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-160px)] relative overflow-hidden">
       
@@ -585,8 +600,8 @@ export default function ScopeSelector({
           <div className="flex items-center gap-1.5 flex-wrap">
             <span>Explorer</span>
             <span>/</span>
-            {selectedFile ? (
-              selectedFile.split('/').map((part, index, arr) => (
+            {selectedExplorerFile ? (
+              selectedExplorerFile.split('/').map((part, index, arr) => (
                 <React.Fragment key={part}>
                   <span className={index === arr.length - 1 ? 'text-[#fafafa] font-semibold' : ''}>{part}</span>
                   {index < arr.length - 1 && <span>/</span>}
@@ -597,9 +612,9 @@ export default function ScopeSelector({
             )}
           </div>
 
-          {selectedFile && (
+          {selectedExplorerFile && (
             <button
-              onClick={() => setSelectedFile(null)}
+              onClick={() => setSelectedExplorerFile(null)}
               className="text-[#3b82f6] hover:text-[#fafafa] font-semibold cursor-pointer"
             >
               ← Back to Dashboard
@@ -735,22 +750,6 @@ export default function ScopeSelector({
                   </div>
                 </div>
               )}
-
-              {/* Actions row */}
-              <div className="flex gap-3 pt-4 border-t border-[#27272a]">
-                <button
-                  onClick={() => toast.success(`Staged optimization plan for ${fileDetails.name}`)}
-                  className="bg-[#3b82f6] hover:bg-[#3b82f6]/90 text-white font-semibold text-body-base py-2 px-5 rounded-[4px] cursor-pointer flex items-center gap-2 transition-colors"
-                >
-                  Optimize Module
-                </button>
-                <button
-                  onClick={() => toast.success(`Opened ${fileDetails.name} in local editor.`)}
-                  className="bg-transparent border border-[#27272a] text-[#c8c5ca] hover:text-[#fafafa] hover:bg-[#1f1f22] font-semibold text-body-base py-2 px-5 rounded-[4px] cursor-pointer flex items-center gap-2 transition-all"
-                >
-                  Open in Editor
-                </button>
-              </div>
             </div>
           ) : (
             /* DEFAULT DASHBOARD STATE (BENTO BOX LAYOUT) */
@@ -778,7 +777,7 @@ export default function ScopeSelector({
                       recentlyViewed.map(item => (
                         <div
                           key={item.path}
-                          onClick={() => setSelectedFile(item.path)}
+                          onClick={() => setSelectedExplorerFile(item.path)}
                           className="flex items-center justify-between p-2 rounded-[4px] bg-[#131316] hover:bg-[#1f1f22] border border-transparent hover:border-[#27272a] transition-all cursor-pointer group"
                         >
                           <div className="flex items-center gap-2.5 truncate">
@@ -821,7 +820,7 @@ export default function ScopeSelector({
                       pinnedFiles.map(filePath => (
                         <div
                           key={filePath}
-                          onClick={() => setSelectedFile(filePath)}
+                          onClick={() => setSelectedExplorerFile(filePath)}
                           className="flex items-center justify-between p-2 rounded-[4px] bg-[#131316] hover:bg-[#1f1f22] border border-transparent hover:border-[#27272a] transition-all cursor-pointer group"
                         >
                           <div className="flex items-center gap-2.5 truncate">
@@ -866,9 +865,8 @@ export default function ScopeSelector({
                 </div>
 
                 {loadingInsights ? (
-                  <div className="p-8 text-center bg-[#0e0e11] border border-[#27272a] rounded-[6px]">
-                    <div className="w-6 h-6 border-2 border-[#3b82f6] border-t-transparent rounded-full animate-spin mx-auto" />
-                    <span className="text-[12px] text-[#919095] mt-2 block">Analyzing repository telemetry...</span>
+                  <div className="bg-[#0e0e11] border border-[#27272a] rounded-[6px] p-4 flex items-center justify-center">
+                    <Loading message="Analyzing repository telemetry..." type="spinner" />
                   </div>
                 ) : recommendations.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
