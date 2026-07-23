@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
+import { toast } from 'sonner'
 
 /**
  * OAuth Callback Page
@@ -17,35 +18,45 @@ export default function AuthCallback() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
+    const state = params.get('state') || ''
+    const email = params.get('email') || undefined
+    const name = params.get('name') || undefined
 
     if (!code) {
       setError('No authorization code received.')
       return
     }
 
-    // Detect provider from the URL or state
-    // GitHub uses 'code' param, Google also uses 'code'
-    // We'll determine provider from referrer or pass via state
+    // CSRF Token Validation
+    const storedCsrf = localStorage.getItem('oauth_csrf_token')
+    const [providerFromState, csrfToken] = state.split(':')
+
+    if (!csrfToken || csrfToken !== storedCsrf) {
+      setError('Security verification failed. OAuth CSRF token mismatch.')
+      toast.error('OAuth security check failed. CSRF mismatch.')
+      return
+    }
+
+    // Clear CSRF token once validated
+    localStorage.removeItem('oauth_csrf_token')
+
+    const provider = providerFromState || (window.location.href.includes('google') ? 'google' : 'github')
     const isPopup = window.opener !== null
 
     if (isPopup) {
       // Send code back to parent window
-      // Determine provider by checking URL patterns
-      const provider = window.location.href.includes('google') ? 'google' : 'github'
       window.opener.postMessage(
-        { type: 'oauth_callback', provider, code },
+        { type: 'oauth_callback', provider, code, email, name },
         window.location.origin
       )
       window.close()
     } else {
-      // Direct mode (popup was blocked) — try GitHub first
-      handleOAuthCallback('github', code)
+      // Direct mode fallback
+      handleOAuthCallback(provider, code, email, name)
         .then(() => navigate('/', { replace: true }))
-        .catch(() => {
-          // Try Google if GitHub fails
-          handleOAuthCallback('google', code)
-            .then(() => navigate('/', { replace: true }))
-            .catch(() => setError('Authentication failed. Please try again.'))
+        .catch((err) => {
+          console.error(err)
+          setError(err.message || 'Authentication failed. Please try again.')
         })
     }
   }, [handleOAuthCallback, navigate])
