@@ -1,5 +1,9 @@
 import { useRef, useEffect, useState } from 'react'
 import * as THREE from 'three'
+import { gsap } from 'gsap'
+import { ScrollTrigger } from 'gsap/ScrollTrigger'
+
+gsap.registerPlugin(ScrollTrigger)
 
 interface LightPillarProps {
   topColor?: string
@@ -127,6 +131,7 @@ const LightPillar = ({
       uniform float uPillarRotSin;
       uniform float uWaveSin;
       uniform float uWaveCos;
+      uniform float uCameraZ;
       varying vec2 vUv;
 
       const float STEP_MULT = ${settings.stepMultiplier.toFixed(1)};
@@ -137,7 +142,7 @@ const LightPillar = ({
         vec2 uv = (vUv * 2.0 - 1.0) * vec2(uResolution.x / uResolution.y, 1.0);
         uv = vec2(uPillarRotCos * uv.x - uPillarRotSin * uv.y, uPillarRotSin * uv.x + uPillarRotCos * uv.y);
 
-        vec3 ro = vec3(0.0, 0.0, -10.0);
+        vec3 ro = vec3(0.0, 0.0, uCameraZ);
         vec3 rd = normalize(vec3(uv, 1.0));
 
         float rotC = uRotCos;
@@ -214,6 +219,7 @@ const LightPillar = ({
         uPillarRotSin: { value: Math.sin(pillarRotRad) },
         uWaveSin: { value: waveSin },
         uWaveCos: { value: waveCos },
+        uCameraZ: { value: -10.0 },
       },
       transparent: true, depthWrite: false, depthTest: false,
     })
@@ -236,6 +242,87 @@ const LightPillar = ({
 
     if (interactive) container.addEventListener('mousemove', handleMouseMove, { passive: true })
 
+    // Scroll-driven animation state
+    const scrollState = {
+      pillarRotation: pillarRotation,
+      pillarWidth: pillarWidth,
+      pillarHeight: pillarHeight,
+      intensity: intensity,
+      topColorR: parseColor(topColor).x,
+      topColorG: parseColor(topColor).y,
+      topColorB: parseColor(topColor).z,
+      bottomColorR: parseColor(bottomColor).x,
+      bottomColorG: parseColor(bottomColor).y,
+      bottomColorB: parseColor(bottomColor).z,
+      cameraZ: -10.0,
+    }
+
+    // Set up GSAP scroll-driven animations for uniforms
+    const scrollTriggerInstance = ScrollTrigger.create({
+      trigger: document.body,
+      start: 'top top',
+      end: 'bottom bottom',
+      scrub: 1.2,
+      onUpdate: (self) => {
+        const p = self.progress
+        // Phase 1: Hero to HowItWorks (0 to 0.33)
+        // Phase 2: HowItWorks to Features (0.33 to 0.66)
+        // Phase 3: Features to CTA/Footer (0.66 to 1.0)
+        if (p < 0.33) {
+          const ratio = p / 0.33
+          scrollState.pillarRotation = THREE.MathUtils.lerp(pillarRotation, 65, ratio)
+          scrollState.pillarWidth = THREE.MathUtils.lerp(pillarWidth, 3.8, ratio)
+          scrollState.pillarHeight = THREE.MathUtils.lerp(pillarHeight, 0.7, ratio)
+          scrollState.intensity = THREE.MathUtils.lerp(intensity, 1.2, ratio)
+          scrollState.cameraZ = THREE.MathUtils.lerp(-10.0, -8.0, ratio)
+          
+          const cTop = new THREE.Color(topColor).lerp(new THREE.Color('#7C3AED'), ratio)
+          scrollState.topColorR = cTop.r
+          scrollState.topColorG = cTop.g
+          scrollState.topColorB = cTop.b
+
+          const cBottom = new THREE.Color(bottomColor).lerp(new THREE.Color('#00E5FF'), ratio)
+          scrollState.bottomColorR = cBottom.r
+          scrollState.bottomColorG = cBottom.g
+          scrollState.bottomColorB = cBottom.b
+        } else if (p < 0.66) {
+          const ratio = (p - 0.33) / 0.33
+          scrollState.pillarRotation = THREE.MathUtils.lerp(65, -30, ratio)
+          scrollState.pillarWidth = THREE.MathUtils.lerp(3.8, 2.2, ratio)
+          scrollState.pillarHeight = THREE.MathUtils.lerp(0.7, 1.4, ratio)
+          scrollState.intensity = THREE.MathUtils.lerp(1.2, 0.85, ratio)
+          scrollState.cameraZ = THREE.MathUtils.lerp(-8.0, -14.0, ratio)
+
+          const cTop = new THREE.Color('#7C3AED').lerp(new THREE.Color('#FF2E93'), ratio)
+          scrollState.topColorR = cTop.r
+          scrollState.topColorG = cTop.g
+          scrollState.topColorB = cTop.b
+
+          const cBottom = new THREE.Color('#00E5FF').lerp(new THREE.Color('#7F00FF'), ratio)
+          scrollState.bottomColorR = cBottom.r
+          scrollState.bottomColorG = cBottom.g
+          scrollState.bottomColorB = cBottom.b
+        } else {
+          const ratio = Math.min((p - 0.66) / 0.34, 1.0)
+          scrollState.pillarRotation = THREE.MathUtils.lerp(-30, 140, ratio)
+          scrollState.pillarWidth = THREE.MathUtils.lerp(2.2, 7.0, ratio)
+          scrollState.pillarHeight = THREE.MathUtils.lerp(1.4, 0.2, ratio)
+          scrollState.intensity = THREE.MathUtils.lerp(0.85, 1.7, ratio)
+          scrollState.cameraZ = THREE.MathUtils.lerp(-14.0, -4.0, ratio)
+
+          const cTop = new THREE.Color('#FF2E93').lerp(new THREE.Color('#b026ff'), ratio)
+          scrollState.topColorR = cTop.r
+          scrollState.topColorG = cTop.g
+          scrollState.topColorB = cTop.b
+
+          const cBottom = new THREE.Color('#7F00FF').lerp(new THREE.Color('#030008'), ratio)
+          scrollState.bottomColorR = cBottom.r
+          scrollState.bottomColorG = cBottom.g
+          scrollState.bottomColorB = cBottom.b
+        }
+      }
+    })
+
     let lastTime = performance.now()
     const targetFPS = effectiveQuality === 'low' ? 30 : 60
     const frameTime = 1000 / targetFPS
@@ -249,6 +336,18 @@ const LightPillar = ({
         materialRef.current.uniforms.uTime.value = t
         materialRef.current.uniforms.uRotCos.value = Math.cos(t * 0.3)
         materialRef.current.uniforms.uRotSin.value = Math.sin(t * 0.3)
+
+        // Apply scroll-driven state to uniforms
+        const pillarRotRad = (scrollState.pillarRotation * Math.PI) / 180
+        materialRef.current.uniforms.uPillarRotCos.value = Math.cos(pillarRotRad)
+        materialRef.current.uniforms.uPillarRotSin.value = Math.sin(pillarRotRad)
+        materialRef.current.uniforms.uPillarWidth.value = scrollState.pillarWidth
+        materialRef.current.uniforms.uPillarHeight.value = scrollState.pillarHeight
+        materialRef.current.uniforms.uIntensity.value = scrollState.intensity
+        materialRef.current.uniforms.uTopColor.value.set(scrollState.topColorR, scrollState.topColorG, scrollState.topColorB)
+        materialRef.current.uniforms.uBottomColor.value.set(scrollState.bottomColorR, scrollState.bottomColorG, scrollState.bottomColorB)
+        materialRef.current.uniforms.uCameraZ.value = scrollState.cameraZ
+
         rendererRef.current.render(sceneRef.current, cameraRef.current)
         lastTime = currentTime - (deltaTime % frameTime)
       }
@@ -274,6 +373,7 @@ const LightPillar = ({
       window.removeEventListener('resize', handleResize)
       if (interactive) container.removeEventListener('mousemove', handleMouseMove)
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      if (scrollTriggerInstance) scrollTriggerInstance.kill()
       if (rendererRef.current) {
         rendererRef.current.dispose()
         rendererRef.current.forceContextLoss()
