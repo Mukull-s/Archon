@@ -12,6 +12,7 @@ interface NavLink {
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   const location = useLocation()
   const navigate = useNavigate()
   const menuRef = useRef<HTMLDivElement>(null)
@@ -20,8 +21,13 @@ export default function Navbar() {
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 40)
+    const handleResize = () => setIsMobile(window.innerWidth < 768)
     window.addEventListener('scroll', handleScroll)
-    return () => window.removeEventListener('scroll', handleScroll)
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('resize', handleResize)
+    }
   }, [])
 
   useEffect(() => {
@@ -60,55 +66,49 @@ export default function Navbar() {
         maxWidth: '1120px', margin: '0 auto', padding: '0 24px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
-        {/* Logo */}
+        {/* Logo Monogram */}
         <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}>
-          <div style={{
-            width: '28px', height: '28px', borderRadius: '8px',
-            background: 'var(--grad-primary)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </div>
+          <img src="/Archonlogo.png" alt="Archon Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
           <span style={{ fontWeight: 700, fontSize: '16px', color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
             Archon
           </span>
         </Link>
 
         {/* Center nav */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '2px', padding: '4px',
-          background: scrolled ? 'rgba(255,255,255,0.03)' : 'transparent',
-          border: scrolled ? '1px solid var(--border)' : '1px solid transparent',
-          borderRadius: '100px', transition: 'all 0.3s',
-        }}>
-          {navLinks.map((link) => (
-            link.type === 'route' ? (
-              <Link key={link.label} to={link.href} style={{
-                background: 'transparent', border: 'none',
-                color: location.pathname === link.href ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontSize: '13px', fontWeight: 500, fontFamily: 'var(--font-sans)',
-                cursor: 'pointer', padding: '6px 14px', borderRadius: '100px',
-                transition: 'color 0.2s', letterSpacing: '-0.01em', textDecoration: 'none',
-              }}>
-                {link.label}
-              </Link>
-            ) : (
-              <button key={link.label} onClick={() => scrollToAnchor(link.href)} style={{
-                background: 'transparent', border: 'none',
-                color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 500,
-                fontFamily: 'var(--font-sans)', cursor: 'pointer', padding: '6px 14px',
-                borderRadius: '100px', transition: 'color 0.2s', letterSpacing: '-0.01em',
-              }}
-                onMouseEnter={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-primary)'}
-                onMouseLeave={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-secondary)'}
-              >
-                {link.label}
-              </button>
-            )
-          ))}
-        </div>
+        {!isMobile && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '2px', padding: '4px',
+            background: scrolled ? 'rgba(255,255,255,0.03)' : 'transparent',
+            border: scrolled ? '1px solid var(--border)' : '1px solid transparent',
+            borderRadius: '100px', transition: 'all 0.3s',
+          }}>
+            {navLinks.map((link) => (
+              link.type === 'route' ? (
+                <Link key={link.label} to={link.href} style={{
+                  background: 'transparent', border: 'none',
+                  color: location.pathname === link.href ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  fontSize: '13px', fontWeight: 500, fontFamily: 'var(--font-sans)',
+                  cursor: 'pointer', padding: '6px 14px', borderRadius: '100px',
+                  transition: 'color 0.2s', letterSpacing: '-0.01em', textDecoration: 'none',
+                }}>
+                  {link.label}
+                </Link>
+              ) : (
+                <button key={link.label} onClick={() => scrollToAnchor(link.href)} style={{
+                  background: 'transparent', border: 'none',
+                  color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 500,
+                  fontFamily: 'var(--font-sans)', cursor: 'pointer', padding: '6px 14px',
+                  borderRadius: '100px', transition: 'color 0.2s', letterSpacing: '-0.01em',
+                }}
+                  onMouseEnter={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-primary)'}
+                  onMouseLeave={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-secondary)'}
+                >
+                  {link.label}
+                </button>
+              )
+            ))}
+          </div>
+        )}
 
         {/* Right actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -177,6 +177,24 @@ export default function Navbar() {
                       </div>
                     </div>
 
+                    <Link to="/profile" onClick={() => setMenuOpen(false)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '8px 12px', borderRadius: '8px',
+                        color: 'var(--text-secondary)', fontSize: '13px',
+                        textDecoration: 'none', transition: 'background 0.15s',
+                        marginBottom: '4px',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                      </svg>
+                      My Profile
+                    </Link>
+
                     {user.githubLogin && (
                       <a href={`https://github.com/${user.githubLogin}`} target="_blank" rel="noopener noreferrer"
                         style={{
@@ -184,6 +202,7 @@ export default function Navbar() {
                           padding: '8px 12px', borderRadius: '8px',
                           color: 'var(--text-secondary)', fontSize: '13px',
                           textDecoration: 'none', transition: 'background 0.15s',
+                          marginBottom: '4px',
                         }}
                         onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
                         onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
@@ -197,13 +216,14 @@ export default function Navbar() {
                     )}
 
                     <button
-                      onClick={() => { logout(); setMenuOpen(false) }}
+                      onClick={() => { logout(); setMenuOpen(false); }}
                       style={{
                         display: 'flex', alignItems: 'center', gap: '8px',
                         width: '100%', padding: '8px 12px', borderRadius: '8px',
                         background: 'transparent', border: 'none', color: '#ef4444',
                         fontSize: '13px', cursor: 'pointer', textAlign: 'left',
                         fontFamily: 'var(--font-sans)', transition: 'background 0.15s',
+                        borderTop: '1px solid rgba(255,255,255,0.05)', marginTop: '4px',
                       }}
                       onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239,68,68,0.08)'}
                       onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}

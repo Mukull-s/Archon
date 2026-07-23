@@ -1,4 +1,5 @@
 import React from 'react'
+import { Link } from 'react-router-dom'
 
 interface FooterGroupProps {
   title: string
@@ -28,18 +29,10 @@ export default function Footer() {
           marginBottom: '40px', flexWrap: 'wrap', gap: '32px',
         }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-              <div style={{
-                width: '24px', height: '24px', borderRadius: '6px',
-                background: 'var(--grad-primary)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </div>
+            <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', textDecoration: 'none' }}>
+              <img src="/Archonlogo.png" alt="Archon Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
               <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>Archon</span>
-            </div>
+            </Link>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', maxWidth: '220px', lineHeight: 1.6 }}>
               AI-powered codebase intelligence.
             </p>
