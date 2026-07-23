@@ -142,7 +142,7 @@ export default function FeaturesSection() {
           </p>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', perspective: '1200px' }}>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3" style={{ gap: '16px', perspective: '1200px' }}>
           {FEATURES.map((f, i) => (
             <div key={f.title} ref={el => { cardsRef.current[i] = el }}>
               <TiltCard highlighted={f.highlighted}

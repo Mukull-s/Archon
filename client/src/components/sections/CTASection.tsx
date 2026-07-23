@@ -28,7 +28,7 @@ export default function CTASection() {
   }, [])
 
   return (
-    <section ref={sectionRef} style={{ padding: '120px 24px', position: 'relative', overflow: 'hidden' }}>
+    <section ref={sectionRef} className="section" style={{ position: 'relative', overflow: 'hidden', padding: 'var(--section-pad) 24px' }}>
       <div ref={glowRef} style={{
         position: 'absolute', inset: 0,
         background: 'radial-gradient(ellipse at 50% 100%, rgba(176,38,255,0.12) 0%, transparent 60%)',
@@ -64,7 +64,7 @@ export default function CTASection() {
               value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)}
               onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} />
             <button className="btn-primary"
-              style={{ borderRadius: '10px', padding: '8px 18px', fontSize: '13px' }}>
+              style={{ borderRadius: 'var(--radius-md)', padding: '8px 18px', fontSize: '13px' }}>
               Analyze →
             </button>
           </div>

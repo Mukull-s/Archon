@@ -133,7 +133,7 @@ export default function ScrollStorySection() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.15fr', gap: '56px', alignItems: 'start' }}>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-14" style={{ alignItems: 'start' }}>
             <div style={{ position: 'relative', paddingLeft: '20px' }}>
               {STEPS.map((step, i) => (
                 <div key={step.num} ref={el => { stepsRef.current[i] = el }}
