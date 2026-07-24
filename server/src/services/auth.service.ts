@@ -183,11 +183,8 @@ export class AuthService {
   // ─────────────────────────────────────────────
 
   getGoogleAuthUrl(csrfToken?: string): string {
-    if (!env.GOOGLE_CLIENT_ID) {
-      // Return a local mock URL that will trigger Google Mock Sign-In Chooser UI
-      const mockParams = new URLSearchParams();
-      if (csrfToken) mockParams.set('state', `google:${csrfToken}`);
-      return `${env.CLIENT_URL}/auth/google-mock${mockParams.toString() ? '?' + mockParams.toString() : ''}`;
+    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+      throw new AppError('Google OAuth is not configured on this server.', 501);
     }
     const params = new URLSearchParams({
       client_id: env.GOOGLE_CLIENT_ID,
@@ -202,50 +199,8 @@ export class AuthService {
   }
 
   async handleGoogleCallback(code: string, mode: string = 'login', email?: string, name?: string): Promise<{ user: AuthUser; token: string }> {
-    // If it is mock or if Google is not configured, run simulated fallback
-    if (code === 'mock_google_code' || !env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
-      const profile = {
-        email: email || 'google.mock.user@example.com',
-        name: name || 'Mock Google User',
-        picture: 'https://lh3.googleusercontent.com/a/default-user=s96-c',
-        sub: 'mock_google_sub_id_12345',
-      };
-
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!profile.email || !emailRegex.test(profile.email)) {
-        throw new AppError('The email associated with this Google account is invalid or missing', 400);
-      }
-
-      let user = await prisma.user.findUnique({ where: { email: profile.email } });
-
-      if (user) {
-        user = await prisma.user.update({
-          where: { id: user.id },
-          data: {
-            avatarUrl: user.avatarUrl || profile.picture,
-            name: user.name || profile.name,
-            emailVerified: true,
-            ...(user.provider === 'email' ? {} : { provider: 'google', providerId: profile.sub }),
-          },
-        });
-      } else {
-        if (mode === 'login') {
-          throw new AppError('No account registered with this email. Please sign up first.', 404);
-        }
-        user = await prisma.user.create({
-          data: {
-            email: profile.email,
-            name: profile.name,
-            avatarUrl: profile.picture,
-            provider: 'google',
-            providerId: profile.sub,
-            emailVerified: true,
-          },
-        });
-      }
-
-      const token = this.generateJWT(user.id, user.email, 'google');
-      return { user: this.toAuthUser(user), token };
+    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+      throw new AppError('Google OAuth is not configured on this server.', 501);
     }
 
     const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
