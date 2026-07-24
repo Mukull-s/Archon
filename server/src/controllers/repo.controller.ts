@@ -396,76 +396,68 @@ export async function performVectorIndexing(id: string, force = false): Promise<
 
   console.log(`Building index for repository: ${repo.name} (${scannedFiles.length} files)...`);
 
-  // Gather all chunks from all files first
-  const allChunks: Array<{
-    filePath: string;
-    chunkIndex: number;
-    content: string;
-    startLine: number;
-    endLine: number;
-    symbolName: string | null;
-  }> = [];
+  // Release the repo reference to let GC reclaim memory
+  (repo as any) = null;
 
-  for (const file of scannedFiles) {
+  let totalChunksProcessed = 0;
+
+  // Process files one-by-one to keep memory usage flat
+  for (let fileIdx = 0; fileIdx < scannedFiles.length; fileIdx++) {
+    const file = scannedFiles[fileIdx];
     const fileContent = file.content || '';
+    if (!fileContent.trim()) continue;
+
+    console.log(`[Indexing ${fileIdx + 1}/${scannedFiles.length}] file: ${file.path}...`);
+
+    // Parse symbols for this file only
     const symbols = astService.getCodeSymbols(file.path, fileContent);
     const chunks = ingestionService.chunkCodeFile(file.path, fileContent, symbols);
-    for (let i = 0; i < chunks.length; i++) {
-      allChunks.push({
-        filePath: file.path,
-        chunkIndex: i,
-        content: chunks[i].content,
-        startLine: chunks[i].startLine,
-        endLine: chunks[i].endLine,
-        symbolName: chunks[i].symbolName
-      });
-    }
-  }
+    
+    if (chunks.length === 0) continue;
 
-  console.log(`Generated ${allChunks.length} chunks. Generating embeddings sequentially in small batches to conserve memory...`);
+    // Process chunks of this file sequentially in batches of 4
+    const batchSize = 4;
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const batchTexts = batch.map(c => c.content);
+      const embeddings = await vectorService.getEmbeddingsBatch(batchTexts);
 
-  const batchSize = 4;
-  const batches: Array<typeof allChunks> = [];
-  for (let i = 0; i < allChunks.length; i += batchSize) {
-    batches.push(allChunks.slice(i, i + batchSize));
-  }
+      const valuesSql: string[] = [];
+      const params: any[] = [];
 
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    const batchTexts = batch.map(c => c.content);
-    const embeddings = await vectorService.getEmbeddingsBatch(batchTexts);
+      for (let j = 0; j < batch.length; j++) {
+        const chunk = batch[j];
+        const embedding = embeddings[j];
+        const vectorStr = `[${embedding.join(',')}]`;
+        const chunkId = crypto.randomUUID();
 
-    const valuesSql: string[] = [];
-    const params: any[] = [];
+        const baseIdx = j * 9;
+        valuesSql.push(`($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5}, $${baseIdx + 6}, $${baseIdx + 7}, $${baseIdx + 8}, $${baseIdx + 9}::vector)`);
 
-    for (let j = 0; j < batch.length; j++) {
-      const chunk = batch[j];
-      const embedding = embeddings[j];
-      const vectorStr = `[${embedding.join(',')}]`;
-      const chunkId = crypto.randomUUID();
+        params.push(
+          chunkId,
+          id,
+          file.path,
+          totalChunksProcessed + j, // overall chunkIndex
+          chunk.content,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.symbolName,
+          vectorStr
+        );
+      }
 
-      const baseIdx = j * 9;
-      valuesSql.push(`($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5}, $${baseIdx + 6}, $${baseIdx + 7}, $${baseIdx + 8}, $${baseIdx + 9}::vector)`);
+      const query = `INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding) VALUES ${valuesSql.join(', ')}`;
+      await prisma.$executeRawUnsafe(query, ...params);
 
-      params.push(
-        chunkId,
-        id,
-        chunk.filePath,
-        chunk.chunkIndex,
-        chunk.content,
-        chunk.startLine,
-        chunk.endLine,
-        chunk.symbolName,
-        vectorStr
-      );
+      totalChunksProcessed += batch.length;
     }
 
-    const query = `INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding) VALUES ${valuesSql.join(', ')}`;
-    await prisma.$executeRawUnsafe(query, ...params);
-
-    // Yield control and delay slightly to allow garbage collection to run
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // Yield control to let GC clear memory for this file
+    await new Promise(resolve => setTimeout(resolve, 30));
   }
+
+  console.log(`Successfully indexed repository ${id} with ${totalChunksProcessed} chunks.`);
 }
 
 /**

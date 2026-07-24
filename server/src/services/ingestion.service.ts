@@ -256,7 +256,7 @@ class IngestionService {
       await deleteFolderWithRetry(extractPath);
       
       // Delete downloaded ZIP if it was a temporary downloaded file
-      if (zipFilePath.includes('temp/downloads') && fs.existsSync(zipFilePath)) {
+      if (zipFilePath.includes('archon-downloads') && fs.existsSync(zipFilePath)) {
         try {
           fs.unlinkSync(zipFilePath);
           console.log(`Cleaned up temp downloaded zip: ${zipFilePath}`);
