@@ -368,7 +368,7 @@ Explain WHY modifying this file propagates to these dependencies. Keep it short,
  * Automatically checks if repository is already indexed to return instantly unless force is true.
  */
 export async function performVectorIndexing(id: string, force = false): Promise<void> {
-  const repo = await prisma.repository.findFirst({
+  let repo = await prisma.repository.findFirst({
     where: { id },
     select: { id: true, name: true, scannedFiles: true }
   });

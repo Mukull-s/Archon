@@ -16,6 +16,9 @@ import apiRoutes from './routes';
 export function createApp(): express.Application {
   const app = express();
 
+  // Trust proxy for rate limiting behind Render/Heroku load balancers
+  app.set('trust proxy', 1);
+
   // ──────────────────────────────────────────────
   // 1. Security Middleware
   // ──────────────────────────────────────────────
