@@ -422,51 +422,49 @@ export async function performVectorIndexing(id: string, force = false): Promise<
     }
   }
 
-  console.log(`Generated ${allChunks.length} chunks. Generating embeddings in concurrent batches...`);
+  console.log(`Generated ${allChunks.length} chunks. Generating embeddings sequentially in small batches to conserve memory...`);
 
-  const batchSize = 16;
-  const concurrency = 4;
+  const batchSize = 4;
   const batches: Array<typeof allChunks> = [];
   for (let i = 0; i < allChunks.length; i += batchSize) {
     batches.push(allChunks.slice(i, i + batchSize));
   }
 
-  for (let i = 0; i < batches.length; i += concurrency) {
-    const batchGroup = batches.slice(i, i + concurrency);
-    await Promise.all(batchGroup.map(async (batch) => {
-      const batchTexts = batch.map(c => c.content);
-      const embeddings = await vectorService.getEmbeddingsBatch(batchTexts);
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const batchTexts = batch.map(c => c.content);
+    const embeddings = await vectorService.getEmbeddingsBatch(batchTexts);
 
-      const valuesSql: string[] = [];
-      const params: any[] = [];
+    const valuesSql: string[] = [];
+    const params: any[] = [];
 
-      for (let j = 0; j < batch.length; j++) {
-        const chunk = batch[j];
-        const embedding = embeddings[j];
-        const vectorStr = `[${embedding.join(',')}]`;
-        const chunkId = crypto.randomUUID();
+    for (let j = 0; j < batch.length; j++) {
+      const chunk = batch[j];
+      const embedding = embeddings[j];
+      const vectorStr = `[${embedding.join(',')}]`;
+      const chunkId = crypto.randomUUID();
 
-        const baseIdx = j * 9;
-        valuesSql.push(`($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5}, $${baseIdx + 6}, $${baseIdx + 7}, $${baseIdx + 8}, $${baseIdx + 9}::vector)`);
+      const baseIdx = j * 9;
+      valuesSql.push(`($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5}, $${baseIdx + 6}, $${baseIdx + 7}, $${baseIdx + 8}, $${baseIdx + 9}::vector)`);
 
-        params.push(
-          chunkId,
-          id,
-          chunk.filePath,
-          chunk.chunkIndex,
-          chunk.content,
-          chunk.startLine,
-          chunk.endLine,
-          chunk.symbolName,
-          vectorStr
-        );
-      }
+      params.push(
+        chunkId,
+        id,
+        chunk.filePath,
+        chunk.chunkIndex,
+        chunk.content,
+        chunk.startLine,
+        chunk.endLine,
+        chunk.symbolName,
+        vectorStr
+      );
+    }
 
-      const query = `INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding) VALUES ${valuesSql.join(', ')}`;
-      await prisma.$executeRawUnsafe(query, ...params);
-    }));
+    const query = `INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding) VALUES ${valuesSql.join(', ')}`;
+    await prisma.$executeRawUnsafe(query, ...params);
 
-    await new Promise(resolve => setTimeout(resolve, 30));
+    // Yield control and delay slightly to allow garbage collection to run
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
 }
 
