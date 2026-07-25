@@ -45,8 +45,8 @@ export default function CinematicCursor() {
     // Lerp loop for the ring
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t
     const animate = () => {
-      ring.current.x = lerp(ring.current.x, mouse.current.x, 0.12)
-      ring.current.y = lerp(ring.current.y, mouse.current.y, 0.12)
+      ring.current.x = lerp(ring.current.x, mouse.current.x, 0.20)
+      ring.current.y = lerp(ring.current.y, mouse.current.y, 0.20)
       ringEl.style.transform = `translate(${ring.current.x - 16}px, ${ring.current.y - 16}px)`
       raf.current = requestAnimationFrame(animate)
     }
@@ -54,34 +54,34 @@ export default function CinematicCursor() {
     window.addEventListener('mousemove', onMove)
     raf.current = requestAnimationFrame(animate)
 
-    // Add hover detection for interactive elements
-    const interactives = document.querySelectorAll('a, button, input, [data-cursor]')
-    interactives.forEach((el) => {
-      el.addEventListener('mouseenter', onEnterInteractive)
-      el.addEventListener('mouseleave', onLeaveInteractive)
-    })
+    // Optimized Event Delegation for interactive elements
+    const onMouseOver = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target) return
+      const interactive = target.closest('a, button, input, select, textarea, [data-cursor], [role="button"]')
+      if (interactive) {
+        onEnterInteractive()
+      }
+    }
 
-    // Re-detect interactive elements periodically (for dynamic content)
-    const observer = new MutationObserver(() => {
-      const els = document.querySelectorAll('a, button, input, [data-cursor]')
-      els.forEach((el) => {
-        el.removeEventListener('mouseenter', onEnterInteractive)
-        el.removeEventListener('mouseleave', onLeaveInteractive)
-        el.addEventListener('mouseenter', onEnterInteractive)
-        el.addEventListener('mouseleave', onLeaveInteractive)
-      })
-    })
-    observer.observe(document.body, { childList: true, subtree: true })
+    const onMouseOut = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target) return
+      const interactive = target.closest('a, button, input, select, textarea, [data-cursor], [role="button"]')
+      if (interactive) {
+        onLeaveInteractive()
+      }
+    }
+
+    window.addEventListener('mouseover', onMouseOver)
+    window.addEventListener('mouseout', onMouseOut)
 
     return () => {
       document.body.classList.remove('custom-cursor-active')
       window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseover', onMouseOver)
+      window.removeEventListener('mouseout', onMouseOut)
       if (raf.current) cancelAnimationFrame(raf.current)
-      observer.disconnect()
-      interactives.forEach((el) => {
-        el.removeEventListener('mouseenter', onEnterInteractive)
-        el.removeEventListener('mouseleave', onLeaveInteractive)
-      })
     }
   }, [])
 
@@ -101,7 +101,6 @@ export default function CinematicCursor() {
           background: '#D98CFF',
           pointerEvents: 'none',
           zIndex: 99999,
-          transition: 'transform 0.05s ease',
           mixBlendMode: 'difference',
         }}
       />
