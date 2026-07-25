@@ -28,9 +28,27 @@ export function createApp(): express.Application {
   }));
 
   app.use(cors({
-    origin: env.NODE_ENV === 'development'
-      ? [env.CLIENT_URL, 'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175']
-      : env.CLIENT_URL,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      
+      const allowedOrigins = [
+        'http://localhost:5173',
+        'http://localhost:5174',
+        'http://localhost:5175',
+        'https://archondev.vercel.app',
+        'https://www.archondev.vercel.app',
+        env.CLIENT_URL
+      ];
+
+      const normalizedOrigins = allowedOrigins.map(o => o.replace(/\/$/, ''));
+      const normalizedOrigin = origin.replace(/\/$/, '');
+
+      if (normalizedOrigins.includes(normalizedOrigin) || normalizedOrigin.endsWith('.vercel.app')) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
     credentials: true,                 // Allow cookies for JWT
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],
