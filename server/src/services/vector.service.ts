@@ -48,6 +48,36 @@ class VectorService {
     );
     return results;
   }
+
+  async bulkInsertChunks(repositoryId: string, chunks: any[], startIndex: number): Promise<void> {
+    if (chunks.length === 0) return;
+    const valuesSql: string[] = [];
+    const params: any[] = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      const vectorStr = `[${c.embedding.join(',')}]`;
+      const chunkId = require('crypto').randomUUID();
+      const baseIdx = i * 9;
+
+      valuesSql.push(`($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5}, $${baseIdx + 6}, $${baseIdx + 7}, $${baseIdx + 8}, $${baseIdx + 9}::vector)`);
+
+      params.push(
+        chunkId,
+        repositoryId,
+        c.filePath,
+        startIndex + i,
+        c.content,
+        c.startLine,
+        c.endLine,
+        c.symbolName,
+        vectorStr
+      );
+    }
+
+    const query = `INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding) VALUES ${valuesSql.join(', ')}`;
+    await prisma.$executeRawUnsafe(query, ...params);
+  }
 }
 
 export const vectorService = new VectorService();

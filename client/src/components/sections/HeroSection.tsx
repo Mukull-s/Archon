@@ -50,6 +50,7 @@ export default function HeroSection() {
   const [focused, setFocused] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [overallProgress, setOverallProgress] = useState(0)
+  const [targetProgress, setTargetProgress] = useState(0)
   const [messageIndex, setMessageIndex] = useState(0)
   const [scannedInfo, setScannedInfo] = useState<{
     name: string;
@@ -116,6 +117,7 @@ export default function HeroSection() {
   useEffect(() => {
     if (!isAnalyzing) {
       setOverallProgress(0)
+      setTargetProgress(0)
       backendFinishedRef.current = false
       backendDataRef.current = null
       return
@@ -125,60 +127,96 @@ export default function HeroSection() {
       setMessageIndex(prev => (prev + 1) % INTELLIGENCE_MESSAGES.length)
     }, 2800)
 
-    let currentProgress = 0
-    let isFastForwarding = false
-
+    // Smoothly increment overallProgress toward targetProgress
     progressIntervalRef.current = setInterval(() => {
-      if (backendFinishedRef.current) {
-        isFastForwarding = true
-      }
-
-      if (isFastForwarding) {
-        currentProgress += 3.5 // Race smoothly to 100%
-        if (currentProgress >= 100) {
-          currentProgress = 100
-          clearInterval(progressIntervalRef.current)
-          
-          if (backendDataRef.current) {
-            const repo = backendDataRef.current;
-            setScannedInfo(prev => ({
-              ...prev,
-              name: repo.name,
-              owner: repo.owner || prev?.owner,
-              fileCount: repo.fileCount,
-              languages: typeof repo.languages === 'string' ? JSON.parse(repo.languages) : repo.languages,
-              size: repo.totalSize,
-              framework: repo.framework
-            }));
+      setOverallProgress(prev => {
+        if (backendFinishedRef.current) {
+          // If indexing is finished, slide quickly to 100%
+          if (prev >= 100) {
+            clearInterval(progressIntervalRef.current)
+            return 100
           }
-        }
-      } else {
-        // Normal continuous progress pacing
-        if (currentProgress < 20) {
-          currentProgress += 0.35 // Stage 0
-        } else if (currentProgress < 40) {
-          currentProgress += 0.42 // Stage 1
-        } else if (currentProgress < 65) {
-          currentProgress += 0.28 // Stage 2
-        } else if (currentProgress < 85) {
-          currentProgress += 0.3 // Stage 3
-        } else if (currentProgress < 98) {
-          if (currentProgress < 95) {
-            currentProgress += 0.05 // Stage 4 initial
-          } else {
-            currentProgress += 0.004 // Crawl infinitely to keep visually active
+          return Math.min(prev + 3.5, 100)
+        } else {
+          // Smooth slide toward the target progress
+          if (prev < targetProgress) {
+            return Math.min(prev + 0.8, targetProgress)
           }
+          // If we reached the target, crawl extremely slowly to show activity
+          if (prev < 98) {
+            return prev + 0.02
+          }
+          return prev
         }
-      }
-
-      setOverallProgress(Math.min(currentProgress, 100))
+      })
     }, 50)
 
     return () => {
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
       if (messageIntervalRef.current) clearInterval(messageIntervalRef.current)
     }
-  }, [isAnalyzing])
+  }, [isAnalyzing, targetProgress])
+
+  // Polling logic when analyzing
+  useEffect(() => {
+    if (!isAnalyzing || !backendDataRef.current?.id || backendFinishedRef.current) return
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const repoId = backendDataRef.current.id
+        const { data } = await api.get(`/repos/${repoId}`)
+        const repo = data.data
+
+        if (repo.indexingStatus === 'completed') {
+          backendFinishedRef.current = true
+          backendDataRef.current = repo
+          setTargetProgress(100)
+          
+          setScannedInfo(prev => ({
+            ...prev,
+            name: repo.name,
+            owner: repo.owner || prev?.owner,
+            fileCount: repo.fileCount,
+            languages: typeof repo.languages === 'string' ? JSON.parse(repo.languages) : repo.languages,
+            size: repo.totalSize,
+            framework: repo.framework
+          }));
+          
+          clearInterval(pollInterval)
+        } else if (repo.indexingStatus === 'failed') {
+          clearInterval(pollInterval)
+          setIsAnalyzing(false)
+          toast.error(repo.indexingProgress || 'Indexing failed.')
+        } else {
+          // Map backend indexing progress to frontend progress bar
+          const progressText = repo.indexingProgress || ''
+          let mapped = 5
+
+          if (progressText === 'Downloading') {
+            mapped = 10
+          } else if (progressText === 'Parsing') {
+            mapped = 30
+          } else if (progressText === 'Chunking') {
+            mapped = 50
+          } else if (progressText.startsWith('Embedding')) {
+            const match = progressText.match(/Embedding (\d+)%/)
+            const percent = match ? parseInt(match[1]) : 0
+            mapped = 70 + Math.round(percent * 0.25)
+          } else if (progressText === 'Saving') {
+            mapped = 96
+          } else if (progressText === 'Completed') {
+            mapped = 100
+          }
+
+          setTargetProgress(mapped)
+        }
+      } catch (err) {
+        console.error('Error polling repo status:', err)
+      }
+    }, 2000)
+
+    return () => clearInterval(pollInterval)
+  }, [isAnalyzing, targetProgress])
 
   // Redirection when finished
   useEffect(() => {
@@ -217,11 +255,12 @@ export default function HeroSection() {
 
     setIsAnalyzing(true)
     setOverallProgress(0)
+    setTargetProgress(5)
 
     try {
       const { data } = await api.post('/repos/scan-url', { url: repoUrl }, { timeout: 300000 })
       backendDataRef.current = data.data
-      backendFinishedRef.current = true
+      setTargetProgress(10)
     } catch (err: any) {
       setIsAnalyzing(false)
       toast.error(err.response?.data?.error?.message || 'Failed to scan repository.')

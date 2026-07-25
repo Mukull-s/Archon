@@ -1,8 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import { prisma } from '../config';
-import { ingestionService } from '../services/ingestion.service';
+import { prisma, EMBEDDING_BATCH_SIZE, DB_BATCH_SIZE, MAX_FILES_LIMIT, MAX_TOTAL_SIZE_LIMIT, MAX_SINGLE_FILE_SIZE_LIMIT, MAX_CHUNKS_LIMIT } from '../config';
+import { ingestionService, deleteFolderWithRetry } from '../services/ingestion.service';
 import { AppError } from '../utils';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import AdmZip from 'adm-zip';
 import { vectorService } from '../services/vector.service';
 import { llmService } from '../services/llm.service';
 import * as astService from '../services/ast.service';
@@ -14,6 +17,7 @@ import { insightService } from '../services/insight.service';
 import { plannerService } from '../services/planner.service';
 import { storyService } from '../services/story.service';
 import { onboardingService } from '../services/onboarding.service';
+import { identityService } from '../services/identity.service';
 
 /**
  * Parses a GitHub repository URL to extract owner and repository name.
@@ -96,27 +100,58 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
     }
     const { owner, repo } = parseGithubUrl(url);
 
-    // Retrieve user's stored githubToken to bypass API rate limits
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    const token = user?.githubToken || undefined;
+    // Check if repository already exists for this user to avoid duplicates
+    let repository = await prisma.repository.findFirst({
+      where: { userId, owner, name: repo }
+    });
 
-    // Download zipball
-    const zipPath = await ingestionService.downloadGithubRepo(owner, repo, token);
-
-    // Process and index
-    const result = await ingestionService.processAndScanZip(zipPath, userId, repo, owner);
-
-    // Trigger vector indexing synchronously during analysis
-    if (result.repository?.id) {
-      await performVectorIndexing(result.repository.id);
+    if (repository) {
+      // Set status to indexing, progress to Downloading
+      repository = await prisma.repository.update({
+        where: { id: repository.id },
+        data: {
+          indexingStatus: 'indexing',
+          indexingProgress: 'Downloading',
+          // Reset other fields for fresh scan
+          framework: null,
+          languages: [],
+          entryPoints: [],
+          importantFiles: [],
+          fileCount: 0,
+          totalSize: 0,
+          confidence: 0
+        }
+      });
+    } else {
+      // Create new repository
+      repository = await prisma.repository.create({
+        data: {
+          userId,
+          owner,
+          name: repo,
+          isLocal: false,
+          framework: null,
+          languages: [],
+          entryPoints: [],
+          importantFiles: [],
+          fileCount: 0,
+          totalSize: 0,
+          confidence: 0,
+          indexingStatus: 'indexing',
+          indexingProgress: 'Downloading'
+        }
+      });
     }
+
+    // Trigger background vector indexing asynchronously
+    performVectorIndexing(repository.id, false).catch(err => {
+      console.error(`[Background Indexing] Failed for repo ${repository!.id}:`, err);
+    });
 
     res.status(201).json({
       success: true,
-      message: 'Repository scanned and cached successfully.',
-      data: result.repository,
-      warnings: result.warnings,
-      checklist: result.checklist
+      message: 'Repository registration successful. Indexing started in background.',
+      data: repository
     });
   } catch (error) {
     next(error);
@@ -140,20 +175,55 @@ export async function scanLocalZip(req: Request, res: Response, next: NextFuncti
     const repoName = path.parse(file.originalname).name;
     const zipPath = file.path;
 
-    // Process and index
-    const result = await ingestionService.processAndScanZip(zipPath, userId, repoName);
+    // Check if repository already exists for this user
+    let repository = await prisma.repository.findFirst({
+      where: { userId, name: repoName, isLocal: true }
+    });
 
-    // Trigger vector indexing synchronously during analysis
-    if (result.repository?.id) {
-      await performVectorIndexing(result.repository.id);
+    if (repository) {
+      repository = await prisma.repository.update({
+        where: { id: repository.id },
+        data: {
+          indexingStatus: 'indexing',
+          indexingProgress: 'Parsing',
+          framework: null,
+          languages: [],
+          entryPoints: [],
+          importantFiles: [],
+          fileCount: 0,
+          totalSize: 0,
+          confidence: 0
+        }
+      });
+    } else {
+      repository = await prisma.repository.create({
+        data: {
+          userId,
+          owner: null,
+          name: repoName,
+          isLocal: true,
+          framework: null,
+          languages: [],
+          entryPoints: [],
+          importantFiles: [],
+          fileCount: 0,
+          totalSize: 0,
+          confidence: 0,
+          indexingStatus: 'indexing',
+          indexingProgress: 'Parsing'
+        }
+      });
     }
+
+    // Trigger background vector indexing passing the local zip path
+    performVectorIndexing(repository.id, false, { zipPath }).catch(err => {
+      console.error(`[Background Indexing] Failed for local repo ${repository!.id}:`, err);
+    });
 
     res.status(201).json({
       success: true,
-      message: 'ZIP uploaded, scanned and cached successfully.',
-      data: result.repository,
-      warnings: result.warnings,
-      checklist: result.checklist
+      message: 'ZIP upload successful. Indexing started in background.',
+      data: repository
     });
   } catch (error) {
     next(error);
@@ -367,97 +437,414 @@ Explain WHY modifying this file propagates to these dependencies. Keep it short,
  * Standalone asynchronous vector indexing runner.
  * Automatically checks if repository is already indexed to return instantly unless force is true.
  */
-export async function performVectorIndexing(id: string, force = false): Promise<void> {
-  let repo = await prisma.repository.findFirst({
-    where: { id },
-    select: { id: true, name: true, scannedFiles: true }
-  });
-  if (!repo) {
-    throw new AppError('Repository not found.', 404);
-  }
+export async function performVectorIndexing(id: string, force = false, options?: { zipPath?: string }): Promise<void> {
+  const startTime = Date.now();
+  let downloadTime = 0;
+  let parseTime = 0;
+  let chunkTime = 0;
+  let embedTime = 0;
+  let dbWriteTime = 0;
 
-  // If already indexed and not forcing re-index, skip
-  if (!force) {
-    const chunkCount = await prisma.codeChunk.count({
+  const tempDirsToCleanup: string[] = [];
+
+  // Yield immediately to let the event loop process the HTTP response
+  await new Promise(resolve => setImmediate(resolve));
+
+  try {
+    const repoRow = await prisma.repository.findUnique({
+      where: { id },
+      include: { user: true }
+    });
+
+    if (!repoRow) {
+      throw new AppError('Repository not found.', 404);
+    }
+
+    // Set indexing status to indexing and starting progress
+    await prisma.repository.update({
+      where: { id },
+      data: {
+        indexingStatus: 'indexing',
+        indexingProgress: repoRow.isLocal ? 'Parsing' : 'Downloading'
+      }
+    });
+
+    let zipPath = options?.zipPath;
+
+    // 1. Download zipball if not a local ZIP upload
+    if (!repoRow.isLocal && !zipPath) {
+      const downloadStart = Date.now();
+      const token = repoRow.user?.githubToken || undefined;
+      zipPath = await ingestionService.downloadGithubRepo(repoRow.owner!, repoRow.name, token);
+      downloadTime = Date.now() - downloadStart;
+      console.log(`[Indexing] Downloaded repo: ${(downloadTime / 1000).toFixed(2)}s`);
+      tempDirsToCleanup.push(zipPath);
+    }
+
+    // Yield control to event loop
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Update status to Parsing
+    await prisma.repository.update({
+      where: { id },
+      data: { indexingProgress: 'Parsing' }
+    });
+
+    // 2. Extract and Scan Zip
+    const parseStart = Date.now();
+    const extractId = crypto.randomUUID();
+    const extractPath = path.join(os.tmpdir(), 'archon-extracted', extractId);
+    tempDirsToCleanup.push(extractPath);
+
+    if (!fs.existsSync(extractPath)) {
+      fs.mkdirSync(extractPath, { recursive: true });
+    }
+
+    console.log(`[Indexing] Extracting ZIP: ${zipPath} to ${extractPath}...`);
+    const zip = new AdmZip(zipPath!);
+    zip.extractAllTo(extractPath, true);
+
+    const extractedEntries = fs.readdirSync(extractPath);
+    let repoRoot = extractPath;
+    if (
+      extractedEntries.length === 1 &&
+      fs.statSync(path.join(extractPath, extractedEntries[0])).isDirectory()
+    ) {
+      repoRoot = path.join(extractPath, extractedEntries[0]);
+    }
+
+    const scannedFiles: Array<{ path: string; size: number; lines: number; content: string; hash: string }> = [];
+    const astMetadata: Record<string, any> = {};
+    const languages = new Set<string>();
+    let totalSize = 0;
+
+    // Allowed extensions & Excluded files
+    const INDEXABLE_EXTENSIONS = new Set([
+      '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java',
+      '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.rb', '.swift',
+      '.kt', '.prisma', '.json', '.yml', '.yaml', '.toml'
+    ]);
+    const EXCLUDED_FILENAMES = new Set([
+      '.gitignore', '.env', '.env.local', '.env.development',
+      '.env.production', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+      'LICENSE', 'README.md', 'CHANGELOG.md'
+    ]);
+    const EXCLUDED_DIRS = new Set([
+      'node_modules', '.git', 'dist', 'build', 'coverage', '.next', 'out', 'generated', '.cache'
+    ]);
+
+    const walkDirectory = (dirPath: string) => {
+      if (scannedFiles.length >= MAX_FILES_LIMIT) return;
+
+      const files = fs.readdirSync(dirPath);
+      for (const file of files) {
+        if (scannedFiles.length >= MAX_FILES_LIMIT) break;
+
+        const fullPath = path.join(dirPath, file);
+        const relativePath = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
+        const stat = fs.statSync(fullPath);
+
+        if (stat.isDirectory()) {
+          if (EXCLUDED_DIRS.has(file)) continue;
+          walkDirectory(fullPath);
+        } else if (stat.isFile()) {
+          if (EXCLUDED_FILENAMES.has(file)) continue;
+          const ext = path.extname(file).toLowerCase();
+          if (!INDEXABLE_EXTENSIONS.has(ext)) continue;
+          if (stat.size > MAX_SINGLE_FILE_SIZE_LIMIT) continue; // Skip files exceeding limit
+
+          try {
+            let content = fs.readFileSync(fullPath, 'utf-8');
+            content = content.replace(/\u0000/g, ''); // Strip null bytes
+            
+            // Check overall size limit
+            if (totalSize + stat.size > MAX_TOTAL_SIZE_LIMIT) {
+              console.warn(`[Indexing] Skip: File count or total size limit reached.`);
+              break;
+            }
+
+            totalSize += stat.size;
+            const lang = identityService.detectLanguageByExtension(ext);
+            if (lang) languages.add(lang);
+
+            const fileHash = crypto.createHash('sha256').update(content).digest('hex');
+
+            scannedFiles.push({
+              path: relativePath,
+              size: stat.size,
+              lines: content.split('\n').length,
+              content,
+              hash: fileHash
+            });
+
+            if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
+              const ast = astService.parseSourceFile(relativePath, content);
+              astMetadata[relativePath] = ast;
+            }
+          } catch (err) {
+            console.error(`Failed to read file ${relativePath}:`, err);
+          }
+        }
+      }
+    };
+
+    walkDirectory(repoRoot);
+    parseTime = Date.now() - parseStart;
+    console.log(`[Indexing] Parsed ${scannedFiles.length} files: ${(parseTime / 1000).toFixed(2)}s`);
+
+    // Yield control to event loop
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Resolve dependencies and calculate confidence
+    const fileList = scannedFiles.map(f => f.path);
+    const dependencyGraph = astService.resolveDependencies(fileList, astMetadata);
+    const identityResult = identityService.runIdentityEngine(repoRoot, scannedFiles, dependencyGraph);
+    const framework = identityResult.framework;
+    const entryPoints = identityResult.entryPoints;
+
+    const { score } = confidenceService.calculateConfidence(
+      scannedFiles,
+      astMetadata,
+      dependencyGraph,
+      languages,
+      framework
+    );
+
+    // Parse existing scannedFiles from DB (if any) for incremental indexing
+    const oldFiles = (typeof repoRow.scannedFiles === 'string'
+      ? JSON.parse(repoRow.scannedFiles)
+      : repoRow.scannedFiles) as Array<{ path: string; hash?: string }> || [];
+
+    const oldHashMap = new Map<string, string>();
+    for (const f of oldFiles) {
+      if (f.path && f.hash) {
+        oldHashMap.set(f.path, f.hash);
+      }
+    }
+
+    // Determine changed, deleted, and unchanged files
+    const newFilePaths = new Set(scannedFiles.map(f => f.path));
+    const changedOrDeletedFiles = new Set<string>();
+
+    for (const oldF of oldFiles) {
+      if (!newFilePaths.has(oldF.path)) {
+        changedOrDeletedFiles.add(oldF.path);
+      }
+    }
+
+    for (const newF of scannedFiles) {
+      const oldHash = oldHashMap.get(newF.path);
+      if (oldHash !== newF.hash || force) {
+        changedOrDeletedFiles.add(newF.path);
+      }
+    }
+
+    // 3. Clean chunks of changed/deleted files
+    if (changedOrDeletedFiles.size > 0 && !force) {
+      const filesToClean = Array.from(changedOrDeletedFiles);
+      await prisma.$executeRawUnsafe(
+        `DELETE FROM "CodeChunk" WHERE "repositoryId" = $1 AND "filePath" = ANY($2)`,
+        id,
+        filesToClean
+      );
+    } else if (force) {
+      await prisma.$executeRawUnsafe(`DELETE FROM "CodeChunk" WHERE "repositoryId" = $1`, id);
+    }
+
+    // Update Repository row stats (save scanned metadata early)
+    // We clean scannedFiles to not save contents in scannedFiles column to reduce database size
+    const repoScannedFilesJson = scannedFiles.map(f => ({
+      path: f.path,
+      size: f.size,
+      lines: f.lines,
+      hash: f.hash
+    }));
+
+    await prisma.repository.update({
+      where: { id },
+      data: {
+        framework,
+        languages: Array.from(languages),
+        entryPoints,
+        importantFiles: entryPoints,
+        fileCount: scannedFiles.length,
+        totalSize,
+        confidence: score,
+        scannedFiles: repoScannedFilesJson as any,
+        astMetadata: astMetadata as any,
+        dependencyGraph: dependencyGraph as any
+      }
+    });
+
+    // 4. Incremental Chunking & Embedding (Streaming Pipeline)
+    await prisma.repository.update({
+      where: { id },
+      data: { indexingProgress: 'Chunking' }
+    });
+
+    // Get count of unchanged chunks preserved in database
+    const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({
       where: { repositoryId: id }
     });
-    if (chunkCount > 0) {
-      console.log(`Repository ${repo.name} (${id}) is already indexed. Skipping background index build.`);
-      return;
+
+    let runningChunkCount = unchangedChunksCount;
+    let totalChunksProcessed = 0;
+    let chunksToInsert: any[] = [];
+
+    const chunkStart = Date.now();
+
+    // Helper for transient embedding error retries
+    async function getEmbeddingsBatchWithRetry(texts: string[], retries = 3, delayMs = 1000): Promise<number[][]> {
+      let lastError: any;
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          return await vectorService.getEmbeddingsBatch(texts);
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[Indexing] Embedding batch attempt ${attempt}/${retries} failed: ${err.message}`);
+          if (attempt < retries) {
+            await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+          }
+        }
+      }
+      throw lastError;
     }
-  }
 
-  // Delete existing chunks for this repository to prevent duplicates
-  await prisma.$executeRawUnsafe(`DELETE FROM "CodeChunk" WHERE "repositoryId" = $1`, id);
+    // Process files one-by-one to keep memory footprint flat (streaming pipeline)
+    for (let fileIdx = 0; fileIdx < scannedFiles.length; fileIdx++) {
+      const file = scannedFiles[fileIdx];
+      const isUnchanged = oldHashMap.has(file.path) && oldHashMap.get(file.path) === file.hash && !force;
 
-  const scannedFiles = (typeof repo.scannedFiles === 'string'
-    ? JSON.parse(repo.scannedFiles)
-    : repo.scannedFiles) as Array<{ path: string; content?: string }>;
-
-  console.log(`Building index for repository: ${repo.name} (${scannedFiles.length} files)...`);
-
-  // Release the repo reference to let GC reclaim memory
-  (repo as any) = null;
-
-  let totalChunksProcessed = 0;
-
-  // Process files one-by-one to keep memory usage flat
-  for (let fileIdx = 0; fileIdx < scannedFiles.length; fileIdx++) {
-    const file = scannedFiles[fileIdx];
-    const fileContent = file.content || '';
-    if (!fileContent.trim()) continue;
-
-    console.log(`[Indexing ${fileIdx + 1}/${scannedFiles.length}] file: ${file.path}...`);
-
-    // Parse symbols for this file only
-    const symbols = astService.getCodeSymbols(file.path, fileContent);
-    const chunks = ingestionService.chunkCodeFile(file.path, fileContent, symbols);
-    
-    if (chunks.length === 0) continue;
-
-    // Process chunks of this file sequentially in batches of 4
-    const batchSize = 4;
-    for (let i = 0; i < chunks.length; i += batchSize) {
-      const batch = chunks.slice(i, i + batchSize);
-      const batchTexts = batch.map(c => c.content);
-      const embeddings = await vectorService.getEmbeddingsBatch(batchTexts);
-
-      const valuesSql: string[] = [];
-      const params: any[] = [];
-
-      for (let j = 0; j < batch.length; j++) {
-        const chunk = batch[j];
-        const embedding = embeddings[j];
-        const vectorStr = `[${embedding.join(',')}]`;
-        const chunkId = crypto.randomUUID();
-
-        const baseIdx = j * 9;
-        valuesSql.push(`($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5}, $${baseIdx + 6}, $${baseIdx + 7}, $${baseIdx + 8}, $${baseIdx + 9}::vector)`);
-
-        params.push(
-          chunkId,
-          id,
-          file.path,
-          totalChunksProcessed + j, // overall chunkIndex
-          chunk.content,
-          chunk.startLine,
-          chunk.endLine,
-          chunk.symbolName,
-          vectorStr
-        );
+      // Skip generating embeddings if file is unchanged
+      if (isUnchanged) {
+        continue;
       }
 
-      const query = `INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding) VALUES ${valuesSql.join(', ')}`;
-      await prisma.$executeRawUnsafe(query, ...params);
+      const fileContent = file.content || '';
+      if (!fileContent.trim()) continue;
 
-      totalChunksProcessed += batch.length;
+      // Parse symbols for this file only
+      const symbols = astService.getCodeSymbols(file.path, fileContent);
+      const fileChunks = ingestionService.chunkCodeFile(file.path, fileContent, symbols);
+      if (fileChunks.length === 0) continue;
+
+      // Check max chunk limit safeguard
+      runningChunkCount += fileChunks.length;
+      if (runningChunkCount > MAX_CHUNKS_LIMIT) {
+        throw new AppError(`Repository exceeds the maximum allowed limit of ${MAX_CHUNKS_LIMIT} chunks.`, 400);
+      }
+
+      const fileChunkStart = Date.now();
+
+      // Process chunks sequentially in EMBEDDING_BATCH_SIZE
+      for (let i = 0; i < fileChunks.length; i += EMBEDDING_BATCH_SIZE) {
+        const batch = fileChunks.slice(i, i + EMBEDDING_BATCH_SIZE);
+        const batchTexts = batch.map(c => c.content);
+
+        const embedStart = Date.now();
+        const embeddings = await getEmbeddingsBatchWithRetry(batchTexts);
+        embedTime += (Date.now() - embedStart);
+
+        for (let j = 0; j < batch.length; j++) {
+          chunksToInsert.push({
+            filePath: file.path,
+            content: batch[j].content,
+            startLine: batch[j].startLine,
+            endLine: batch[j].endLine,
+            symbolName: batch[j].symbolName,
+            embedding: embeddings[j]
+          });
+        }
+
+        // Yield to event loop after every embedding batch
+        await new Promise(resolve => setImmediate(resolve));
+
+        // Bulk insert to DB if DB_BATCH_SIZE is reached
+        if (chunksToInsert.length >= DB_BATCH_SIZE) {
+          const percent = Math.round((fileIdx / scannedFiles.length) * 100);
+          await prisma.repository.update({
+            where: { id },
+            data: { indexingProgress: `Embedding ${percent}%` }
+          });
+
+          const dbStart = Date.now();
+          await vectorService.bulkInsertChunks(id, chunksToInsert, unchangedChunksCount + totalChunksProcessed);
+          dbWriteTime += (Date.now() - dbStart);
+
+          totalChunksProcessed += chunksToInsert.length;
+          chunksToInsert = []; // Free memory
+
+          // Yield to event loop after db insert batch
+          await new Promise(resolve => setImmediate(resolve));
+        }
+      }
+
+      chunkTime += (Date.now() - fileChunkStart);
+
+      // Yield control to event loop periodically
+      if (fileIdx % 5 === 0) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
     }
 
-    // Yield control to let GC clear memory for this file
-    await new Promise(resolve => setTimeout(resolve, 30));
-  }
+    // Insert any remaining chunks
+    if (chunksToInsert.length > 0) {
+      await prisma.repository.update({
+        where: { id },
+        data: { indexingProgress: 'Saving' }
+      });
+      const dbStart = Date.now();
+      await vectorService.bulkInsertChunks(id, chunksToInsert, unchangedChunksCount + totalChunksProcessed);
+      dbWriteTime += (Date.now() - dbStart);
+      totalChunksProcessed += chunksToInsert.length;
+      chunksToInsert = [];
+    }
 
-  console.log(`Successfully indexed repository ${id} with ${totalChunksProcessed} chunks.`);
+    // Set indexing status to completed
+    await prisma.repository.update({
+      where: { id },
+      data: {
+        indexingStatus: 'completed',
+        indexingProgress: 'Completed'
+      }
+    });
+
+    const totalTime = Date.now() - startTime;
+    console.log(`[Indexing] Timing Info:`);
+    console.log(`  - Download: ${(downloadTime / 1000).toFixed(2)}s`);
+    console.log(`  - File scan & parse: ${(parseTime / 1000).toFixed(2)}s`);
+    console.log(`  - Chunking: ${(chunkTime / 1000).toFixed(2)}s`);
+    console.log(`  - Embeddings generation: ${(embedTime / 1000).toFixed(2)}s`);
+    console.log(`  - Database writes: ${(dbWriteTime / 1000).toFixed(2)}s`);
+    console.log(`  - Total Indexing: ${(totalTime / 1000).toFixed(2)}s`);
+    console.log(`[Indexing] Successfully indexed repository ${id} with ${unchangedChunksCount + totalChunksProcessed} total chunks (${totalChunksProcessed} new/updated, ${unchangedChunksCount} unchanged).`);
+
+  } catch (error: any) {
+    console.error(`[Indexing] Failed to index repository ${id}:`, error.stack || error);
+    await prisma.repository.update({
+      where: { id },
+      data: {
+        indexingStatus: 'failed',
+        indexingProgress: `Error: ${error.message || 'Unknown error'}`
+      }
+    }).catch(updateErr => console.error('[Indexing] Failed to update repository status to failed:', updateErr));
+    throw error;
+  } finally {
+    // Cleanup temporary directories inside a finally block
+    for (const dir of tempDirsToCleanup) {
+      if (fs.existsSync(dir)) {
+        try {
+          if (fs.statSync(dir).isDirectory()) {
+            await deleteFolderWithRetry(dir);
+          } else {
+            fs.unlinkSync(dir);
+          }
+        } catch (cleanupErr) {
+          console.error(`[Indexing] Failed to cleanup temp path ${dir} in finally block:`, cleanupErr);
+        }
+      }
+    }
+  }
 }
 
 /**

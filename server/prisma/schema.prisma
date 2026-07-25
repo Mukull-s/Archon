@@ -54,10 +54,11 @@ model Repository {
   totalSize       Int
   confidence      Int      @default(0)
   
-  // Stored JSON structures
   scannedFiles    Json     @default("[]")
   astMetadata     Json     @default("{}")
   dependencyGraph Json     @default("{}")
+  indexingStatus  String   @default("idle") // "idle" | "indexing" | "completed" | "failed"
+  indexingProgress String   @default("")
   
   // Relations
   codeChunks      CodeChunk[]

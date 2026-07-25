@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import axios from 'axios';
 import AdmZip from 'adm-zip';
 import os from 'os';
-import { prisma } from '../config';
+import { prisma, MAX_FILES_LIMIT, MAX_TOTAL_SIZE_LIMIT, MAX_SINGLE_FILE_SIZE_LIMIT } from '../config';
 import * as astService from './ast.service';
 import { AppError } from '../utils';
 import { identityService } from './identity.service';
@@ -22,9 +22,9 @@ const BINARY_EXTENSIONS = new Set([
   '.exe', '.dll', '.bin', '.pdf', '.zip', '.gz', '.tar', '.woff', '.woff2', '.ttf', '.eot'
 ]);
 
-const MAX_FILES = 250;
-const MAX_TOTAL_SIZE = 3 * 1024 * 1024; // 3 MB
-const MAX_SINGLE_FILE_SIZE = 100 * 1024; // 100 KB
+const MAX_FILES = MAX_FILES_LIMIT;
+const MAX_TOTAL_SIZE = MAX_TOTAL_SIZE_LIMIT;
+const MAX_SINGLE_FILE_SIZE = MAX_SINGLE_FILE_SIZE_LIMIT;
 
 interface ScannedFileInfo {
   path: string;
@@ -35,7 +35,7 @@ interface ScannedFileInfo {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function deleteFolderWithRetry(dirPath: string, retries = 10, ms = 300) {
+export async function deleteFolderWithRetry(dirPath: string, retries = 10, ms = 300) {
   if (!fs.existsSync(dirPath)) return;
   for (let i = 0; i < retries; i++) {
     try {
