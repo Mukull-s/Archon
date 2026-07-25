@@ -205,14 +205,14 @@ export class AuthService {
 
     const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
         client_id: env.GOOGLE_CLIENT_ID,
         client_secret: env.GOOGLE_CLIENT_SECRET,
         code,
         grant_type: 'authorization_code',
         redirect_uri: `${env.CLIENT_URL}/auth/callback`,
-      }),
+      }).toString(),
     });
 
     const tokenData = await tokenRes.json() as { access_token?: string };
