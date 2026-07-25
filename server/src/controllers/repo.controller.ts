@@ -251,6 +251,8 @@ export async function listUserRepos(req: Request, res: Response, next: NextFunct
         fileCount: true,
         totalSize: true,
         confidence: true,
+        indexingStatus: true,
+        indexingProgress: true,
         createdAt: true
       },
       orderBy: { createdAt: 'desc' }
@@ -277,7 +279,8 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
         id: true, name: true, owner: true, isLocal: true, framework: true,
         languages: true, fileCount: true, totalSize: true, confidence: true,
         scannedFiles: true, astMetadata: true, dependencyGraph: true,
-        entryPoints: true, createdAt: true, updatedAt: true
+        entryPoints: true, indexingStatus: true, indexingProgress: true,
+        createdAt: true, updatedAt: true
       }
     });
     if (!repo) {
