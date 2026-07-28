@@ -1,8 +1,21 @@
 import { Router } from 'express';
 import { signup, login, getOAuthUrl, oauthCallback, verifyEmail, getMe, logout, updateProfile, changePassword } from '../controllers';
 import { requireAuth } from '../middlewares';
+import rateLimit from 'express-rate-limit';
 
 const router = Router();
+
+// Rate limiter for authentication routes (max 20 attempts per 15 minutes)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: {
+    success: false,
+    error: { message: 'Too many authentication attempts. Please try again in 15 minutes.' }
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 /**
  * Auth Routes — Full authentication system.
@@ -17,8 +30,8 @@ const router = Router();
  * PATCH /api/auth/profile             → Update name/avatar (protected)
  * POST  /api/auth/change-password     → Change password (protected)
  */
-router.post('/signup', signup);
-router.post('/login', login);
+router.post('/signup', authLimiter, signup);
+router.post('/login', authLimiter, login);
 router.get('/oauth/url', getOAuthUrl);
 router.post('/oauth/callback', oauthCallback);
 router.post('/verify', verifyEmail);

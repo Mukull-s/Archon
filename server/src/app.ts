@@ -59,7 +59,7 @@ export function createApp(): express.Application {
   // ──────────────────────────────────────────────
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,          // 15 minutes
-    max: env.NODE_ENV === 'development' ? 1000 : 100,
+    max: env.NODE_ENV === 'development' ? 200 : 100,
     message: {
       success: false,
       error: { message: 'Too many requests. Please try again later.' },
