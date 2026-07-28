@@ -106,6 +106,14 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
     });
 
     if (repository) {
+      if (repository.indexingStatus === 'indexing') {
+        res.status(200).json({
+          success: true,
+          message: 'Repository is already indexing in the background.',
+          data: repository
+        });
+        return;
+      }
       // Set status to indexing, progress to Downloading
       repository = await prisma.repository.update({
         where: { id: repository.id },
@@ -181,6 +189,14 @@ export async function scanLocalZip(req: Request, res: Response, next: NextFuncti
     });
 
     if (repository) {
+      if (repository.indexingStatus === 'indexing') {
+        res.status(200).json({
+          success: true,
+          message: 'Repository is already indexing in the background.',
+          data: repository
+        });
+        return;
+      }
       repository = await prisma.repository.update({
         where: { id: repository.id },
         data: {
@@ -483,11 +499,6 @@ export async function performVectorIndexing(id: string, force = false, options?:
 
     if (!repoRow) {
       throw new AppError('Repository not found.', 404);
-    }
-
-    if (repoRow.indexingStatus === 'indexing' && !force) {
-      console.log(`[Indexing] Repository ${id} is already being indexed. Skipping.`);
-      return;
     }
 
     // Set indexing status to indexing and starting progress

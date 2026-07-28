@@ -1,4 +1,4 @@
-export const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE) || 8;
+export const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE) || 32;
 export const DB_BATCH_SIZE = Number(process.env.DB_BATCH_SIZE) || 100;
 export const MAX_CONCURRENT_EMBEDDINGS = Number(process.env.MAX_CONCURRENT_EMBEDDINGS) || 4;
 export const MAX_FILES_LIMIT = Number(process.env.MAX_FILES_LIMIT) || 1000;
