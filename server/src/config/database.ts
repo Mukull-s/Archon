@@ -20,10 +20,13 @@ function createPrismaClient(): PrismaClient {
     throw new Error('DATABASE_URL environment variable is not set');
   }
 
-  // Create a pg Pool with SSL for Neon
+  // Create a pg Pool with SSL for Neon, configured for scale
   const pool = new pg.Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },
+    max: 20,                          // Increase pool size (default is 10)
+    idleTimeoutMillis: 30000,         // Close idle connections after 30 seconds
+    connectionTimeoutMillis: 5000,    // 5 seconds connection checkout timeout
   });
 
   const adapter = new PrismaPg(pool);
