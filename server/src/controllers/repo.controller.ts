@@ -273,7 +273,7 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
-    const repo = await prisma.repository.findFirst({
+    let repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
         id: true, name: true, owner: true, isLocal: true, framework: true,
@@ -285,6 +285,28 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     });
     if (!repo) {
       throw new AppError('Repository not found or access denied.', 404);
+    }
+
+    // Auto-fail stale indexing jobs (e.g., if process crashed/killed due to memory limits)
+    if (repo.indexingStatus === 'indexing') {
+      const StaleTimeout = 10 * 60 * 1000; // 10 minutes
+      const timeSinceUpdate = Date.now() - new Date(repo.updatedAt).getTime();
+      if (timeSinceUpdate > StaleTimeout) {
+        repo = await prisma.repository.update({
+          where: { id: repo.id },
+          data: {
+            indexingStatus: 'failed',
+            indexingProgress: 'Error: Indexing timed out. The server process may have run out of memory or restarted.'
+          },
+          select: {
+            id: true, name: true, owner: true, isLocal: true, framework: true,
+            languages: true, fileCount: true, totalSize: true, confidence: true,
+            scannedFiles: true, astMetadata: true, dependencyGraph: true,
+            entryPoints: true, indexingStatus: true, indexingProgress: true,
+            createdAt: true, updatedAt: true
+          }
+        });
+      }
     }
 
     const scannedFiles = (typeof repo.scannedFiles === 'string'
@@ -463,6 +485,11 @@ export async function performVectorIndexing(id: string, force = false, options?:
       throw new AppError('Repository not found.', 404);
     }
 
+    if (repoRow.indexingStatus === 'indexing' && !force) {
+      console.log(`[Indexing] Repository ${id} is already being indexed. Skipping.`);
+      return;
+    }
+
     // Set indexing status to indexing and starting progress
     await prisma.repository.update({
       where: { id },
@@ -516,7 +543,7 @@ export async function performVectorIndexing(id: string, force = false, options?:
       repoRoot = path.join(extractPath, extractedEntries[0]);
     }
 
-    const scannedFiles: Array<{ path: string; size: number; lines: number; content: string; hash: string }> = [];
+    const scannedFiles: Array<{ path: string; size: number; lines: number; hash: string }> = [];
     const astMetadata: Record<string, any> = {};
     const languages = new Set<string>();
     let totalSize = 0;
@@ -576,7 +603,6 @@ export async function performVectorIndexing(id: string, force = false, options?:
               path: relativePath,
               size: stat.size,
               lines: content.split('\n').length,
-              content,
               hash: fileHash
             });
 
@@ -723,7 +749,16 @@ export async function performVectorIndexing(id: string, force = false, options?:
         continue;
       }
 
-      const fileContent = file.content || '';
+      // Read file content from disk on-demand to keep memory flat
+      const fullFilePath = path.join(repoRoot, file.path);
+      let fileContent = '';
+      try {
+        fileContent = fs.readFileSync(fullFilePath, 'utf-8').replace(/\u0000/g, '');
+      } catch (readErr) {
+        console.error(`Failed to read file ${file.path} for chunking:`, readErr);
+        continue;
+      }
+
       if (!fileContent.trim()) continue;
 
       // Parse symbols for this file only
@@ -862,15 +897,35 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
       throw new AppError('Unauthorized.', 401);
     }
     const repo = await prisma.repository.findFirst({
-      where: { id: id as string, userId: userId as string },
-      select: { id: true }
+      where: { id: id as string, userId: userId as string }
     });
     if (!repo) {
       throw new AppError('Repository not found.', 404);
     }
 
-    await performVectorIndexing(id as string, !!force);
-    res.status(200).json({ success: true, message: 'Repository indexed successfully into pgvector.' });
+    if (repo.indexingStatus === 'indexing' && !force) {
+      res.status(200).json({ success: true, message: 'Repository is already indexing in the background.' });
+      return;
+    }
+
+    // Set indexing status to indexing and starting progress
+    await prisma.repository.update({
+      where: { id: id as string },
+      data: {
+        indexingStatus: 'indexing',
+        indexingProgress: repo.isLocal ? 'Parsing' : 'Downloading'
+      }
+    });
+
+    // Trigger background vector indexing asynchronously
+    performVectorIndexing(id as string, !!force).catch(err => {
+      console.error(`[Background Indexing] Failed for repo ${id}:`, err);
+    });
+
+    res.status(202).json({
+      success: true,
+      message: 'Repository indexing started in the background.'
+    });
   } catch (error) {
     next(error);
   }
