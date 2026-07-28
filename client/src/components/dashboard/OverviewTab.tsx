@@ -37,6 +37,26 @@ export default function OverviewTab({
     0: true,
   });
 
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  const handleGenerateSummary = async () => {
+    setSummaryLoading(true);
+    try {
+      const { data } = await api.post(`/repos/${repositoryId}/summary`);
+      if (data.data) {
+        setRepoDetails((prev: any) => ({
+          ...prev,
+          aiSummary: data.data
+        }));
+        toast.success('AI Repository Summary generated successfully!');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to generate summary.');
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
   // Individual loading/error states so partial data still renders
   const [storyLoading, setStoryLoading] = useState(true);
   const [onboardingLoading, setOnboardingLoading] = useState(true);
@@ -368,6 +388,138 @@ export default function OverviewTab({
           Start Exploring
         </button>
       </section>
+
+      {/* ── Repository Summary Section ── */}
+      {repoDetails && (
+        repoDetails.aiSummary ? (
+          <Panel className="p-6 border border-[#27272a]" variant="lowest">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center border-b border-[#27272a]/60 pb-4 mb-5 gap-3">
+              <div>
+                <h3 className="text-[12px] font-mono font-bold text-white tracking-wider uppercase">
+                  Repository Summary
+                </h3>
+                <p className="text-[11px] font-mono text-[#919095] mt-0.5">
+                  AI-generated technical overview & business context
+                </p>
+              </div>
+              
+              {/* Complexity Badge */}
+              <div className="flex items-center gap-2 select-none">
+                <span className="text-[10px] font-mono text-[#919095]">COMPLEXITY:</span>
+                <span className={`text-[10.5px] font-mono font-bold px-2.5 py-0.5 rounded border ${
+                  repoDetails.aiSummary.complexity === 'Low'
+                    ? 'bg-emerald-950/20 border-emerald-900/40 text-emerald-400'
+                    : repoDetails.aiSummary.complexity === 'Medium'
+                    ? 'bg-amber-950/20 border-amber-900/40 text-amber-400'
+                    : 'bg-red-950/20 border-red-900/40 text-red-400'
+                }`}>
+                  {(repoDetails.aiSummary.complexity || 'Medium').toUpperCase()}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-6 select-text">
+              {/* Left part: Overview (What is it, purpose, target users) */}
+              <div className="md:col-span-7 space-y-5">
+                <div>
+                  <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
+                    What is this repository?
+                  </h4>
+                  <p className="text-[13.5px] leading-relaxed text-[#c8c5ca] font-sans">
+                    {repoDetails.aiSummary.summary}
+                  </p>
+                </div>
+
+                <div>
+                  <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
+                    Main Purpose
+                  </h4>
+                  <p className="text-[13px] leading-relaxed text-white font-mono bg-[#131316] border border-[#27272a] p-3 rounded-[6px]">
+                    {repoDetails.aiSummary.purpose}
+                  </p>
+                </div>
+
+                {Array.isArray(repoDetails.aiSummary.targetUsers) && repoDetails.aiSummary.targetUsers.length > 0 && (
+                  <div>
+                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
+                      Target Users
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5 select-none">
+                      {repoDetails.aiSummary.targetUsers.map((u: string, idx: number) => (
+                        <span key={idx} className="bg-[#1f1f22] border border-[#27272a] text-[#c8c5ca] text-[11px] font-mono px-2 py-0.5 rounded">
+                          {u}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Right part: Features, modules, tech stack */}
+              <div className="md:col-span-5 space-y-5 border-t md:border-t-0 md:border-l border-[#27272a]/60 pt-5 md:pt-0 md:pl-6">
+                {Array.isArray(repoDetails.aiSummary.keyFeatures) && repoDetails.aiSummary.keyFeatures.length > 0 && (
+                  <div>
+                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
+                      Key Features
+                    </h4>
+                    <ul className="list-disc pl-4 space-y-1 text-[12.5px] text-[#c8c5ca]">
+                      {repoDetails.aiSummary.keyFeatures.map((f: string, idx: number) => (
+                        <li key={idx}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {Array.isArray(repoDetails.aiSummary.coreModules) && repoDetails.aiSummary.coreModules.length > 0 && (
+                  <div>
+                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
+                      Core Modules
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5 select-none">
+                      {repoDetails.aiSummary.coreModules.map((m: string, idx: number) => (
+                        <span key={idx} className="bg-[#3b82f6]/5 border border-[#3b82f6]/15 text-[#60a5fa] text-[10.5px] font-mono px-2 py-0.5 rounded">
+                          {m}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray(repoDetails.aiSummary.techStack) && repoDetails.aiSummary.techStack.length > 0 && (
+                  <div>
+                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
+                      Tech Stack
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5 select-none">
+                      {repoDetails.aiSummary.techStack.map((t: string, idx: number) => (
+                        <span key={idx} className="bg-[#1a1a1e] border border-[#27272a] text-white text-[10.5px] font-mono px-2 py-0.5 rounded">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Panel>
+        ) : (
+          <Panel className="p-6 border border-dashed border-[#27272a] text-center" variant="lowest">
+            <h3 className="text-[12px] font-mono font-bold text-[#919095] tracking-wider uppercase mb-1">
+              AI-Powered Repository Summary
+            </h3>
+            <p className="text-[13px] text-[#919095] max-w-md mx-auto mb-4 leading-relaxed">
+              Generate a structured business and technical overview of this codebase to understand its domain, purpose, and stack within 30 seconds.
+            </p>
+            <button
+              onClick={handleGenerateSummary}
+              disabled={summaryLoading}
+              className="bg-[#3b82f6]/10 hover:bg-[#3b82f6]/20 border border-[#3b82f6]/30 text-[#60a5fa] hover:text-white px-5 py-2 font-mono text-[12px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
+            >
+              {summaryLoading ? 'GENERATING SUMMARY...' : 'GENERATE AI SUMMARY'}
+            </button>
+          </Panel>
+        )
+      )}
 
       {/* ── Main Canvas Grid ── */}
       <div className="grid grid-cols-12 gap-6">

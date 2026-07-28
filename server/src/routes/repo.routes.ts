@@ -33,6 +33,7 @@ router.post('/scan-upload', requireAuth, heavyLimiter, upload.single('file'), re
 // Management & details endpoints
 router.get('/', requireAuth, repoController.listUserRepos);
 router.get('/:id', requireAuth, repoController.getRepoDetails);
+router.post('/:id/summary', requireAuth, heavyLimiter, repoController.generateRepoSummaryEndpoint);
 
 // Analysis endpoints
 router.post('/:id/impact', requireAuth, heavyLimiter, repoController.analyzeImpact);

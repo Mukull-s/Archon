@@ -59,6 +59,7 @@ model Repository {
   dependencyGraph Json     @default("{}")
   indexingStatus  String   @default("idle") // "idle" | "indexing" | "completed" | "failed"
   indexingProgress String   @default("")
+  aiSummary       Json?
   
   // Relations
   codeChunks      CodeChunk[]

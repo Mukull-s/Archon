@@ -282,6 +282,95 @@ Instructions:
 
     throw lastError || new Error('Failed to initialize stream from any configured models.');
   }
+
+  /**
+   * Generates a structured business and technical summary for the repository.
+   */
+  async generateRepositorySummary(repoInfo: {
+    name: string;
+    framework: string | null;
+    languages: string[];
+    fileCount: number;
+    totalSize: number;
+    readme?: string;
+    packageJson?: string;
+    fileTree: string;
+  }): Promise<string> {
+    const prompt = `You are Archon, an expert Software Architect AI.
+Analyze the following repository technical metadata, README file, package.json file, and file tree structure to generate a high-quality business and technical summary of the codebase.
+
+Repository Metadata:
+- Name: ${repoInfo.name}
+- Framework: ${repoInfo.framework || 'Vanilla/Custom'}
+- Languages: ${repoInfo.languages.join(', ')}
+- File Count: ${repoInfo.fileCount}
+- Size: ${(repoInfo.totalSize / 1024).toFixed(2)} KB
+
+${repoInfo.readme ? `README.md content:\n---\n${repoInfo.readme}\n---\n` : ''}
+${repoInfo.packageJson ? `package.json content:\n---\n${repoInfo.packageJson}\n---\n` : ''}
+
+Complete File Structure:
+${repoInfo.fileTree}
+
+Instructions:
+1. Respond ONLY with a valid, clean JSON object. Do not include markdown code block syntax (like \`\`\`json) or any conversational greeting or trailing text.
+2. The JSON object MUST follow this exact schema:
+{
+  "summary": "A short paragraph (3-5 sentences) explaining what the application does in plain English. Describe the primary capabilities, what problem it solves, and how it is used.",
+  "purpose": "One concise sentence describing the primary goal of the repository.",
+  "businessDomain": "e.g. Fintech, Developer Tools, E-commerce, Gaming, Social, Healthcare, Analytics, etc.",
+  "targetUsers": ["User group 1", "User group 2"],
+  "keyFeatures": ["Feature 1", "Feature 2", "Feature 3"],
+  "coreModules": ["Module/Package name - brief description"],
+  "techStack": ["Technology 1", "Technology 2"],
+  "complexity": "Low" | "Medium" | "High"
+}
+3. Maintain high technical precision and avoid generic AI phrases like "This repository contains...".
+4. Do not hallucinate capabilities. If a detail cannot be determined, specify that it could not be determined.
+5. Double check that the JSON is fully valid and parseable. Ensure all string values are escaped properly.`;
+
+    const modelsQueue = this.getModelsQueue('qwen/qwen3-coder:free');
+    let lastError: any = null;
+
+    for (const activeModel of modelsQueue) {
+      try {
+        const isDirectDeepSeek = activeModel === 'deepseek-v4-flash' || activeModel === 'deepseek-v4-pro';
+        const baseUrl = isDirectDeepSeek ? 'https://api.deepseek.com/v1' : 'https://openrouter.ai/api/v1';
+        const apiKey = isDirectDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENROUTER_API_KEY;
+
+        if (!apiKey) {
+          throw new Error(`API key is missing for model: ${activeModel}`);
+        }
+
+        console.log(`[Summary Generation] Sending request to ${activeModel}...`);
+
+        const response = await axios.post(`${baseUrl}/chat/completions`, {
+          model: activeModel,
+          messages: [
+            { role: 'system', content: 'You are a Software Architect AI that outputs strictly valid JSON.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1
+        }, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            ...(!isDirectDeepSeek && {
+              'HTTP-Referer': 'http://localhost:5173',
+              'X-Title': 'Archon'
+            })
+          },
+          timeout: 25000 // 25s timeout
+        });
+
+        return response.data.choices[0].message.content;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[Summary Generation] Model ${activeModel} failed: ${err.message}`);
+      }
+    }
+    throw lastError || new Error('Failed to generate summary from any model.');
+  }
 }
 
 export const llmService = new LLMService();

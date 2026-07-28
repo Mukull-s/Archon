@@ -296,6 +296,7 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
         languages: true, fileCount: true, totalSize: true, confidence: true,
         scannedFiles: true, astMetadata: true, dependencyGraph: true,
         entryPoints: true, indexingStatus: true, indexingProgress: true,
+        aiSummary: true,
         createdAt: true, updatedAt: true
       }
     });
@@ -319,6 +320,7 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
             languages: true, fileCount: true, totalSize: true, confidence: true,
             scannedFiles: true, astMetadata: true, dependencyGraph: true,
             entryPoints: true, indexingStatus: true, indexingProgress: true,
+            aiSummary: true,
             createdAt: true, updatedAt: true
           }
         });
@@ -849,12 +851,64 @@ export async function performVectorIndexing(id: string, force = false, options?:
       chunksToInsert = [];
     }
 
+    // 5. Generate AI Repository Summary
+    let readmeText = '';
+    const readmePaths = ['README.md', 'readme.md', 'README', 'readme'];
+    for (const rp of readmePaths) {
+      const p = path.join(repoRoot, rp);
+      if (fs.existsSync(p)) {
+        try {
+          readmeText = fs.readFileSync(p, 'utf-8').slice(0, 5000);
+          break;
+        } catch {}
+      }
+    }
+
+    let pkgJsonText = '';
+    const pkgPath = path.join(repoRoot, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 3000);
+      } catch {}
+    }
+
+    const fileTreeLines = scannedFiles.map(f => f.path);
+    const fileTreeStr = fileTreeLines.slice(0, 100).join('\n') + (fileTreeLines.length > 100 ? '\n... (truncated)' : '');
+
+    let aiSummaryObj: any = null;
+    try {
+      console.log(`[Indexing] Generating AI Repository Summary...`);
+      const summaryText = await llmService.generateRepositorySummary({
+        name: repoRow.name,
+        framework: framework || null,
+        languages: Array.from(languages),
+        fileCount: scannedFiles.length,
+        totalSize: totalSize,
+        readme: readmeText,
+        packageJson: pkgJsonText,
+        fileTree: fileTreeStr
+      });
+
+      let cleanedJson = summaryText.trim();
+      if (cleanedJson.startsWith('```')) {
+        const lines = cleanedJson.split('\n');
+        if (lines[0].startsWith('```')) lines.shift();
+        if (lines[lines.length - 1].startsWith('```')) lines.pop();
+        cleanedJson = lines.join('\n').trim();
+      }
+      aiSummaryObj = JSON.parse(cleanedJson);
+      console.log(`[Indexing] AI Repository Summary generated successfully.`);
+    } catch (summaryErr: any) {
+      console.error('[Indexing] Failed to generate AI repository summary:', summaryErr.message);
+    }
+
     // Set indexing status to completed
     await prisma.repository.update({
       where: { id },
       data: {
         indexingStatus: 'completed',
-        indexingProgress: 'Completed'
+        indexingProgress: 'Completed',
+        aiSummary: aiSummaryObj || undefined
       }
     });
 
@@ -1366,6 +1420,63 @@ export async function getRepoOnboarding(req: Request, res: Response, next: NextF
   }
 }
 
+/**
+ * Manually generates or regenerates the AI Repository Summary.
+ */
+export async function generateRepoSummaryEndpoint(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new AppError('Unauthorized.', 401);
+    }
+
+    const repo = await prisma.repository.findFirst({
+      where: { id: id as string, userId: userId as string }
+    });
+    if (!repo) {
+      throw new AppError('Repository not found.', 404);
+    }
+
+    const scannedFiles = (typeof repo.scannedFiles === 'string'
+      ? JSON.parse(repo.scannedFiles)
+      : repo.scannedFiles) as any[] || [];
+
+    const fileTreeLines = scannedFiles.map(f => f.path);
+    const fileTreeStr = fileTreeLines.slice(0, 100).join('\n') + (fileTreeLines.length > 100 ? '\n... (truncated)' : '');
+
+    console.log(`[Manual Summary] Generating AI Repository Summary for repo ${id}...`);
+    const summaryText = await llmService.generateRepositorySummary({
+      name: repo.name,
+      framework: repo.framework,
+      languages: repo.languages,
+      fileCount: scannedFiles.length,
+      totalSize: repo.totalSize,
+      fileTree: fileTreeStr
+    });
+
+    let cleanedJson = summaryText.trim();
+    if (cleanedJson.startsWith('```')) {
+      const lines = cleanedJson.split('\n');
+      if (lines[0].startsWith('```')) lines.shift();
+      if (lines[lines.length - 1].startsWith('```')) lines.pop();
+      cleanedJson = lines.join('\n').trim();
+    }
+    const aiSummaryObj = JSON.parse(cleanedJson);
+
+    // Save to DB
+    const updated = await prisma.repository.update({
+      where: { id: id as string },
+      data: { aiSummary: aiSummaryObj }
+    });
+
+    res.status(200).json({ success: true, data: updated.aiSummary });
+  } catch (error: any) {
+    console.error('[Manual Summary] Generation failed:', error.message);
+    next(error);
+  }
+}
+
 export const repoController = {
   scanPublicRepo,
   scanLocalZip,
@@ -1378,5 +1489,6 @@ export const repoController = {
   getChatHistory,
   getRepoInsights,
   getRepoStory,
-  getRepoOnboarding
+  getRepoOnboarding,
+  generateRepoSummaryEndpoint
 };
