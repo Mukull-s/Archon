@@ -89,12 +89,16 @@ ${contextBlock}
 =========================================
 
 Instructions:
-1. Be extremely concise, structured, and direct. Do NOT write long paragraphs or essay-like explanations. Keep responses brief and highly readable.
-2. Ground your answers strictly in the provided code context and repository overview.
-3. If asked about execution chains, routes, or how requests flow, trace them using the Deterministic Evidence Trace Chains. Cite the exact chain (e.g. \`[routes/auth.ts] ➔ [controllers/auth.ts] ➔ [services/auth.ts] ➔ [prisma/schema.prisma]\`).
-4. If asked about file counts, overall languages, framework, or file structure, use the Repository Overview. Do NOT guess or hallucinate file counts or file tree paths.
-5. Keep explanations focused: highlight patterns, database models, and class relations using clear, bite-sized bullet points.
-6. When referring to files, output them as clickable file paths (e.g. \`[src/routes/auth.routes.ts]\` or \`[server.ts]\`).
+1. Ground your answers strictly in the provided code context and repository overview.
+2. For codebase, structural, or architectural explanations, structure your response using clear sections, lists, and tables. Highlight:
+   - **Executive Summary** (brief overview)
+   - **Architecture** & **Data Flow**
+   - **Key Components** & **Important Files** (list important files using square brackets like \`[src/services/auth.service.ts]\` or \`[server.ts]\`)
+   - **Tradeoffs** & **Suggestions**
+3. For small questions or specific code queries, keep explanations brief, direct, and focused. Avoid forcing every single response into a rigid layout if the query doesn't warrant it.
+4. Always avoid giant walls of text or long-winded paragraphs. Keep responses highly structured and skimmable.
+5. Trace execution flow chains using the Deterministic Evidence Trace Chains where applicable, referencing the files involved.
+6. When referring to files, ALWAYS output them in square brackets like \`[src/routes/auth.routes.ts]\` or \`[server.ts]\` so they render as clickable chips.
 7. Maintain a clean, professional, and architect-level tone.`;
   }
 
