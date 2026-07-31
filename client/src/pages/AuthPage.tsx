@@ -27,6 +27,7 @@ export default function AuthPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isLoading) return;
     
     // Normalize email format
     const cleanEmail = email.trim().toLowerCase()
@@ -71,6 +72,7 @@ export default function AuthPage() {
   }
 
   const handleOAuth = (provider: 'github' | 'google') => {
+    if (isLoading) return;
     loginWithOAuth(provider, authMode)
   }
 

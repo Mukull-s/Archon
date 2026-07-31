@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { signup, login, getOAuthUrl, oauthCallback, verifyEmail, getMe, logout, updateProfile, changePassword } from '../controllers';
+import { signup, login, getOAuthUrl, oauthCallback, verifyEmail, getMe, logout, updateProfile, changePassword, verifyEmailToken } from '../controllers';
 import { requireAuth } from '../middlewares';
 import rateLimit from 'express-rate-limit';
 
@@ -25,6 +25,7 @@ const authLimiter = rateLimit({
  * GET   /api/auth/oauth/url?provider= → Get OAuth redirect URL
  * POST  /api/auth/oauth/callback      → Exchange OAuth code for JWT
  * POST  /api/auth/verify              → Email verification with OTP
+ * GET   /api/auth/verify/:token       → Email verification with token link
  * GET   /api/auth/me                  → Get current user (protected)
  * POST  /api/auth/logout              → Logout (protected)
  * PATCH /api/auth/profile             → Update name/avatar (protected)
@@ -35,6 +36,7 @@ router.post('/login', authLimiter, login);
 router.get('/oauth/url', getOAuthUrl);
 router.post('/oauth/callback', oauthCallback);
 router.post('/verify', verifyEmail);
+router.get('/verify/:token', verifyEmailToken);
 router.get('/me', requireAuth, getMe);
 router.post('/logout', requireAuth, logout);
 router.patch('/profile', requireAuth, updateProfile);

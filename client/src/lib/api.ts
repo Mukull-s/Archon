@@ -26,7 +26,13 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const isAuthEndpoint = error.config?.url && (
+      error.config.url.includes('/auth/login') ||
+      error.config.url.includes('/auth/signup') ||
+      error.config.url.includes('/auth/oauth/callback')
+    );
+
+    if (error.response?.status === 401 && !isAuthEndpoint) {
       // Token expired or invalid — clear auth state
       localStorage.removeItem('archon_token');
       localStorage.removeItem('archon_user');

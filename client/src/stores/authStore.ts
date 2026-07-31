@@ -27,9 +27,24 @@ interface AuthState {
   loginWithEmail: (email: string, password: string) => Promise<void>;
   loginWithOAuth: (provider: 'github' | 'google', mode: 'login' | 'signup') => Promise<void>;
   handleOAuthCallback: (provider: string, code: string, email?: string, name?: string) => Promise<void>;
-  fetchUser: () => Promise<void>;
+  fetchUser: (silent?: boolean) => Promise<void>;
   logout: () => void;
   hydrate: () => void;
+}
+
+function isTokenValid(token: string | null): boolean {
+  if (!token) return false;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    if (payload.exp && typeof payload.exp === 'number') {
+      return payload.exp * 1000 > Date.now() + 10000;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const storedToken = localStorage.getItem('archon_token');
@@ -37,7 +52,7 @@ const storedUserStr = localStorage.getItem('archon_user');
 let initialUser = null;
 let initialIsAuthenticated = false;
 
-if (storedToken && storedUserStr) {
+if (storedToken && storedUserStr && isTokenValid(storedToken)) {
   try {
     initialUser = JSON.parse(storedUserStr);
     initialIsAuthenticated = true;
@@ -45,6 +60,9 @@ if (storedToken && storedUserStr) {
     localStorage.removeItem('archon_token');
     localStorage.removeItem('archon_user');
   }
+} else if (storedToken || storedUserStr) {
+  localStorage.removeItem('archon_token');
+  localStorage.removeItem('archon_user');
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -105,6 +123,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   loginWithOAuth: async (provider, mode) => {
+    set({ isLoading: true });
     try {
       localStorage.setItem('auth_oauth_mode', mode);
 
@@ -124,10 +143,28 @@ export const useAuthStore = create<AuthState>((set) => ({
         `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
       );
 
+      if (!popup) {
+        set({ isLoading: false });
+        toast.error('Popup blocked. Please allow popups for this site.');
+        return;
+      }
+
+      const checkInterval = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkInterval);
+          window.removeEventListener('message', handleMessage);
+          if (useAuthStore.getState().isLoading) {
+            set({ isLoading: false });
+            toast.error('OAuth sign in cancelled.');
+          }
+        }
+      }, 500);
+
       // Listen for the callback from the popup
       const handleMessage = (event: MessageEvent) => {
         if (event.origin !== window.location.origin) return;
         if (event.data?.type === 'oauth_callback') {
+          clearInterval(checkInterval);
           window.removeEventListener('message', handleMessage);
           popup?.close();
 
@@ -137,15 +174,17 @@ export const useAuthStore = create<AuthState>((set) => ({
               const errMsg = err.message || '';
               if (errMsg.includes('not registered') || errMsg.includes('sign up first') || errMsg.includes('not found')) {
                 toast.error('No account registered with this email. Switched to Sign Up.');
-                set({ authMode: 'signup' });
+                set({ authMode: 'signup', isLoading: false });
               } else {
                 toast.error(errMsg || `${prov} login failed`);
+                set({ isLoading: false });
               }
             });
         }
       };
       window.addEventListener('message', handleMessage);
     } catch (err: any) {
+      set({ isLoading: false });
       console.error(`${provider} OAuth failed:`, err);
       toast.error(err.response?.data?.error?.message || `${provider} OAuth failed`);
     }
@@ -169,11 +208,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  fetchUser: async () => {
+  fetchUser: async (silent = false) => {
     const token = localStorage.getItem('archon_token');
     if (!token) return;
 
-    set({ isLoading: true });
+    if (!silent) set({ isLoading: true });
     try {
       const { data } = await api.get('/auth/me');
       set({ user: data.data.user, token, isAuthenticated: true, isLoading: false });
@@ -195,14 +234,21 @@ export const useAuthStore = create<AuthState>((set) => ({
     const token = localStorage.getItem('archon_token');
     const userStr = localStorage.getItem('archon_user');
 
-    if (token && userStr) {
+    if (token && userStr && isTokenValid(token)) {
       try {
         const user = JSON.parse(userStr) as AuthUser;
         set({ user, token, isAuthenticated: true });
+        // Silently sync user details in the background on initial app hydration
+        useAuthStore.getState().fetchUser(true).catch(() => {});
       } catch {
         localStorage.removeItem('archon_token');
         localStorage.removeItem('archon_user');
+        set({ user: null, token: null, isAuthenticated: false });
       }
+    } else if (token || userStr) {
+      localStorage.removeItem('archon_token');
+      localStorage.removeItem('archon_user');
+      set({ user: null, token: null, isAuthenticated: false });
     }
 
     // Sync multi-tab logouts and logins via storage events
@@ -212,10 +258,13 @@ export const useAuthStore = create<AuthState>((set) => ({
         if (!newToken) {
           // Token removed in another tab
           set({ user: null, token: null, isAuthenticated: false });
-          window.location.href = '/auth';
+          if (window.location.pathname !== '/' && window.location.pathname !== '/auth') {
+            const currentPath = window.location.pathname + window.location.search;
+            window.location.href = `/auth?redirect=${encodeURIComponent(currentPath)}`;
+          }
         } else {
           // Token added/changed in another tab
-          useAuthStore.getState().fetchUser();
+          useAuthStore.getState().fetchUser(true).catch(() => {});
         }
       }
     });

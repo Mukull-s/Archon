@@ -138,3 +138,34 @@ export async function changePassword(req: Request, res: Response, next: NextFunc
     res.status(200).json({ success: true, message: 'Password updated successfully' });
   } catch (err) { next(err); }
 }
+
+/** GET /api/auth/verify/:token — Verify email via token link */
+export async function verifyEmailToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      throw new AppError('Verification token is required', 400);
+    }
+    
+    // Import database configuration dynamically to avoid circular references
+    const { prisma: localPrisma } = await import('../config');
+    
+    const user = await localPrisma.user.findFirst({
+      where: { verifyToken: token as string }
+    });
+    
+    if (!user) {
+      throw new AppError('Invalid or expired verification token', 400);
+    }
+
+    await localPrisma.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true, verifyToken: null }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Email verified successfully!'
+    });
+  } catch (err) { next(err); }
+}
