@@ -1,5 +1,6 @@
 import { pipeline } from '@xenova/transformers';
 import { prisma } from '../config';
+import axios from 'axios';
 
 class VectorService {
   private embedder: any = null;
@@ -12,13 +13,69 @@ class VectorService {
   }
 
   async getEmbedding(text: string): Promise<number[]> {
-    await this.init();
-    // Generate feature embeddings (average pooled & normalized)
-    const output = await this.embedder(text, { pooling: 'mean', normalize: true });
-    return Array.from(output.data);
+    const results = await this.getEmbeddingsBatch([text]);
+    if (results.length === 0) {
+      throw new Error('Failed to generate embedding');
+    }
+    return results[0];
   }
 
   async getEmbeddingsBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    // 1. Try Gemini API
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        console.log(`[Embeddings] Generating batch of ${texts.length} using Gemini API...`);
+        const apiKey = process.env.GEMINI_API_KEY;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${apiKey}`;
+        
+        const requests = texts.map(text => ({
+          model: 'models/text-embedding-004',
+          content: { parts: [{ text }] },
+          outputDimensionality: 384
+        }));
+
+        const response = await axios.post(url, { requests }, { timeout: 15000 });
+        if (response.data?.embeddings) {
+          return response.data.embeddings.map((e: any) => e.values);
+        }
+      } catch (err: any) {
+        console.warn(`[Embeddings] Gemini API failed, trying fallback:`, err.message);
+      }
+    }
+
+    // 2. Try OpenRouter Embeddings API
+    if (process.env.OPENROUTER_API_KEY) {
+      try {
+        console.log(`[Embeddings] Generating batch of ${texts.length} using OpenRouter API...`);
+        const apiKey = process.env.OPENROUTER_API_KEY;
+        const url = 'https://openrouter.ai/api/v1/embeddings';
+
+        const response = await axios.post(url, {
+          model: 'openai/text-embedding-3-small',
+          input: texts,
+          dimensions: 384
+        }, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        });
+
+        if (response.data?.data) {
+          // Sort by index to preserve order
+          const sorted = response.data.data.sort((a: any, b: any) => a.index - b.index);
+          return sorted.map((item: any) => item.embedding);
+        }
+      } catch (err: any) {
+        console.warn(`[Embeddings] OpenRouter API failed, trying fallback:`, err.message);
+      }
+    }
+
+    // 3. Fallback to Local ONNX model (CPU-bound, memory intensive)
+    console.log(`[Embeddings] No API keys available or APIs failed. Falling back to local ONNX model...`);
     await this.init();
     const output = await this.embedder(texts, { pooling: 'mean', normalize: true });
     const result: number[][] = [];
