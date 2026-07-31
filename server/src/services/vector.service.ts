@@ -75,6 +75,10 @@ class VectorService {
     }
 
     // 3. Fallback to Local ONNX model (CPU-bound, memory intensive)
+    if (process.env.RENDER === 'true' || process.env.NODE_ENV === 'production') {
+      throw new Error('All remote embedding APIs (Gemini, OpenRouter) failed or are unconfigured. Local ONNX model fallback is disabled in production/Render to prevent server out-of-memory crashes. Please set a valid GEMINI_API_KEY or OPENROUTER_API_KEY in your environment.');
+    }
+
     console.log(`[Embeddings] No API keys available or APIs failed. Falling back to local ONNX model...`);
     await this.init();
     const output = await this.embedder(texts, { pooling: 'mean', normalize: true });
