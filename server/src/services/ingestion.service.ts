@@ -342,6 +342,7 @@ class IngestionService {
       const chunkSize = 60; // 60 lines per chunk
       for (let i = 0; i < lines.length; i += chunkSize) {
         const slice = lines.slice(i, i + chunkSize).join('\n');
+        if (!slice.trim()) continue; // Skip empty/whitespace-only chunks
         chunks.push({
           content: slice,
           startLine: i + 1,

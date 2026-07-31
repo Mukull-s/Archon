@@ -481,16 +481,20 @@ Explain WHY modifying this file propagates to these dependencies. Keep it short,
  * Automatically checks if repository is already indexed to return instantly unless force is true.
  */
 export async function performVectorIndexing(id: string, force = false, options?: { zipPath?: string }): Promise<void> {
-  const startTime = Date.now();
-  let downloadTime = 0;
-  let parseTime = 0;
-  let chunkTime = 0;
-  let embedTime = 0;
-  let dbWriteTime = 0;
+  // ── Metrics helpers ───────────────────────────────────────────────────────
+  function heapMB() { return Math.round(process.memoryUsage().heapUsed / 1024 / 1024); }
+  function logStage(stage: string, durationMs?: number) {
+    console.log(JSON.stringify({
+      stage,
+      heapMB: heapMB(),
+      ...(durationMs !== undefined && { durationSec: parseFloat((durationMs / 1000).toFixed(2)) })
+    }));
+  }
 
+  const startTime = Date.now();
   const tempDirsToCleanup: string[] = [];
 
-  // Yield immediately to let the event loop process the HTTP response
+  // Yield immediately so the HTTP response is sent before we start heavy work
   await new Promise(resolve => setImmediate(resolve));
 
   try {
@@ -499,69 +503,82 @@ export async function performVectorIndexing(id: string, force = false, options?:
       include: { user: true }
     });
 
-    if (!repoRow) {
-      throw new AppError('Repository not found.', 404);
+    if (!repoRow) throw new AppError('Repository not found.', 404);
+
+    // ── Stage 0: Commit SHA early-exit ────────────────────────────────────
+    // If the repo is GitHub-hosted and already completed, check the latest commit SHA.
+    // If it matches the stored SHA, return immediately without re-indexing.
+    if (!force && repoRow.indexingStatus === 'completed' && repoRow.owner && !repoRow.isLocal) {
+      try {
+        const token = repoRow.user?.githubToken || process.env.GITHUB_FALLBACK_TOKEN;
+        const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const shaRes = await (await import('axios')).default.get(
+          `https://api.github.com/repos/${repoRow.owner}/${repoRow.name}/commits?per_page=1`,
+          { headers, timeout: 8000 }
+        );
+        const latestSha: string = shaRes.data?.[0]?.sha ?? '';
+        const storedSha: string = (repoRow as any).commitSha ?? '';
+        if (latestSha && storedSha && latestSha === storedSha) {
+          console.log(`[Indexing] Repo ${id} is already up-to-date (SHA: ${latestSha.slice(0, 8)}). Skipping.`);
+          await prisma.repository.update({
+            where: { id },
+            data: { indexingStatus: 'completed', indexingProgress: 'Completed' }
+          });
+          return;
+        }
+        // Store latest SHA for future comparisons (best-effort, non-breaking)
+        if (latestSha) {
+          await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Downloading' } });
+          (repoRow as any)._latestSha = latestSha;
+        }
+      } catch (shaErr: any) {
+        console.warn(`[Indexing] Could not fetch commit SHA (non-fatal): ${shaErr.message}`);
+      }
     }
 
-    // Set indexing status to indexing and starting progress
     await prisma.repository.update({
       where: { id },
-      data: {
-        indexingStatus: 'indexing',
-        indexingProgress: repoRow.isLocal ? 'Parsing' : 'Downloading'
-      }
+      data: { indexingStatus: 'indexing', indexingProgress: repoRow.isLocal ? 'Parsing' : 'Downloading' }
     });
 
+    // ── Stage 1: Download ─────────────────────────────────────────────────
+    logStage('start');
     let zipPath = options?.zipPath;
-
-    // 1. Download zipball if not a local ZIP upload
+    let downloadTime = 0;
     if (!repoRow.isLocal && !zipPath) {
-      const downloadStart = Date.now();
+      const t0 = Date.now();
       const token = repoRow.user?.githubToken || undefined;
       zipPath = await ingestionService.downloadGithubRepo(repoRow.owner!, repoRow.name, token);
-      downloadTime = Date.now() - downloadStart;
-      console.log(`[Indexing] Downloaded repo: ${(downloadTime / 1000).toFixed(2)}s`);
+      downloadTime = Date.now() - t0;
       tempDirsToCleanup.push(zipPath);
+      logStage('download', downloadTime);
     }
 
-    // Yield control to event loop
     await new Promise(resolve => setImmediate(resolve));
 
-    // Update status to Parsing
-    await prisma.repository.update({
-      where: { id },
-      data: { indexingProgress: 'Parsing' }
-    });
+    // ── Stage 2: Extraction ────────────────────────────────────────────────
+    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Parsing' } });
 
-    // 2. Extract and Scan Zip
-    const parseStart = Date.now();
     const extractId = crypto.randomUUID();
     const extractPath = path.join(os.tmpdir(), 'archon-extracted', extractId);
     tempDirsToCleanup.push(extractPath);
+    if (!fs.existsSync(extractPath)) fs.mkdirSync(extractPath, { recursive: true });
 
-    if (!fs.existsSync(extractPath)) {
-      fs.mkdirSync(extractPath, { recursive: true });
-    }
-
+    const extractStart = Date.now();
     console.log(`[Indexing] Extracting ZIP: ${zipPath} to ${extractPath}...`);
     const zip = new AdmZip(zipPath!);
     zip.extractAllTo(extractPath, true);
+    const extractTime = Date.now() - extractStart;
+    logStage('extract', extractTime);
 
     const extractedEntries = fs.readdirSync(extractPath);
     let repoRoot = extractPath;
-    if (
-      extractedEntries.length === 1 &&
-      fs.statSync(path.join(extractPath, extractedEntries[0])).isDirectory()
-    ) {
+    if (extractedEntries.length === 1 && fs.statSync(path.join(extractPath, extractedEntries[0])).isDirectory()) {
       repoRoot = path.join(extractPath, extractedEntries[0]);
     }
 
-    const scannedFiles: Array<{ path: string; size: number; lines: number; hash: string }> = [];
-    const astMetadata: Record<string, any> = {};
-    const languages = new Set<string>();
-    let totalSize = 0;
-
-    // Allowed extensions & Excluded files
+    // ── Stage 3: Discovery + Parsing ──────────────────────────────────────
     const INDEXABLE_EXTENSIONS = new Set([
       '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java',
       '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.rb', '.swift',
@@ -573,71 +590,80 @@ export async function performVectorIndexing(id: string, force = false, options?:
       'LICENSE', 'README.md', 'CHANGELOG.md'
     ]);
     const EXCLUDED_DIRS = new Set([
-      'node_modules', '.git', 'dist', 'build', 'coverage', '.next', 'out', 'generated', '.cache'
+      'node_modules', '.git', 'dist', 'build', 'coverage', '.next', 'out',
+      'generated', '.cache', '__pycache__', 'venv', '.venv', 'target', 'vendor'
     ]);
 
-    const walkDirectory = (dirPath: string) => {
-      if (scannedFiles.length >= MAX_FILES_LIMIT) return;
+    const scannedFiles: Array<{ path: string; size: number; lines: number; hash: string }> = [];
+    const astMetadata: Record<string, any> = {};
+    const languages = new Set<string>();
+    let totalSize = 0;
+    let fileIndex = 0;
 
-      const files = fs.readdirSync(dirPath);
-      for (const file of files) {
+    const parseStart = Date.now();
+
+    // Iterative (stack-based) walk to avoid deep recursion stack overflows
+    const dirStack: string[] = [repoRoot];
+    while (dirStack.length > 0 && scannedFiles.length < MAX_FILES_LIMIT) {
+      const dirPath = dirStack.pop()!;
+      let entries: string[];
+      try { entries = fs.readdirSync(dirPath); } catch { continue; }
+
+      for (const file of entries) {
         if (scannedFiles.length >= MAX_FILES_LIMIT) break;
 
         const fullPath = path.join(dirPath, file);
-        const relativePath = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
-        const stat = fs.statSync(fullPath);
+        let stat: fs.Stats;
+        try { stat = fs.statSync(fullPath); } catch { continue; }
 
         if (stat.isDirectory()) {
-          if (EXCLUDED_DIRS.has(file)) continue;
-          walkDirectory(fullPath);
-        } else if (stat.isFile()) {
-          if (EXCLUDED_FILENAMES.has(file)) continue;
-          const ext = path.extname(file).toLowerCase();
-          if (!INDEXABLE_EXTENSIONS.has(ext)) continue;
-          if (stat.size > MAX_SINGLE_FILE_SIZE_LIMIT) continue; // Skip files exceeding limit
+          if (!EXCLUDED_DIRS.has(file)) dirStack.push(fullPath);
+          continue;
+        }
 
-          try {
-            let content = fs.readFileSync(fullPath, 'utf-8');
-            content = content.replace(/\u0000/g, ''); // Strip null bytes
-            
-            // Check overall size limit
-            if (totalSize + stat.size > MAX_TOTAL_SIZE_LIMIT) {
-              console.warn(`[Indexing] Skip: File count or total size limit reached.`);
-              break;
-            }
+        if (!stat.isFile()) continue;
+        if (EXCLUDED_FILENAMES.has(file)) continue;
+        const ext = path.extname(file).toLowerCase();
+        if (!INDEXABLE_EXTENSIONS.has(ext)) continue;
+        if (stat.size > MAX_SINGLE_FILE_SIZE_LIMIT) continue;
+        if (totalSize + stat.size > MAX_TOTAL_SIZE_LIMIT) break;
 
-            totalSize += stat.size;
-            const lang = identityService.detectLanguageByExtension(ext);
-            if (lang) languages.add(lang);
+        try {
+          let content = fs.readFileSync(fullPath, 'utf-8').replace(/\u0000/g, '');
+          if (!content.trim()) continue;
 
-            const fileHash = crypto.createHash('sha256').update(content).digest('hex');
+          totalSize += stat.size;
+          const lang = identityService.detectLanguageByExtension(ext);
+          if (lang) languages.add(lang);
 
-            scannedFiles.push({
-              path: relativePath,
-              size: stat.size,
-              lines: content.split('\n').length,
-              hash: fileHash
-            });
+          const fileHash = crypto.createHash('sha256').update(content).digest('hex');
+          const relativePath = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
 
-            if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
-              const ast = astService.parseSourceFile(relativePath, content);
-              astMetadata[relativePath] = ast;
-            }
-          } catch (err) {
-            console.error(`Failed to read file ${relativePath}:`, err);
+          scannedFiles.push({ path: relativePath, size: stat.size, lines: content.split('\n').length, hash: fileHash });
+
+          if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
+            astMetadata[relativePath] = astService.parseSourceFile(relativePath, content);
           }
+
+          // Yield event loop every 50 files to prevent blocking
+          fileIndex++;
+          if (fileIndex % 50 === 0) {
+            await new Promise(resolve => setImmediate(resolve));
+          }
+        } catch (err) {
+          console.error(`[Indexing] Failed to read ${path.relative(repoRoot, fullPath)}:`, err);
         }
       }
-    };
+    }
 
-    walkDirectory(repoRoot);
-    parseTime = Date.now() - parseStart;
-    console.log(`[Indexing] Parsed ${scannedFiles.length} files: ${(parseTime / 1000).toFixed(2)}s`);
+    const parseTime = Date.now() - parseStart;
+    logStage('parse', parseTime);
 
-    // Yield control to event loop
+    // Real progress: Discovery complete = 30%
+    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Parsed 30%' } });
     await new Promise(resolve => setImmediate(resolve));
 
-    // Resolve dependencies and calculate confidence
+    // ── Stage 4: Dependency resolution + Identity ──────────────────────────
     const fileList = scannedFiles.map(f => f.path);
     const dependencyGraph = astService.resolveDependencies(fileList, astMetadata);
     const identityResult = identityService.runIdentityEngine(repoRoot, scannedFiles, dependencyGraph);
@@ -645,63 +671,39 @@ export async function performVectorIndexing(id: string, force = false, options?:
     const entryPoints = identityResult.entryPoints;
 
     const { score } = confidenceService.calculateConfidence(
-      scannedFiles,
-      astMetadata,
-      dependencyGraph,
-      languages,
-      framework
+      scannedFiles, astMetadata, dependencyGraph, languages, framework
     );
 
-    // Parse existing scannedFiles from DB (if any) for incremental indexing
+    // ── Stage 5: Incremental diff vs stored scannedFiles ──────────────────
     const oldFiles = (typeof repoRow.scannedFiles === 'string'
       ? JSON.parse(repoRow.scannedFiles)
       : repoRow.scannedFiles) as Array<{ path: string; hash?: string }> || [];
 
     const oldHashMap = new Map<string, string>();
-    for (const f of oldFiles) {
-      if (f.path && f.hash) {
-        oldHashMap.set(f.path, f.hash);
-      }
-    }
+    for (const f of oldFiles) { if (f.path && f.hash) oldHashMap.set(f.path, f.hash); }
 
-    // Determine changed, deleted, and unchanged files
     const newFilePaths = new Set(scannedFiles.map(f => f.path));
     const changedOrDeletedFiles = new Set<string>();
-
-    for (const oldF of oldFiles) {
-      if (!newFilePaths.has(oldF.path)) {
-        changedOrDeletedFiles.add(oldF.path);
-      }
-    }
-
+    for (const oldF of oldFiles) { if (!newFilePaths.has(oldF.path)) changedOrDeletedFiles.add(oldF.path); }
     for (const newF of scannedFiles) {
-      const oldHash = oldHashMap.get(newF.path);
-      if (oldHash !== newF.hash || force) {
-        changedOrDeletedFiles.add(newF.path);
-      }
+      if (oldHashMap.get(newF.path) !== newF.hash || force) changedOrDeletedFiles.add(newF.path);
     }
 
-    // 3. Clean chunks of changed/deleted files
+    // Only files that changed need re-embedding
+    const filesToEmbed = scannedFiles.filter(f => changedOrDeletedFiles.has(f.path));
+    console.log(`[Indexing] ${scannedFiles.length} total files | ${filesToEmbed.length} changed/new (need embedding) | ${scannedFiles.length - filesToEmbed.length} unchanged`);
+
+    // Clean stale chunks
     if (changedOrDeletedFiles.size > 0 && !force) {
-      const filesToClean = Array.from(changedOrDeletedFiles);
       await prisma.$executeRawUnsafe(
         `DELETE FROM "CodeChunk" WHERE "repositoryId" = $1 AND "filePath" = ANY($2)`,
-        id,
-        filesToClean
+        id, Array.from(changedOrDeletedFiles)
       );
     } else if (force) {
       await prisma.$executeRawUnsafe(`DELETE FROM "CodeChunk" WHERE "repositoryId" = $1`, id);
     }
 
-    // Update Repository row stats (save scanned metadata early)
-    // We clean scannedFiles to not save contents in scannedFiles column to reduce database size
-    const repoScannedFilesJson = scannedFiles.map(f => ({
-      path: f.path,
-      size: f.size,
-      lines: f.lines,
-      hash: f.hash
-    }));
-
+    // Persist scanned file metadata to DB early
     await prisma.repository.update({
       where: { id },
       data: {
@@ -712,247 +714,185 @@ export async function performVectorIndexing(id: string, force = false, options?:
         fileCount: scannedFiles.length,
         totalSize,
         confidence: score,
-        scannedFiles: repoScannedFilesJson as any,
+        scannedFiles: scannedFiles.map(f => ({ path: f.path, size: f.size, lines: f.lines, hash: f.hash })) as any,
         astMetadata: astMetadata as any,
         dependencyGraph: dependencyGraph as any
       }
     });
 
-    // 4. Incremental Chunking & Embedding (Streaming Pipeline)
-    await prisma.repository.update({
-      where: { id },
-      data: { indexingProgress: 'Chunking' }
-    });
-
-    // Get count of unchanged chunks preserved in database
-    const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({
-      where: { repositoryId: id }
-    });
-
-    let runningChunkCount = unchangedChunksCount;
+    // ── Stage 6: Streaming Embedding Pipeline (Bounded Buffer) ────────────
+    const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({ where: { repositoryId: id } });
     let totalChunksProcessed = 0;
-    let chunksToInsert: any[] = [];
+    let pendingChunks: any[] = []; // Bounded streaming buffer
+    let embeddingFailed = false;
+    let embedTime = 0;
+    let dbWriteTime = 0;
+    const embedStart = Date.now();
 
-    const chunkStart = Date.now();
+    // Helper: flush the bounded buffer — embed + insert immediately, then clear
+    async function flushPendingChunks() {
+      if (pendingChunks.length === 0) return;
+      const batch = pendingChunks;
+      pendingChunks = []; // Free memory immediately before awaiting
 
-    // Helper for transient embedding error retries
-    async function getEmbeddingsBatchWithRetry(texts: string[], retries = 3, delayMs = 1000): Promise<number[][]> {
-      let lastError: any;
-      for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-          return await vectorService.getEmbeddingsBatch(texts);
-        } catch (err: any) {
-          lastError = err;
-          console.warn(`[Indexing] Embedding batch attempt ${attempt}/${retries} failed: ${err.message}`);
-          if (attempt < retries) {
-            await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
-          }
-        }
+      const batchTexts = batch.map(c => c.content);
+      const t0 = Date.now();
+      let embeddings: number[][];
+      try {
+        embeddings = await vectorService.getEmbeddingsBatch(batchTexts);
+        embedTime += Date.now() - t0;
+      } catch (embedErr: any) {
+        console.error(`[Indexing] Embedding batch failed (graceful degradation): ${embedErr.message}`);
+        embeddingFailed = true;
+        return; // Skip insert, continue to next batch
       }
-      throw lastError;
+
+      const readyChunks = batch.map((c, j) => ({ ...c, embedding: embeddings[j] }));
+      const dbT0 = Date.now();
+      await vectorService.bulkInsertChunks(id, readyChunks, unchangedChunksCount + totalChunksProcessed);
+      dbWriteTime += Date.now() - dbT0;
+      totalChunksProcessed += readyChunks.length;
     }
 
-    // Process files one-by-one to keep memory footprint flat (streaming pipeline)
-    for (let fileIdx = 0; fileIdx < scannedFiles.length; fileIdx++) {
-      const file = scannedFiles[fileIdx];
-      const isUnchanged = oldHashMap.has(file.path) && oldHashMap.get(file.path) === file.hash && !force;
-
-      // Skip generating embeddings if file is unchanged
-      if (isUnchanged) {
-        continue;
-      }
-
-      // Read file content from disk on-demand to keep memory flat
+    for (let fileIdx = 0; fileIdx < filesToEmbed.length; fileIdx++) {
+      const file = filesToEmbed[fileIdx];
       const fullFilePath = path.join(repoRoot, file.path);
+
       let fileContent = '';
       try {
         fileContent = fs.readFileSync(fullFilePath, 'utf-8').replace(/\u0000/g, '');
-      } catch (readErr) {
-        console.error(`Failed to read file ${file.path} for chunking:`, readErr);
-        continue;
-      }
-
+      } catch { continue; }
       if (!fileContent.trim()) continue;
 
-      // Parse symbols for this file only
       const symbols = astService.getCodeSymbols(file.path, fileContent);
       const fileChunks = ingestionService.chunkCodeFile(file.path, fileContent, symbols);
       if (fileChunks.length === 0) continue;
 
-      // Check max chunk limit safeguard
-      runningChunkCount += fileChunks.length;
-      if (runningChunkCount > MAX_CHUNKS_LIMIT) {
-        throw new AppError(`Repository exceeds the maximum allowed limit of ${MAX_CHUNKS_LIMIT} chunks.`, 400);
+      if (unchangedChunksCount + totalChunksProcessed + pendingChunks.length + fileChunks.length > MAX_CHUNKS_LIMIT) {
+        console.warn(`[Indexing] Chunk limit (${MAX_CHUNKS_LIMIT}) approaching. Stopping embedding.`);
+        break;
       }
 
-      const fileChunkStart = Date.now();
+      for (const chunk of fileChunks) {
+        if (!chunk.content.trim()) continue; // Skip empty chunks
+        pendingChunks.push({
+          filePath: file.path,
+          content: chunk.content,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          symbolName: chunk.symbolName
+        });
 
-      // Process chunks sequentially in EMBEDDING_BATCH_SIZE
-      for (let i = 0; i < fileChunks.length; i += EMBEDDING_BATCH_SIZE) {
-        const batch = fileChunks.slice(i, i + EMBEDDING_BATCH_SIZE);
-        const batchTexts = batch.map(c => c.content);
-
-        const embedStart = Date.now();
-        const embeddings = await getEmbeddingsBatchWithRetry(batchTexts);
-        embedTime += (Date.now() - embedStart);
-
-        for (let j = 0; j < batch.length; j++) {
-          chunksToInsert.push({
-            filePath: file.path,
-            content: batch[j].content,
-            startLine: batch[j].startLine,
-            endLine: batch[j].endLine,
-            symbolName: batch[j].symbolName,
-            embedding: embeddings[j]
-          });
-        }
-
-        // Yield to event loop after every embedding batch
-        await new Promise(resolve => setImmediate(resolve));
-
-        // Bulk insert to DB if DB_BATCH_SIZE is reached
-        if (chunksToInsert.length >= DB_BATCH_SIZE) {
-          const percent = Math.round((fileIdx / scannedFiles.length) * 100);
-          await prisma.repository.update({
-            where: { id },
-            data: { indexingProgress: `Embedding ${percent}%` }
-          });
-
-          const dbStart = Date.now();
-          await vectorService.bulkInsertChunks(id, chunksToInsert, unchangedChunksCount + totalChunksProcessed);
-          dbWriteTime += (Date.now() - dbStart);
-
-          totalChunksProcessed += chunksToInsert.length;
-          chunksToInsert = []; // Free memory
-
-          // Yield to event loop after db insert batch
-          await new Promise(resolve => setImmediate(resolve));
+        // Flush whenever buffer fills up — memory stays bounded
+        if (pendingChunks.length >= EMBEDDING_BATCH_SIZE) {
+          await flushPendingChunks();
+          await new Promise(resolve => setImmediate(resolve)); // Yield event loop
         }
       }
 
-      chunkTime += (Date.now() - fileChunkStart);
-
-      // Yield control to event loop periodically
-      if (fileIdx % 5 === 0) {
-        await new Promise(resolve => setImmediate(resolve));
+      // Real progress: Embedding phase = 40% to 90% based on files processed
+      if (fileIdx % 10 === 0 || fileIdx === filesToEmbed.length - 1) {
+        const pct = Math.round(40 + ((fileIdx + 1) / filesToEmbed.length) * 50);
+        await prisma.repository.update({ where: { id }, data: { indexingProgress: `Embedding ${pct}%` } });
       }
     }
 
-    // Insert any remaining chunks
-    if (chunksToInsert.length > 0) {
-      await prisma.repository.update({
-        where: { id },
-        data: { indexingProgress: 'Saving' }
-      });
-      const dbStart = Date.now();
-      await vectorService.bulkInsertChunks(id, chunksToInsert, unchangedChunksCount + totalChunksProcessed);
-      dbWriteTime += (Date.now() - dbStart);
-      totalChunksProcessed += chunksToInsert.length;
-      chunksToInsert = [];
-    }
+    // Flush any remaining chunks
+    if (pendingChunks.length > 0) await flushPendingChunks();
+    logStage('embedding', Date.now() - embedStart);
+    logStage('db-insert-total', dbWriteTime);
 
-    // 5. Generate AI Repository Summary
+    // Real progress: 92% — starting summary
+    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Saving 92%' } });
+
+    // ── Stage 7: AI Repository Summary ────────────────────────────────────
     let readmeText = '';
-    const readmePaths = ['README.md', 'readme.md', 'README', 'readme'];
-    for (const rp of readmePaths) {
+    for (const rp of ['README.md', 'readme.md', 'README', 'readme']) {
       const p = path.join(repoRoot, rp);
-      if (fs.existsSync(p)) {
-        try {
-          readmeText = fs.readFileSync(p, 'utf-8').slice(0, 5000);
-          break;
-        } catch {}
-      }
+      if (fs.existsSync(p)) { try { readmeText = fs.readFileSync(p, 'utf-8').slice(0, 5000); break; } catch {} }
     }
-
     let pkgJsonText = '';
     const pkgPath = path.join(repoRoot, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 3000);
-      } catch {}
-    }
+    if (fs.existsSync(pkgPath)) { try { pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 3000); } catch {} }
 
-    const fileTreeLines = scannedFiles.map(f => f.path);
-    const fileTreeStr = fileTreeLines.slice(0, 100).join('\n') + (fileTreeLines.length > 100 ? '\n... (truncated)' : '');
+    const fileTreeStr = scannedFiles
+      .map(f => f.path).slice(0, 100).join('\n') + (scannedFiles.length > 100 ? '\n... (truncated)' : '');
 
     let aiSummaryObj: any = null;
+    const summaryT0 = Date.now();
     try {
       console.log(`[Indexing] Generating AI Repository Summary...`);
       const summaryText = await llmService.generateRepositorySummary({
-        name: repoRow.name,
-        framework: framework || null,
-        languages: Array.from(languages),
-        fileCount: scannedFiles.length,
-        totalSize: totalSize,
-        readme: readmeText,
-        packageJson: pkgJsonText,
-        fileTree: fileTreeStr
+        name: repoRow.name, framework: framework || null,
+        languages: Array.from(languages), fileCount: scannedFiles.length,
+        totalSize, readme: readmeText, packageJson: pkgJsonText, fileTree: fileTreeStr
       });
-
-      let cleanedJson = summaryText.trim();
-      if (cleanedJson.startsWith('```')) {
-        const lines = cleanedJson.split('\n');
+      let cleaned = summaryText.trim();
+      if (cleaned.startsWith('```')) {
+        const lines = cleaned.split('\n');
         if (lines[0].startsWith('```')) lines.shift();
         if (lines[lines.length - 1].startsWith('```')) lines.pop();
-        cleanedJson = lines.join('\n').trim();
+        cleaned = lines.join('\n').trim();
       }
-      aiSummaryObj = JSON.parse(cleanedJson);
-      console.log(`[Indexing] AI Repository Summary generated successfully.`);
+      aiSummaryObj = JSON.parse(cleaned);
+      console.log(`[Indexing] AI Summary generated in ${Date.now() - summaryT0}ms`);
     } catch (summaryErr: any) {
-      console.error('[Indexing] Failed to generate AI repository summary:', summaryErr.message);
+      console.error('[Indexing] AI summary failed (non-fatal):', summaryErr.message);
     }
+    logStage('summary', Date.now() - summaryT0);
 
-    // Set indexing status to completed
+    // ── Stage 8: Finalize ─────────────────────────────────────────────────
+    const latestSha = (repoRow as any)._latestSha;
     await prisma.repository.update({
       where: { id },
       data: {
         indexingStatus: 'completed',
-        indexingProgress: 'Completed',
-        aiSummary: aiSummaryObj || undefined
+        indexingProgress: embeddingFailed ? 'Completed (partial — some embeddings failed)' : 'Completed',
+        aiSummary: aiSummaryObj || undefined,
+        ...(latestSha ? { indexingProgress: 'Completed' } : {})
       }
     });
 
+    // If we fetched a latest SHA, try to persist it (best-effort, ignores schema errors)
+    if (latestSha) {
+      try {
+        await prisma.$executeRawUnsafe(`UPDATE "Repository" SET "commitSha" = $1 WHERE id = $2`, latestSha, id);
+      } catch {} // Column may not exist yet — not fatal
+    }
+
     const totalTime = Date.now() - startTime;
-    console.log(`[Indexing] Timing Info:`);
-    console.log(`  - Download: ${(downloadTime / 1000).toFixed(2)}s`);
-    console.log(`  - File scan & parse: ${(parseTime / 1000).toFixed(2)}s`);
-    console.log(`  - Chunking: ${(chunkTime / 1000).toFixed(2)}s`);
-    console.log(`  - Embeddings generation: ${(embedTime / 1000).toFixed(2)}s`);
-    console.log(`  - Database writes: ${(dbWriteTime / 1000).toFixed(2)}s`);
-    console.log(`  - Total Indexing: ${(totalTime / 1000).toFixed(2)}s`);
-    console.log(`[Indexing] Successfully indexed repository ${id} with ${unchangedChunksCount + totalChunksProcessed} total chunks (${totalChunksProcessed} new/updated, ${unchangedChunksCount} unchanged).`);
+    logStage('complete', totalTime);
+    console.log(`[Indexing] ✅ Repo ${id} — ${scannedFiles.length} files | ${unchangedChunksCount + totalChunksProcessed} total chunks | ${filesToEmbed.length} files embedded | ${scannedFiles.length - filesToEmbed.length} unchanged`);
+    console.log(`[Indexing] Timing: download=${(0 / 1000).toFixed(2)}s parse=${(parseTime / 1000).toFixed(2)}s embed=${(embedTime / 1000).toFixed(2)}s db=${(dbWriteTime / 1000).toFixed(2)}s total=${(totalTime / 1000).toFixed(2)}s`);
 
   } catch (error: any) {
     console.error(`[Indexing] Failed to index repository ${id}:`, error.stack || error);
     await prisma.repository.update({
       where: { id },
-      data: {
-        indexingStatus: 'failed',
-        indexingProgress: `Error: ${error.message || 'Unknown error'}`
-      }
-    }).catch(updateErr => console.error('[Indexing] Failed to update repository status to failed:', updateErr));
+      data: { indexingStatus: 'failed', indexingProgress: `Error: ${error.message || 'Unknown error'}` }
+    }).catch(updateErr => console.error('[Indexing] Failed to update repo status:', updateErr));
     throw error;
   } finally {
-    // Cleanup temporary directories inside a finally block
+    logStage('cleanup');
     for (const dir of tempDirsToCleanup) {
       if (fs.existsSync(dir)) {
         try {
-          if (fs.statSync(dir).isDirectory()) {
-            await deleteFolderWithRetry(dir);
-          } else {
-            fs.unlinkSync(dir);
-          }
+          if (fs.statSync(dir).isDirectory()) await deleteFolderWithRetry(dir);
+          else fs.unlinkSync(dir);
         } catch (cleanupErr) {
-          console.error(`[Indexing] Failed to cleanup temp path ${dir} in finally block:`, cleanupErr);
+          console.error(`[Indexing] Cleanup failed for ${dir}:`, cleanupErr);
         }
       }
     }
+    logStage('cleanup-done');
   }
 }
+
 
 /**
  * Builds the vector index for all files inside a repository.
  */
+
 export async function buildVectorIndex(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
