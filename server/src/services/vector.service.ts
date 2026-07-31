@@ -25,7 +25,22 @@ class VectorService {
 
     // Sanitize: replace empty/whitespace-only texts to avoid API 400 errors
     const sanitized = texts.map(t => (t && t.trim().length > 0 ? t : ' '));
-    const payloadKB = Math.round(sanitized.join('').length / 1024);
+
+    // Payload guard: if the batch is over 200KB, recursively split into halves.
+    // OpenRouter (and Gemini) reject payloads above ~256KB with a 400 error.
+    const MAX_PAYLOAD_BYTES = 200 * 1024; // 200KB safe ceiling
+    const totalBytes = sanitized.reduce((n, t) => n + Buffer.byteLength(t, 'utf8'), 0);
+    if (totalBytes > MAX_PAYLOAD_BYTES && sanitized.length > 1) {
+      const mid = Math.ceil(sanitized.length / 2);
+      console.log(`[Embeddings] Payload ${Math.round(totalBytes / 1024)}KB > limit — splitting ${sanitized.length} into ${mid}+${sanitized.length - mid}`);
+      const [leftEmbeds, rightEmbeds] = await Promise.all([
+        this.getEmbeddingsBatch(sanitized.slice(0, mid)),
+        this.getEmbeddingsBatch(sanitized.slice(mid))
+      ]);
+      return [...leftEmbeds, ...rightEmbeds];
+    }
+
+    const payloadKB = Math.round(totalBytes / 1024);
 
     // 1. Try Gemini API
     if (process.env.GEMINI_API_KEY) {
@@ -34,7 +49,7 @@ class VectorService {
         console.log(`[Embeddings] Generating batch of ${sanitized.length} via Gemini (~${payloadKB}KB)...`);
         const apiKey = process.env.GEMINI_API_KEY;
         const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${apiKey}`;
-        
+
         const requests = sanitized.map(text => ({
           model: 'models/text-embedding-004',
           content: { parts: [{ text }] },
@@ -105,7 +120,7 @@ class VectorService {
 
   async searchSimilarChunks(repositoryId: string, queryVector: number[], limit = 6) {
     const vectorStr = `[${queryVector.join(',')}]`;
-    
+
     // Query Neon database for similar chunks using pgvector cosine distance (<=>)
     const results = await prisma.$queryRawUnsafe<any[]>(
       `SELECT id, "filePath", "content", "startLine", "endLine", "symbolName",
