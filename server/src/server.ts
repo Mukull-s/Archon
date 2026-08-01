@@ -1,6 +1,7 @@
 import { createApp } from './app';
 import { env } from './config';
 import { logger } from './utils';
+import './services/embedding.service';
 
 
 const app = createApp();
