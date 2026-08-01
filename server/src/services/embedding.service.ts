@@ -117,7 +117,8 @@ class EmbeddingService implements IEmbeddingService {
         this.metrics.successfulCalls += 1;
         this.metrics.totalLatencyMs += (Date.now() - t0);
 
-        const promptTokens = response.usage?.prompt_tokens || Math.round(texts.reduce((acc, t) => acc + t.length, 0) / 4);
+        const usage = response.usage as any;
+        const promptTokens = usage?.prompt_tokens || usage?.promptTokens || usage?.totalTokens || Math.round(texts.reduce((acc, t) => acc + t.length, 0) / 4);
         console.log(`[Embedding] Batch ${currentBatchIdx}/${totalBatches} completed successfully. Chunks: ${texts.length} | Tokens: ${promptTokens} | Latency: ${Date.now() - t0}ms`);
 
         if (response.data) {
