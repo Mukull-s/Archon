@@ -25,6 +25,7 @@ export function createApp(): express.Application {
   app.use(helmet({
     contentSecurityPolicy: env.NODE_ENV === 'production' ? undefined : false,
     crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,       // Required for OAuth popup flow (postMessage + window.closed)
   }));
 
   app.use(cors({

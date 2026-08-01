@@ -4,11 +4,7 @@ import repoRoutes from './repo.routes';
 
 const router = Router();
 
-/**
- * Health check endpoint.
- * Used by uptime monitors, load balancers, and deployment platforms
- * to verify the server is alive and responsive.
- */
+
 router.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({
     success: true,
