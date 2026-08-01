@@ -164,7 +164,7 @@ export default function HeroSection() {
     const pollInterval = setInterval(async () => {
       try {
         const repoId = backendDataRef.current.id
-        const { data } = await api.get(`/repos/${repoId}`)
+        const { data } = await api.get(`/repos/${repoId}?lite=true`)
         const repo = data.data
 
         if (repo.indexingStatus === 'completed') {

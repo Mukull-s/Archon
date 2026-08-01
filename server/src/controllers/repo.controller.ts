@@ -290,15 +290,17 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+    const lite = req.query.lite === 'true';
+
     let repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
         id: true, name: true, owner: true, isLocal: true, framework: true,
         languages: true, fileCount: true, totalSize: true, confidence: true,
-        scannedFiles: true, astMetadata: true, dependencyGraph: true,
         entryPoints: true, indexingStatus: true, indexingProgress: true,
         aiSummary: true,
-        createdAt: true, updatedAt: true
+        createdAt: true, updatedAt: true,
+        ...(lite ? {} : { scannedFiles: true, astMetadata: true, dependencyGraph: true })
       }
     });
     if (!repo) {
@@ -319,26 +321,41 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
           select: {
             id: true, name: true, owner: true, isLocal: true, framework: true,
             languages: true, fileCount: true, totalSize: true, confidence: true,
-            scannedFiles: true, astMetadata: true, dependencyGraph: true,
             entryPoints: true, indexingStatus: true, indexingProgress: true,
             aiSummary: true,
-            createdAt: true, updatedAt: true
+            createdAt: true, updatedAt: true,
+            ...(lite ? {} : { scannedFiles: true, astMetadata: true, dependencyGraph: true })
           }
         });
       }
     }
 
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as any[];
+    if (lite) {
+      res.status(200).json({
+        success: true,
+        data: {
+          ...repo,
+          isIndexed: repo.indexingStatus === 'completed',
+          scannedFiles: [],
+          astMetadata: {},
+          dependencyGraph: {},
+          confidenceDetails: { score: repo.confidence, checks: [] }
+        }
+      });
+      return;
+    }
 
-    const astMetadata = (typeof repo.astMetadata === 'string'
-      ? JSON.parse(repo.astMetadata)
-      : repo.astMetadata) as Record<string, any>;
+    const scannedFiles = (typeof (repo as any).scannedFiles === 'string'
+      ? JSON.parse((repo as any).scannedFiles)
+      : (repo as any).scannedFiles) as any[];
 
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
+    const astMetadata = (typeof (repo as any).astMetadata === 'string'
+      ? JSON.parse((repo as any).astMetadata)
+      : (repo as any).astMetadata) as Record<string, any>;
+
+    const dependencyGraph = (typeof (repo as any).dependencyGraph === 'string'
+      ? JSON.parse((repo as any).dependencyGraph)
+      : (repo as any).dependencyGraph) as Record<string, string[]>;
 
     const confidenceDetails = confidenceService.calculateConfidence(
       scannedFiles,

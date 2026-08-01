@@ -106,7 +106,7 @@ export default function ChatConsole({
   useEffect(() => {
     const fetchRepoInfo = async () => {
       try {
-        const { data } = await api.get(`/repos/${repositoryId}`);
+        const { data } = await api.get(`/repos/${repositoryId}?lite=true`);
         if (data.data) {
           const repository = data.data;
           setRepoInfo({
