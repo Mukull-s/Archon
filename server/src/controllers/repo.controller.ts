@@ -894,16 +894,21 @@ export async function performVectorIndexing(id: string, force = false, options?:
     
     // Fetch Voyage AI embedding metrics
     const embedMetrics = embeddingService.getAndResetMetrics();
-    const avgLatency = embedMetrics.apiCalls > 0 ? Math.round(embedMetrics.totalLatencyMs / embedMetrics.apiCalls) : 0;
+    const totalCalls = embedMetrics.successfulCalls + embedMetrics.failedCalls;
+    const avgLatency = totalCalls > 0 ? Math.round(embedMetrics.totalLatencyMs / totalCalls) : 0;
 
     console.log(`\n==================================================`);
     console.log(`[Benchmark] Indexing Finished`);
     console.log(`Repository: ${repoRow.name}`);
     console.log(`Files: ${scannedFiles.length}`);
     console.log(`Chunks: ${unchangedChunksCount + totalChunksProcessed}`);
-    console.log(`Embedding Calls: ${embedMetrics.apiCalls}`);
+    console.log(`Successful API Calls: ${embedMetrics.successfulCalls}`);
+    console.log(`Failed API Calls: ${embedMetrics.failedCalls}`);
+    console.log(`Retry Attempts: ${embedMetrics.retries}`);
+    console.log(`Rate Limit (429) Responses: ${embedMetrics.rateLimitResponses}`);
+    console.log(`Total Backoff Sleep Time: ${(embedMetrics.totalBackoffMs / 1000).toFixed(2)}s`);
+    console.log(`Actual API Call Latency: ${(embedMetrics.totalLatencyMs / 1000).toFixed(2)}s`);
     console.log(`Average API Latency: ${avgLatency}ms`);
-    console.log(`Total Embedding Time: ${(embedTime / 1000).toFixed(2)}s`);
     console.log(`Total Index Time: ${(totalTime / 1000).toFixed(2)}s`);
     console.log(`==================================================\n`);
 
