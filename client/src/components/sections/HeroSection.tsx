@@ -346,7 +346,7 @@ export default function HeroSection() {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.95, duration: 0.5 }}
             style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '48px' }}>
             <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)', alignSelf: 'center', fontWeight: 500 }}>Try:</span>
-            {['vercel/next.js', 'facebook/react', 'microsoft/vscode'].map((repo) => (
+            {['expressjs/express', 'reduxjs/redux', 'facebook/flux'].map((repo) => (
               <button key={repo} onClick={() => setRepoUrl(`github.com/${repo}`)}
                 style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)',
                   borderRadius: '100px', padding: '4px 14px', color: 'rgba(255,255,255,0.85)',
