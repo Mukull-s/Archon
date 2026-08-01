@@ -82,8 +82,8 @@ model CodeChunk {
   endLine      Int
   symbolName   String?  // Name of class, function, or "file-level"
   
-  // 384-dimension vector matching Xenova/all-MiniLM-L6-v2
-  embedding    Unsupported("vector(384)")? 
+  // 512-dimension vector matching Voyage AI voyage-code-3
+  embedding    Unsupported("vector(512)")? 
   
   createdAt    DateTime @default(now())
 
