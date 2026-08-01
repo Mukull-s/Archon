@@ -38,6 +38,41 @@ export default function OverviewTab({
   });
 
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [showManualButton, setShowManualButton] = useState(false);
+
+  useEffect(() => {
+    if (!repoDetails || repoDetails.aiSummary || repoDetails.indexingStatus !== 'completed') return;
+
+    // Show manual fallback button after 20 seconds of polling
+    const timer = setTimeout(() => {
+      setShowManualButton(true);
+    }, 20000);
+
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/repos/${repositoryId}`);
+        const repository = data.data;
+        if (repository && repository.aiSummary) {
+          setRepoDetails((prev: any) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              aiSummary: repository.aiSummary
+            };
+          });
+          clearInterval(interval);
+          clearTimeout(timer);
+        }
+      } catch (err) {
+        console.warn('[OverviewTab] polling summary failed:', err);
+      }
+    }, 3000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timer);
+    };
+  }, [repoDetails?.aiSummary, repoDetails?.indexingStatus, repositoryId]);
 
   const handleGenerateSummary = async () => {
     setSummaryLoading(true);
@@ -503,21 +538,35 @@ export default function OverviewTab({
             </div>
           </Panel>
         ) : (
-          <Panel className="p-6 border border-dashed border-[#27272a] text-center" variant="lowest">
-            <h3 className="text-[12px] font-mono font-bold text-[#919095] tracking-wider uppercase mb-1">
-              AI-Powered Repository Summary
-            </h3>
-            <p className="text-[13px] text-[#919095] max-w-md mx-auto mb-4 leading-relaxed">
-              Generate a structured business and technical overview of this codebase to understand its domain, purpose, and stack within 30 seconds.
-            </p>
-            <button
-              onClick={handleGenerateSummary}
-              disabled={summaryLoading}
-              className="bg-[#3b82f6]/10 hover:bg-[#3b82f6]/20 border border-[#3b82f6]/30 text-[#60a5fa] hover:text-white px-5 py-2 font-mono text-[12px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
-            >
-              {summaryLoading ? 'GENERATING SUMMARY...' : 'GENERATE AI SUMMARY'}
-            </button>
-          </Panel>
+          showManualButton ? (
+            <Panel className="p-6 border border-dashed border-[#27272a] text-center animate-fade-in" variant="lowest">
+              <h3 className="text-[12px] font-mono font-bold text-[#919095] tracking-wider uppercase mb-1">
+                AI-Powered Repository Summary
+              </h3>
+              <p className="text-[13px] text-[#919095] max-w-md mx-auto mb-4 leading-relaxed">
+                Generate a structured business and technical overview of this codebase to understand its domain, purpose, and stack within 30 seconds.
+              </p>
+              <button
+                onClick={handleGenerateSummary}
+                disabled={summaryLoading}
+                className="bg-[#3b82f6]/10 hover:bg-[#3b82f6]/20 border border-[#3b82f6]/30 text-[#60a5fa] hover:text-white px-5 py-2 font-mono text-[12px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
+              >
+                {summaryLoading ? 'GENERATING SUMMARY...' : 'GENERATE AI SUMMARY'}
+              </button>
+            </Panel>
+          ) : (
+            <Panel className="p-6 border border-dashed border-[#27272a]/60 text-center bg-[#09090b]/40" variant="lowest">
+              <div className="flex flex-col items-center justify-center py-4 select-none">
+                <div className="w-5.5 h-5.5 border-2 border-[#3b82f6]/20 border-t-[#3b82f6] rounded-full animate-spin mb-3"></div>
+                <h3 className="text-[12px] font-mono font-bold text-[#e4e4e7] tracking-wider uppercase mb-1 animate-pulse">
+                  Generating AI Codebase Summary...
+                </h3>
+                <p className="text-[11.5px] font-mono text-[#71717a] max-w-sm mx-auto leading-relaxed mt-1">
+                  Analyzing architecture, entry points, and module interfaces in the background. Should render shortly.
+                </p>
+              </div>
+            </Panel>
+          )
         )
       )}
 
