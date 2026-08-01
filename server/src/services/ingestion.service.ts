@@ -125,9 +125,19 @@ class IngestionService {
     }
     
     try {
-      console.log(`Extracting ZIP archive: ${zipFilePath} to ${extractPath}...`);
-      const zip = new AdmZip(zipFilePath);
-      zip.extractAllTo(extractPath, true);
+      try {
+        if (process.platform === 'win32') {
+          const zip = new AdmZip(zipFilePath);
+          zip.extractAllTo(extractPath, true);
+        } else {
+          const { execSync } = require('child_process');
+          execSync(`unzip -q "${zipFilePath}" -d "${extractPath}"`);
+        }
+      } catch (err: any) {
+        console.warn(`[Ingestion] Native unzip failed, falling back to AdmZip: ${err.message}`);
+        const zip = new AdmZip(zipFilePath);
+        zip.extractAllTo(extractPath, true);
+      }
       
       // Determine the real repo root directory.
       // GitHub zipball puts all contents in a folder named <owner>-<repo>-<commitHash>

@@ -585,8 +585,19 @@ export async function performVectorIndexing(id: string, force = false, options?:
 
     const extractStart = Date.now();
     console.log(`[Indexing] Extracting ZIP: ${zipPath} to ${extractPath}...`);
-    const zip = new AdmZip(zipPath!);
-    zip.extractAllTo(extractPath, true);
+    try {
+      if (process.platform === 'win32') {
+        const zip = new AdmZip(zipPath!);
+        zip.extractAllTo(extractPath, true);
+      } else {
+        const { execSync } = require('child_process');
+        execSync(`unzip -q "${zipPath}" -d "${extractPath}"`);
+      }
+    } catch (err: any) {
+      console.warn(`[Indexing] Native unzip failed, falling back to AdmZip: ${err.message}`);
+      const zip = new AdmZip(zipPath!);
+      zip.extractAllTo(extractPath, true);
+    }
     const extractTime = Date.now() - extractStart;
     logStage('extract', extractTime);
 
