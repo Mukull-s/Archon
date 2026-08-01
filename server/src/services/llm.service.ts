@@ -339,7 +339,7 @@ Instructions:
 4. Do not hallucinate capabilities. If a detail cannot be determined, specify that it could not be determined.
 5. Double check that the JSON is fully valid and parseable. Ensure all string values are escaped properly.`;
 
-    const modelsQueue = this.getModelsQueue('qwen/qwen3-coder:free');
+    const modelsQueue = this.getModelsQueue('google/gemma-4-26b-a4b-it:free');
     let lastError: any = null;
 
     for (const activeModel of modelsQueue) {

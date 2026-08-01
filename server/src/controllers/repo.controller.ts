@@ -749,6 +749,53 @@ export async function performVectorIndexing(id: string, force = false, options?:
       }
     });
 
+    // ── Stage 5.5: Asynchronous Parallel Summary Generation ────────────────
+    let aiSummaryPromise: Promise<any> | null = null;
+    if (scannedFiles.length > 0) {
+      const summaryT0 = Date.now();
+      let readmeText = '';
+      for (const rp of ['README.md', 'readme.md', 'README', 'readme']) {
+        const p = path.join(repoRoot, rp);
+        if (fs.existsSync(p)) { try { readmeText = fs.readFileSync(p, 'utf-8').slice(0, 2000); break; } catch {} }
+      }
+      let pkgJsonText = '';
+      const pkgPath = path.join(repoRoot, 'package.json');
+      if (fs.existsSync(pkgPath)) { try { pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 1000); } catch {} }
+
+      const fileTreeStr = scannedFiles
+        .map(f => f.path).slice(0, 40).join('\n') + (scannedFiles.length > 40 ? '\n... (truncated)' : '');
+
+      console.log(`[Indexing] Starting parallel AI Repository Summary generation...`);
+      aiSummaryPromise = llmService.generateRepositorySummary({
+        name: repoRow.name, framework: framework || null,
+        languages: Array.from(languages), fileCount: scannedFiles.length,
+        totalSize, readme: readmeText, packageJson: pkgJsonText, fileTree: fileTreeStr
+      }).then(async (summaryText) => {
+        try {
+          let cleaned = summaryText.trim();
+          if (cleaned.startsWith('```')) {
+            const lines = cleaned.split('\n');
+            if (lines[0].startsWith('```')) lines.shift();
+            if (lines[lines.length - 1].startsWith('```')) lines.pop();
+            cleaned = lines.join('\n').trim();
+          }
+          const summaryObj = JSON.parse(cleaned);
+          await prisma.repository.update({
+            where: { id },
+            data: { aiSummary: summaryObj }
+          });
+          console.log(`[Indexing] Parallel AI Summary successfully generated and saved in ${Date.now() - summaryT0}ms`);
+          return summaryObj;
+        } catch (err: any) {
+          console.warn(`[Indexing] Parallel AI Summary parsing/save failed: ${err.message}`);
+          return null;
+        }
+      }).catch((summaryErr) => {
+        console.warn(`[Indexing] Parallel AI Summary generation failed (non-fatal): ${summaryErr.message}`);
+        return null;
+      });
+    }
+
     // ── Stage 6: Streaming Embedding Pipeline (Bounded Buffer) ────────────
     const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({ where: { repositoryId: id } });
     let totalChunksProcessed = 0;
@@ -831,44 +878,8 @@ export async function performVectorIndexing(id: string, force = false, options?:
     logStage('embedding', Date.now() - embedStart);
     logStage('db-insert-total', dbWriteTime);
 
-    // Real progress: 92% — starting summary
+    // Real progress: 92% — finalizing
     await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Saving 92%' } });
-
-    // ── Stage 7: AI Repository Summary ────────────────────────────────────
-    let readmeText = '';
-    for (const rp of ['README.md', 'readme.md', 'README', 'readme']) {
-      const p = path.join(repoRoot, rp);
-      if (fs.existsSync(p)) { try { readmeText = fs.readFileSync(p, 'utf-8').slice(0, 2000); break; } catch {} }
-    }
-    let pkgJsonText = '';
-    const pkgPath = path.join(repoRoot, 'package.json');
-    if (fs.existsSync(pkgPath)) { try { pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 1000); } catch {} }
-
-    const fileTreeStr = scannedFiles
-      .map(f => f.path).slice(0, 40).join('\n') + (scannedFiles.length > 40 ? '\n... (truncated)' : '');
-
-    let aiSummaryObj: any = null;
-    const summaryT0 = Date.now();
-    try {
-      console.log(`[Indexing] Generating AI Repository Summary...`);
-      const summaryText = await llmService.generateRepositorySummary({
-        name: repoRow.name, framework: framework || null,
-        languages: Array.from(languages), fileCount: scannedFiles.length,
-        totalSize, readme: readmeText, packageJson: pkgJsonText, fileTree: fileTreeStr
-      });
-      let cleaned = summaryText.trim();
-      if (cleaned.startsWith('```')) {
-        const lines = cleaned.split('\n');
-        if (lines[0].startsWith('```')) lines.shift();
-        if (lines[lines.length - 1].startsWith('```')) lines.pop();
-        cleaned = lines.join('\n').trim();
-      }
-      aiSummaryObj = JSON.parse(cleaned);
-      console.log(`[Indexing] AI Summary generated in ${Date.now() - summaryT0}ms`);
-    } catch (summaryErr: any) {
-      console.error('[Indexing] AI summary failed (non-fatal):', summaryErr.message);
-    }
-    logStage('summary', Date.now() - summaryT0);
 
     // ── Stage 8: Finalize ─────────────────────────────────────────────────
     const latestSha = (repoRow as any)._latestSha;
@@ -877,7 +888,6 @@ export async function performVectorIndexing(id: string, force = false, options?:
       data: {
         indexingStatus: 'completed',
         indexingProgress: embeddingFailed ? 'Completed (partial — some embeddings failed)' : 'Completed',
-        aiSummary: aiSummaryObj || undefined,
         ...(latestSha ? { indexingProgress: 'Completed' } : {})
       }
     });
