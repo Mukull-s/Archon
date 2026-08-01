@@ -69,7 +69,7 @@ class EmbeddingService implements IEmbeddingService {
     return allEmbeddings;
   }
 
-  private async getEmbeddingsBatchWithRetry(texts: string[], retries = 3, delayMs = 1000): Promise<number[][]> {
+  private async getEmbeddingsBatchWithRetry(texts: string[], retries = 5, delayMs = 1000): Promise<number[][]> {
     let lastError: any;
     for (let attempt = 1; attempt <= retries; attempt++) {
       const t0 = Date.now();
@@ -92,11 +92,20 @@ class EmbeddingService implements IEmbeddingService {
         throw new Error('Voyage API response missing data block');
       } catch (err: any) {
         lastError = err;
-        const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
+        const isRateLimit = err.status === 429 || 
+                            (err.message && err.message.includes('429')) || 
+                            (err.response?.status === 429) || 
+                            (err.response?.data && JSON.stringify(err.response.data).includes('429'));
+        
         console.warn(`[Embedding] Voyage API attempt ${attempt}/${retries} failed (${isRateLimit ? 'Rate Limited' : err.message})`);
         
         if (attempt < retries) {
-          const backoff = delayMs * Math.pow(2, attempt) * (0.5 + Math.random()); // Exponential backoff with jitter
+          // If rate limited on the free tier (3 RPM), wait 20 seconds before retrying
+          const backoff = isRateLimit 
+            ? (20000 + Math.random() * 2000) 
+            : (delayMs * Math.pow(2, attempt) * (0.5 + Math.random()));
+          
+          console.log(`[Embedding] Backing off for ${Math.round(backoff / 1000)}s...`);
           await new Promise(resolve => setTimeout(resolve, backoff));
         }
       }

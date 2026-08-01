@@ -104,16 +104,26 @@ Instructions:
 
   private getModelsQueue(requestedModel: string): string[] {
     let initialModel = requestedModel;
-    if (requestedModel === 'qwen/qwen-2.5-coder-7b-instruct:free') {
-      initialModel = 'qwen/qwen3-coder:free';
+    
+    // Map offline or highly congested models to stable active free models
+    if (
+      requestedModel === 'qwen/qwen-2.5-coder-7b-instruct:free' || 
+      requestedModel === 'qwen/qwen3-coder:free' ||
+      requestedModel.includes('qwen')
+    ) {
+      initialModel = 'cohere/north-mini-code:free';
+    } else if (requestedModel.includes('gemma-4-31b')) {
+      initialModel = 'google/gemma-4-26b-a4b-it:free';
     }
+
     const queue = [initialModel];
     const fallbacks = [
-      'qwen/qwen3-coder:free',
-      'google/gemma-4-31b-it:free',
-      'nvidia/nemotron-3-super-120b-a12b:free',
-      'cohere/north-mini-code:free',
-      'poolside/laguna-xs-2.1:free'
+      'cohere/north-mini-code:free',              // Fast and online
+      'poolside/laguna-s-2.1:free',               // Fast coding model
+      'openai/gpt-oss-20b:free',                  // Fast general text model
+      'google/gemma-4-26b-a4b-it:free',           // Less congested than 31B
+      'nvidia/nemotron-3-super-120b-a12b:free',   // Nemotron fallback
+      'google/gemma-4-31b-it:free'                // High congestion fallback
     ];
     for (const f of fallbacks) {
       if (!queue.includes(f)) {
@@ -360,7 +370,7 @@ Instructions:
               'X-Title': 'Archon'
             })
           },
-          timeout: 25000 // 25s timeout
+          timeout: 10000 // 10s timeout
         });
 
         return response.data.choices[0].message.content;
