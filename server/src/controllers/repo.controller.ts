@@ -838,14 +838,14 @@ export async function performVectorIndexing(id: string, force = false, options?:
     let readmeText = '';
     for (const rp of ['README.md', 'readme.md', 'README', 'readme']) {
       const p = path.join(repoRoot, rp);
-      if (fs.existsSync(p)) { try { readmeText = fs.readFileSync(p, 'utf-8').slice(0, 5000); break; } catch {} }
+      if (fs.existsSync(p)) { try { readmeText = fs.readFileSync(p, 'utf-8').slice(0, 2000); break; } catch {} }
     }
     let pkgJsonText = '';
     const pkgPath = path.join(repoRoot, 'package.json');
-    if (fs.existsSync(pkgPath)) { try { pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 3000); } catch {} }
+    if (fs.existsSync(pkgPath)) { try { pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 1000); } catch {} }
 
     const fileTreeStr = scannedFiles
-      .map(f => f.path).slice(0, 100).join('\n') + (scannedFiles.length > 100 ? '\n... (truncated)' : '');
+      .map(f => f.path).slice(0, 40).join('\n') + (scannedFiles.length > 40 ? '\n... (truncated)' : '');
 
     let aiSummaryObj: any = null;
     const summaryT0 = Date.now();
