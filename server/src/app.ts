@@ -19,6 +19,9 @@ export function createApp(): express.Application {
   // Trust proxy for rate limiting behind Render/Heroku load balancers
   app.set('trust proxy', 1);
 
+  // Disable ETags to prevent 304 responses during real-time status polling
+  app.set('etag', false);
+
   // ──────────────────────────────────────────────
   // 1. Security Middleware
   // ──────────────────────────────────────────────
