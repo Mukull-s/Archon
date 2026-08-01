@@ -18,6 +18,7 @@ import { plannerService } from '../services/planner.service';
 import { storyService } from '../services/story.service';
 import { onboardingService } from '../services/onboarding.service';
 import { identityService } from '../services/identity.service';
+import { embeddingService } from '../services/embedding.service';
 
 /**
  * Parses a GitHub repository URL to extract owner and repository name.
@@ -862,8 +863,24 @@ export async function performVectorIndexing(id: string, force = false, options?:
 
     const totalTime = Date.now() - startTime;
     logStage('complete', totalTime);
+    
+    // Fetch Voyage AI embedding metrics
+    const embedMetrics = embeddingService.getAndResetMetrics();
+    const avgLatency = embedMetrics.apiCalls > 0 ? Math.round(embedMetrics.totalLatencyMs / embedMetrics.apiCalls) : 0;
+
+    console.log(`\n==================================================`);
+    console.log(`[Benchmark] Indexing Finished`);
+    console.log(`Repository: ${repoRow.name}`);
+    console.log(`Files: ${scannedFiles.length}`);
+    console.log(`Chunks: ${unchangedChunksCount + totalChunksProcessed}`);
+    console.log(`Embedding Calls: ${embedMetrics.apiCalls}`);
+    console.log(`Average API Latency: ${avgLatency}ms`);
+    console.log(`Total Embedding Time: ${(embedTime / 1000).toFixed(2)}s`);
+    console.log(`Total Index Time: ${(totalTime / 1000).toFixed(2)}s`);
+    console.log(`==================================================\n`);
+
     console.log(`[Indexing] ✅ Repo ${id} — ${scannedFiles.length} files | ${unchangedChunksCount + totalChunksProcessed} total chunks | ${filesToEmbed.length} files embedded | ${scannedFiles.length - filesToEmbed.length} unchanged`);
-    console.log(`[Indexing] Timing: download=${(0 / 1000).toFixed(2)}s parse=${(parseTime / 1000).toFixed(2)}s embed=${(embedTime / 1000).toFixed(2)}s db=${(dbWriteTime / 1000).toFixed(2)}s total=${(totalTime / 1000).toFixed(2)}s`);
+    console.log(`[Indexing] Timing: download=${(downloadTime / 1000).toFixed(2)}s parse=${(parseTime / 1000).toFixed(2)}s embed=${(embedTime / 1000).toFixed(2)}s db=${(dbWriteTime / 1000).toFixed(2)}s total=${(totalTime / 1000).toFixed(2)}s`);
 
   } catch (error: any) {
     console.error(`[Indexing] Failed to index repository ${id}:`, error.stack || error);
