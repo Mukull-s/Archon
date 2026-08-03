@@ -8,7 +8,6 @@ interface TechItem {
 const TECH: TechItem[] = [
   { name: 'React', icon: '⚛️' },
   { name: 'Node.js', icon: '🟢' },
-  { name: 'LangChain', icon: '🔗' },
   { name: 'MiniMax AI', icon: '🤖' },
   { name: 'Gemini', icon: '✨' },
   { name: 'FAISS', icon: '🔍' },
