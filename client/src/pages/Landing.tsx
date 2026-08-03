@@ -1,6 +1,5 @@
 import React from 'react'
 import Navbar from '../components/Navbar'
-import CinematicCursor from '../components/CinematicCursor'
 import HeroSection from '../components/sections/HeroSection'
 import ScrollStorySection from '../components/sections/ScrollStorySection'
 import FeaturesSection from '../components/sections/FeaturesSection'
@@ -53,7 +52,6 @@ export default function Landing() {
 
       {/* Main scrolling content layer */}
       <div style={{ position: 'relative', zIndex: 1 }}>
-        <CinematicCursor />
         <Navbar />
         <HeroSection />
         <ScrollStorySection />

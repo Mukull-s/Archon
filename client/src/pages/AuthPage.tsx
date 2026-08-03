@@ -4,7 +4,6 @@ import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuthStore } from '../stores/authStore'
 import Beams from '../components/Beams'
-import CinematicCursor from '../components/CinematicCursor'
 
 type AuthMode = 'login' | 'signup'
 
@@ -84,7 +83,6 @@ export default function AuthPage() {
       position: 'relative',
       overflow: 'hidden',
     }}>
-      <CinematicCursor />
       {/* ── LEFT SIDE: Beams Background + Headline ── */}
       <div className="auth-left" style={{
         flex: 1,
