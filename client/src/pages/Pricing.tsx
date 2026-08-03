@@ -3,7 +3,6 @@ import { motion } from 'framer-motion'
 import { gsap } from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import Navbar from '../components/Navbar'
-import CinematicCursor from '../components/CinematicCursor'
 import FAQSection from '../components/sections/FAQSection'
 import Footer from '../components/sections/Footer'
 
@@ -111,7 +110,6 @@ export default function Pricing() {
 
   return (
     <div id="pricing-wrapper" style={{ position: 'relative', zIndex: 1, minHeight: '100vh', background: '#050308', overflowX: 'hidden' }}>
-      <CinematicCursor />
       <Navbar />
 
       {/* Hero */}

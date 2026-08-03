@@ -283,7 +283,7 @@ export default function HeroSection() {
           transition={{ delay: 0.1, duration: 0.5 }} style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>
           <div ref={socialRef}>
             <span className="badge" style={{ background: 'rgba(176,38,255,0.12)', borderColor: 'rgba(176,38,255,0.25)', color: '#D98CFF' }}>
-              <span className="badge-dot" style={{ background: '#D98CFF' }} />
+              <span className="badge-dot" style={{ background: '#b24ce4ff' }} />
               Now in Beta
             </span>
           </div>
