@@ -7,28 +7,20 @@ import { env } from './config';
 import { errorHandler, notFoundHandler } from './middlewares';
 import apiRoutes from './routes';
 
-/**
- * Express Application Factory.
- * 
- * This pattern separates app creation from server listening,
- * making it testable (you can import the app without starting the server).
- */
+
+ 
 export function createApp(): express.Application {
   const app = express();
 
-  // Trust proxy for rate limiting behind Render/Heroku load balancers
   app.set('trust proxy', 1);
 
-  // Disable ETags to prevent 304 responses during real-time status polling
   app.set('etag', false);
 
-  // ──────────────────────────────────────────────
-  // 1. Security Middleware
-  // ──────────────────────────────────────────────
+
   app.use(helmet({
     contentSecurityPolicy: env.NODE_ENV === 'production' ? undefined : false,
     crossOriginEmbedderPolicy: false,
-    crossOriginOpenerPolicy: false,       // Required for OAuth popup flow (postMessage + window.closed)
+    crossOriginOpenerPolicy: false,       
   }));
 
   app.use(cors({
@@ -58,9 +50,6 @@ export function createApp(): express.Application {
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
 
-  // ──────────────────────────────────────────────
-  // 2. Rate Limiting
-  // ──────────────────────────────────────────────
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,          // 15 minutes
     max: env.NODE_ENV === 'development' ? 200 : 100,
@@ -73,9 +62,7 @@ export function createApp(): express.Application {
   });
   app.use(limiter);
 
-  // ──────────────────────────────────────────────
-  // 3. Body Parsing & Logging
-  // ──────────────────────────────────────────────
+ 
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -85,14 +72,10 @@ export function createApp(): express.Application {
     app.use(morgan('combined'));
   }
 
-  // ──────────────────────────────────────────────
-  // 4. API Routes
-  // ──────────────────────────────────────────────
+ 
   app.use('/api', apiRoutes);
 
-  // ──────────────────────────────────────────────
-  // 5. Error Handling (must be LAST)
-  // ──────────────────────────────────────────────
+  
   app.use(notFoundHandler);
   app.use(errorHandler);
 
