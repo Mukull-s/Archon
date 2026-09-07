@@ -127,12 +127,17 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       localStorage.setItem('auth_oauth_mode', mode);
 
+      // Save redirect URL if present
+      const searchParams = new URLSearchParams(window.location.search);
+      const redirectUrl = searchParams.get('redirect') || '/';
+      localStorage.setItem('auth_redirect_url', redirectUrl);
+
       // Generate client-side random CSRF token
       const csrfToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
       localStorage.setItem('oauth_csrf_token', csrfToken);
 
       const { data } = await api.get(`/auth/oauth/url?provider=${provider}&csrfToken=${csrfToken}`);
-      // Open popup instead of redirect
+      // Open popup
       const width = 500, height = 700;
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
@@ -149,40 +154,78 @@ export const useAuthStore = create<AuthState>((set) => ({
         return;
       }
 
-      const checkInterval = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(checkInterval);
-          window.removeEventListener('message', handleMessage);
-          if (useAuthStore.getState().isLoading) {
-            set({ isLoading: false });
-            toast.error('OAuth sign in cancelled.');
-          }
-        }
-      }, 500);
+      let timeoutTimer: any = null;
+      let channel: BroadcastChannel | null = null;
+      let handled = false;
 
-      // Listen for the callback from the popup
+      const cleanup = () => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        window.removeEventListener('message', handleMessage);
+        window.removeEventListener('storage', handleStorage);
+        if (channel) {
+          try { channel.close(); } catch {}
+          channel = null;
+        }
+      };
+
+      const onAuthComplete = (payload?: any) => {
+        if (handled) return;
+        handled = true;
+        cleanup();
+        try { popup?.close(); } catch {}
+
+        const user = payload?.user || JSON.parse(localStorage.getItem('archon_user') || 'null');
+        const token = payload?.token || localStorage.getItem('archon_token') || null;
+        if (token && user) {
+          set({ user, token, isAuthenticated: true, isLoading: false });
+        }
+
+        const target = localStorage.getItem('auth_redirect_url') || '/';
+        localStorage.removeItem('auth_redirect_url');
+        localStorage.removeItem('archon_oauth_event');
+        window.location.href = target;
+      };
+
+      // 1. Listen via BroadcastChannel (safe when window.opener is severed by COOP)
+      try {
+        channel = new BroadcastChannel('archon_oauth_channel');
+        channel.onmessage = (event) => {
+          if (event.data?.type === 'oauth_complete') {
+            onAuthComplete(event.data);
+          }
+        };
+      } catch {}
+
+      // 2. Listen via localStorage storage event (cross-window fallback)
+      const handleStorage = (e: StorageEvent) => {
+        if (e.key === 'archon_oauth_event' && e.newValue) {
+          try {
+            const parsed = JSON.parse(e.newValue);
+            if (parsed?.type === 'oauth_complete') {
+              localStorage.removeItem('archon_oauth_event');
+              onAuthComplete(parsed);
+            }
+          } catch {}
+        }
+      };
+      window.addEventListener('storage', handleStorage);
+
+      // 3. Listen for postMessage from popup
       const handleMessage = (event: MessageEvent) => {
         if (event.origin !== window.location.origin) return;
-        if (event.data?.type === 'oauth_callback') {
-          clearInterval(checkInterval);
-          window.removeEventListener('message', handleMessage);
-          popup?.close();
-
-          const { provider: prov, code, email, name } = event.data;
-          useAuthStore.getState().handleOAuthCallback(prov, code, email, name)
-            .catch((err: any) => {
-              const errMsg = err.message || '';
-              if (errMsg.includes('not registered') || errMsg.includes('sign up first') || errMsg.includes('not found')) {
-                toast.error('No account registered with this email. Switched to Sign Up.');
-                set({ authMode: 'signup', isLoading: false });
-              } else {
-                toast.error(errMsg || `${prov} login failed`);
-                set({ isLoading: false });
-              }
-            });
+        if (event.data?.type === 'oauth_complete') {
+          onAuthComplete(event.data);
         }
       };
       window.addEventListener('message', handleMessage);
+
+      // 4. Timeout fallback to reset loading if user abandons the window (2 minutes)
+      timeoutTimer = setTimeout(() => {
+        if (!handled && useAuthStore.getState().isLoading) {
+          cleanup();
+          set({ isLoading: false });
+        }
+      }, 120_000);
     } catch (err: any) {
       set({ isLoading: false });
       console.error(`${provider} OAuth failed:`, err);

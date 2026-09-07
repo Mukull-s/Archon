@@ -157,9 +157,6 @@ export class AuthService {
         },
       });
     } else {
-      if (mode === 'login') {
-        throw new AppError('No account registered with this email. Please sign up first.', 404);
-      }
       user = await prisma.user.create({
         data: {
           email,
@@ -244,9 +241,6 @@ export class AuthService {
         },
       });
     } else {
-      if (mode === 'login') {
-        throw new AppError('No account registered with this email. Please sign up first.', 404);
-      }
       user = await prisma.user.create({
         data: {
           email: profile.email,
