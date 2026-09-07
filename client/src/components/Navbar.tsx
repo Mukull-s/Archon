@@ -44,7 +44,7 @@ export default function Navbar() {
     { label: 'Features', href: '#features', type: 'anchor' },
     { label: 'How It Works', href: '#how-it-works', type: 'anchor' },
     { label: 'Pricing', href: '/pricing', type: 'route' },
-    { label: 'Docs', href: '#', type: 'anchor' },
+    { label: 'Docs', href: '/docs', type: 'route' },
   ]
 
   const scrollToAnchor = (href: string) => {
@@ -114,86 +114,141 @@ export default function Navbar() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {isAuthenticated && user ? (
             <div ref={menuRef} style={{ position: 'relative' }}>
-              <button
-                onClick={() => setMenuOpen(!menuOpen)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-                  borderRadius: '100px', padding: '4px 12px 4px 4px',
-                  cursor: 'pointer', transition: 'all 0.2s',
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.borderColor = 'rgba(176,38,255,0.3)'}
-                onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'}
-              >
-                {user.avatarUrl ? (
-                  <img src={user.avatarUrl} alt={user.name || user.email}
-                    style={{ width: '26px', height: '26px', borderRadius: '50%', border: '1.5px solid rgba(176,38,255,0.3)' }}
-                  />
-                ) : (
-                  <div style={{
-                    width: '26px', height: '26px', borderRadius: '50%',
-                    background: 'var(--grad-primary)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: '11px', fontWeight: 700, color: '#fff',
-                  }}>
-                    {(user.name || user.email).charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)', fontFamily: 'var(--font-sans)' }}>
-                  {user.name || user.email.split('@')[0]}
-                </span>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{
-                  color: 'var(--text-muted)', transform: menuOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s',
-                }}>
-                  <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </button>
-
-              <AnimatePresence>
-                {menuOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8, scale: 0.96 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.96 }}
-                    transition={{ duration: 0.15, ease: 'easeOut' }}
-                    style={{
-                      position: 'absolute', top: 'calc(100% + 8px)', right: 0, minWidth: '180px',
-                      background: 'rgba(15, 10, 25, 0.98)', border: '1px solid rgba(255,255,255,0.08)',
-                      borderRadius: '12px', padding: '6px',
-                      boxShadow: '0 16px 48px rgba(0,0,0,0.5)', backdropFilter: 'blur(20px)', zIndex: 100,
-                    }}
-                  >
-                    <div style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '4px' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{user.name || user.email.split('@')[0]}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{user.email}</div>
-                      <div style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px',
-                        fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
-                        padding: '2px 8px', borderRadius: '100px',
-                        background: user.provider === 'github' ? 'rgba(255,255,255,0.06)' : user.provider === 'google' ? 'rgba(66,133,244,0.1)' : 'rgba(176,38,255,0.1)',
-                        color: user.provider === 'github' ? 'var(--text-secondary)' : user.provider === 'google' ? '#4285F4' : 'var(--accent)',
-                      }}>
-                        {user.provider}
-                      </div>
+                <button
+                  onClick={() => setMenuOpen(!menuOpen)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '100px', padding: '4px 12px 4px 4px',
+                    cursor: 'pointer', transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.borderColor = 'rgba(176,38,255,0.3)'}
+                  onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'}
+                >
+                  {user.avatarUrl ? (
+                    <img src={user.avatarUrl} alt={user.name || user.email}
+                      style={{ width: '26px', height: '26px', borderRadius: '50%', border: '1.5px solid rgba(176,38,255,0.3)' }}
+                    />
+                  ) : (
+                    <div style={{
+                      width: '26px', height: '26px', borderRadius: '50%',
+                      background: 'var(--grad-primary)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '11px', fontWeight: 700, color: '#fff',
+                    }}>
+                      {(user.name || user.email).charAt(0).toUpperCase()}
                     </div>
+                  )}
+                  <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)', fontFamily: 'var(--font-sans)' }}>
+                    {user.name || user.email.split('@')[0]}
+                  </span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{
+                    color: 'var(--text-muted)', transform: menuOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s',
+                  }}>
+                    <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
 
-                    <Link to="/profile" onClick={() => setMenuOpen(false)}
+                <AnimatePresence>
+                  {menuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                      transition={{ duration: 0.15, ease: 'easeOut' }}
                       style={{
-                        display: 'flex', alignItems: 'center', gap: '8px',
-                        padding: '8px 12px', borderRadius: '8px',
-                        color: 'var(--text-secondary)', fontSize: '13px',
-                        textDecoration: 'none', transition: 'background 0.15s',
-                        marginBottom: '4px',
+                        position: 'absolute', top: 'calc(100% + 8px)', right: 0, minWidth: '190px',
+                        background: 'rgba(15, 10, 25, 0.98)', border: '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '12px', padding: '6px',
+                        boxShadow: '0 16px 48px rgba(0,0,0,0.5)', backdropFilter: 'blur(20px)', zIndex: 100,
                       }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                        <circle cx="12" cy="7" r="4"/>
-                      </svg>
-                      My Profile
-                    </Link>
+                      <div style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '4px' }}>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{user.name || user.email.split('@')[0]}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{user.email}</div>
+                        <div style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px',
+                          fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+                          padding: '2px 8px', borderRadius: '100px',
+                          background: user.provider === 'github' ? 'rgba(255,255,255,0.06)' : user.provider === 'google' ? 'rgba(66,133,244,0.1)' : 'rgba(176,38,255,0.1)',
+                          color: user.provider === 'github' ? 'var(--text-secondary)' : user.provider === 'google' ? '#4285F4' : 'var(--accent)',
+                        }}>
+                          {user.provider}
+                        </div>
+                      </div>
+
+                      <Link to="/dashboard" onClick={() => setMenuOpen(false)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          padding: '8px 12px', borderRadius: '8px',
+                          color: 'var(--text-secondary)', fontSize: '13px',
+                          textDecoration: 'none', transition: 'background 0.15s',
+                          marginBottom: '2px',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="3" width="7" height="9" />
+                          <rect x="14" y="3" width="7" height="5" />
+                          <rect x="14" y="12" width="7" height="9" />
+                          <rect x="3" y="16" width="7" height="5" />
+                        </svg>
+                        Dashboard
+                      </Link>
+
+                      <Link to="/history" onClick={() => setMenuOpen(false)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          padding: '8px 12px', borderRadius: '8px',
+                          color: 'var(--text-secondary)', fontSize: '13px',
+                          textDecoration: 'none', transition: 'background 0.15s',
+                          marginBottom: '2px',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                        </svg>
+                        My Repositories
+                      </Link>
+
+                      <Link to="/profile" onClick={() => setMenuOpen(false)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          padding: '8px 12px', borderRadius: '8px',
+                          color: 'var(--text-secondary)', fontSize: '13px',
+                          textDecoration: 'none', transition: 'background 0.15s',
+                          marginBottom: '2px',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                          <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                        My Profile
+                      </Link>
+
+                      <Link to="/settings" onClick={() => setMenuOpen(false)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          padding: '8px 12px', borderRadius: '8px',
+                          color: 'var(--text-secondary)', fontSize: '13px',
+                          textDecoration: 'none', transition: 'background 0.15s',
+                          marginBottom: '4px',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="3" />
+                          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
+                        Settings
+                      </Link>
 
                     {user.githubLogin && (
                       <a href={`https://github.com/${user.githubLogin}`} target="_blank" rel="noopener noreferrer"
@@ -239,7 +294,7 @@ export default function Navbar() {
                 )}
               </AnimatePresence>
             </div>
-          ) : (
+        ) : (
             <>
               <button className="btn-ghost" onClick={() => navigate('/auth')} style={{ padding: '7px 16px', fontSize: '13px' }}>
                 Sign In
