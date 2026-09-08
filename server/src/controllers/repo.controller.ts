@@ -384,6 +384,49 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
 }
 
 /**
+ * Deletes a repository owned by the user, cleaning up local extracted files and all associated data.
+ */
+export async function deleteRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new AppError('Unauthorized.', 401);
+    }
+
+    const repo = await prisma.repository.findFirst({
+      where: { id: id as string, userId: userId as string },
+      select: { id: true, name: true, localPath: true }
+    });
+
+    if (!repo) {
+      throw new AppError('Repository not found or access denied.', 404);
+    }
+
+    // Clean up local filesystem directory if extracted files exist
+    if (repo.localPath && fs.existsSync(repo.localPath)) {
+      try {
+        await deleteFolderWithRetry(repo.localPath);
+      } catch (fsErr) {
+        console.warn(`[Delete Repo] Warning: Failed to delete directory ${repo.localPath}:`, fsErr);
+      }
+    }
+
+    // Delete repository from database (cascades to CodeChunks and ChatMessages)
+    await prisma.repository.delete({
+      where: { id: repo.id }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Repository "${repo.name}" deleted successfully.`
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * Calculates dependencies, affected routes, modules, and risk score for a selected file.
  * Automatically generates a human-friendly LLM explanation of the impact.
  */
