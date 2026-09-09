@@ -28,6 +28,13 @@ model User {
   
   repositories  Repository[]
   
+  // Subscription & Entitlements
+  plan                   String   @default("free") // "free" | "pro"
+  lifetimeAnalysesUsed   Int      @default(0)
+  monthlyAiQuestionsUsed Int      @default(0)
+  monthlyReindexesUsed   Int      @default(0)
+  usagePeriodStart       DateTime @default(now())
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
@@ -60,6 +67,8 @@ model Repository {
   indexingStatus  String   @default("idle") // "idle" | "indexing" | "completed" | "failed"
   indexingProgress String   @default("")
   aiSummary       Json?
+  reindexCount    Int      @default(0)
+  isArchived      Boolean  @default(false)
   
   // Relations
   codeChunks      CodeChunk[]
