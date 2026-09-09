@@ -16,6 +16,8 @@ interface RepoSummary {
   totalSize: number;
   confidence: number;
   indexingStatus: string;
+  isArchived?: boolean;
+  reindexCount?: number;
   createdAt: string;
 }
 
@@ -84,6 +86,28 @@ export default function HistoryPage() {
     }
   };
 
+  const handleArchive = async (repoId: string, repoName: string) => {
+    try {
+      await api.post(`/repos/${repoId}/archive`);
+      toast.success(`Repository "${repoName}" archived. Active slot freed.`);
+      fetchRepos();
+    } catch (err: any) {
+      const errMsg = err.response?.data?.error?.message || 'Failed to archive repository.';
+      toast.error(errMsg);
+    }
+  };
+
+  const handleUnarchive = async (repoId: string, repoName: string) => {
+    try {
+      await api.post(`/repos/${repoId}/unarchive`);
+      toast.success(`Repository "${repoName}" activated.`);
+      fetchRepos();
+    } catch (err: any) {
+      const errMsg = err.response?.data?.error?.message || 'Active limit reached. Archive other repos or upgrade to Pro.';
+      toast.error(errMsg);
+    }
+  };
+
   const formatSize = (bytes: number) => {
     if (!bytes || bytes <= 0) return '0 KB';
     if (bytes < 1024 * 1024) {
@@ -111,6 +135,8 @@ export default function HistoryPage() {
   // Telemetry aggregates
   const telemetry = useMemo(() => {
     const totalCount = repos.length;
+    const activeCount = repos.filter((r) => !r.isArchived).length;
+    const archivedCount = repos.filter((r) => r.isArchived).length;
     const totalFiles = repos.reduce((acc, r) => acc + (r.fileCount || 0), 0);
     const totalBytes = repos.reduce((acc, r) => acc + (r.totalSize || 0), 0);
     const validConf = repos.filter((r) => r.confidence > 0);
@@ -120,6 +146,8 @@ export default function HistoryPage() {
 
     return {
       totalCount,
+      activeCount,
+      archivedCount,
       totalFiles,
       totalSize: formatSize(totalBytes),
       avgConfidence,
@@ -221,9 +249,11 @@ export default function HistoryPage() {
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
               <span style={{ fontSize: '24px', fontWeight: 700, color: '#fff', fontFamily: 'var(--font-mono, monospace)' }}>
-                {telemetry.totalCount}
+                {telemetry.activeCount}
               </span>
-              <span style={{ fontSize: '12px', color: '#71717a' }}>registered</span>
+              <span style={{ fontSize: '12px', color: '#71717a' }}>
+                active ({telemetry.archivedCount} archived)
+              </span>
             </div>
           </div>
 
@@ -781,6 +811,21 @@ export default function HistoryPage() {
                                 />
                                 {repo.indexingStatus === 'completed' ? 'Indexed' : repo.indexingStatus}
                               </span>
+                              <span
+                                style={{
+                                  fontSize: '10px',
+                                  padding: '1px 6px',
+                                  borderRadius: '100px',
+                                  fontWeight: 600,
+                                  letterSpacing: '0.03em',
+                                  textTransform: 'uppercase',
+                                  background: repo.isArchived ? 'rgba(255, 255, 255, 0.05)' : 'rgba(168, 85, 247, 0.1)',
+                                  color: repo.isArchived ? '#71717a' : '#c084fc',
+                                  border: repo.isArchived ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid rgba(168, 85, 247, 0.3)',
+                                }}
+                              >
+                                {repo.isArchived ? 'Archived' : 'Active'}
+                              </span>
                               <span style={{ fontSize: '11px', color: '#71717a', fontFamily: 'var(--font-mono, monospace)' }}>
                                 {repo.isLocal ? 'local-zip' : 'github'}
                               </span>
@@ -910,6 +955,28 @@ export default function HistoryPage() {
                           </Link>
 
                           <button
+                            onClick={() => repo.isArchived ? handleUnarchive(repo.id, repo.name) : handleArchive(repo.id, repo.name)}
+                            title={repo.isArchived ? `Activate ${repo.name} (uses 1 active slot)` : `Archive ${repo.name} (frees 1 active slot)`}
+                            aria-label={repo.isArchived ? `Activate repository ${repo.name}` : `Archive repository ${repo.name}`}
+                            style={{
+                              padding: '5px 10px',
+                              borderRadius: '6px',
+                              background: repo.isArchived ? 'rgba(168, 85, 247, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                              border: repo.isArchived ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(255, 255, 255, 0.08)',
+                              color: repo.isArchived ? '#c084fc' : '#a1a1aa',
+                              fontSize: '11px',
+                              fontWeight: 500,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            {repo.isArchived ? 'Activate' : 'Archive'}
+                          </button>
+
+                          <button
                             onClick={() => setRepoToDelete(repo)}
                             title={`Purge ${repo.name} from registry`}
                             aria-label={`Delete repository ${repo.name}`}
@@ -1026,6 +1093,21 @@ export default function HistoryPage() {
                       >
                         {repo.indexingStatus === 'completed' ? 'Indexed' : repo.indexingStatus}
                       </span>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          padding: '2px 8px',
+                          borderRadius: '100px',
+                          background: repo.isArchived ? 'rgba(255, 255, 255, 0.05)' : 'rgba(168, 85, 247, 0.1)',
+                          color: repo.isArchived ? '#71717a' : '#c084fc',
+                          border: repo.isArchived ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid rgba(168, 85, 247, 0.3)',
+                          fontWeight: 600,
+                          letterSpacing: '0.03em',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {repo.isArchived ? 'Archived' : 'Active'}
+                      </span>
                     </div>
 
                     <span style={{ fontSize: '11px', color: '#71717a' }}>
@@ -1130,6 +1212,28 @@ export default function HistoryPage() {
                       <polyline points="12 5 19 12 12 19" />
                     </svg>
                   </Link>
+
+                  <button
+                    onClick={() => repo.isArchived ? handleUnarchive(repo.id, repo.name) : handleArchive(repo.id, repo.name)}
+                    title={repo.isArchived ? `Activate ${repo.name} (uses 1 active slot)` : `Archive ${repo.name} (frees 1 active slot)`}
+                    aria-label={repo.isArchived ? `Activate repository ${repo.name}` : `Archive repository ${repo.name}`}
+                    style={{
+                      background: repo.isArchived ? 'rgba(168, 85, 247, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                      border: repo.isArchived ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(255, 255, 255, 0.08)',
+                      borderRadius: '6px',
+                      color: repo.isArchived ? '#c084fc' : '#a1a1aa',
+                      padding: '7px 12px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {repo.isArchived ? 'Activate' : 'Archive'}
+                  </button>
 
                   <button
                     onClick={() => setRepoToDelete(repo)}

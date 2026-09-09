@@ -8,6 +8,7 @@ interface AuthUser {
   name: string | null;
   avatarUrl: string | null;
   provider: string;
+  plan?: 'free' | 'pro';
   emailVerified: boolean;
   githubLogin: string | null;
   createdAt: string;
