@@ -6,6 +6,7 @@ export interface AuthUser {
   provider: string;
   emailVerified: boolean;
   githubLogin: string | null;
+  plan: 'free' | 'pro';
   createdAt: string;
 }
 

@@ -33,6 +33,9 @@ router.post('/scan-upload', requireAuth, heavyLimiter, upload.single('file'), re
 // Management & details endpoints
 router.get('/', requireAuth, repoController.listUserRepos);
 router.get('/:id', requireAuth, repoController.getRepoDetails);
+router.delete('/:id', requireAuth, repoController.deleteRepo);
+router.post('/:id/archive', requireAuth, repoController.archiveRepo);
+router.post('/:id/unarchive', requireAuth, repoController.unarchiveRepo);
 router.post('/:id/summary', requireAuth, heavyLimiter, repoController.generateRepoSummaryEndpoint);
 
 // Analysis endpoints

@@ -19,6 +19,7 @@ import { storyService } from '../services/story.service';
 import { onboardingService } from '../services/onboarding.service';
 import { identityService } from '../services/identity.service';
 import { embeddingService } from '../services/embedding.service';
+import { entitlementService } from '../services/entitlement.service';
 
 /**
  * Parses a GitHub repository URL to extract owner and repository name.
@@ -102,22 +103,29 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
     const { owner, repo } = parseGithubUrl(url);
 
     // Check if repository already exists for this user to avoid duplicates
-    let repository = await prisma.repository.findFirst({
+    const existingRepo = await prisma.repository.findFirst({
       where: { userId, owner, name: repo }
     });
 
-    if (repository) {
-      if (repository.indexingStatus === 'indexing') {
+    let repository: any;
+    const isReindex = !!existingRepo;
+
+    if (existingRepo) {
+      if (existingRepo.indexingStatus === 'indexing') {
         res.status(200).json({
           success: true,
           message: 'Repository is already indexing in the background.',
-          data: repository
+          data: existingRepo
         });
         return;
       }
+
+      // Verify re-indexing entitlement
+      await entitlementService.canReindex(userId, existingRepo.id);
+
       // Set status to indexing, progress to Downloading
       repository = await prisma.repository.update({
-        where: { id: repository.id },
+        where: { id: existingRepo.id },
         data: {
           indexingStatus: 'indexing',
           indexingProgress: 'Downloading',
@@ -132,6 +140,10 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
         }
       });
     } else {
+      // For new analysis, enforce analysis limit and active codebase limit
+      await entitlementService.canAnalyzeCodebase(userId);
+      await entitlementService.canCreateActiveCodebase(userId);
+
       // Create new repository
       repository = await prisma.repository.create({
         data: {
@@ -153,7 +165,7 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
     }
 
     // Trigger background vector indexing asynchronously
-    performVectorIndexing(repository.id, false).catch(err => {
+    performVectorIndexing(repository.id, isReindex, { isNewAnalysis: !isReindex }).catch(err => {
       console.error(`[Background Indexing] Failed for repo ${repository!.id}:`, err);
     });
 
@@ -184,22 +196,63 @@ export async function scanLocalZip(req: Request, res: Response, next: NextFuncti
     const repoName = path.parse(file.originalname).name;
     const zipPath = file.path;
 
+    // Security check: Validate ZIP integrity and prevent Zip Slip / path traversal
+    let zip: AdmZip;
+    try {
+      zip = new AdmZip(zipPath);
+    } catch (zipErr: any) {
+      try { fs.unlinkSync(zipPath); } catch {}
+      throw new AppError('Invalid or corrupted ZIP archive.', 400);
+    }
+
+    const zipEntries = zip.getEntries();
+    let totalUncompressedSize = 0;
+    let fileCount = 0;
+
+    for (const entry of zipEntries) {
+      const entryName = entry.entryName;
+      // Thwart Zip Slip attacks
+      if (entryName.includes('..') || path.isAbsolute(entryName) || /^[a-zA-Z]:/.test(entryName)) {
+        try { fs.unlinkSync(zipPath); } catch {}
+        throw new AppError('Security violation: ZIP archive contains illegal path traversal entries.', 400, 'SECURITY_VIOLATION');
+      }
+      if (!entry.isDirectory) {
+        totalUncompressedSize += entry.header.size;
+        fileCount++;
+      }
+    }
+
+    // Enforce file count and repository size limits BEFORE expensive indexing starts
+    try {
+      await entitlementService.validateRepoSize(userId, fileCount, totalUncompressedSize);
+    } catch (limitErr) {
+      try { fs.unlinkSync(zipPath); } catch {}
+      throw limitErr;
+    }
+
     // Check if repository already exists for this user
-    let repository = await prisma.repository.findFirst({
+    const existingRepo = await prisma.repository.findFirst({
       where: { userId, name: repoName, isLocal: true }
     });
 
-    if (repository) {
-      if (repository.indexingStatus === 'indexing') {
+    let repository: any;
+    const isReindex = !!existingRepo;
+
+    if (existingRepo) {
+      if (existingRepo.indexingStatus === 'indexing') {
         res.status(200).json({
           success: true,
           message: 'Repository is already indexing in the background.',
-          data: repository
+          data: existingRepo
         });
         return;
       }
+
+      // Check re-index entitlement
+      await entitlementService.canReindex(userId, existingRepo.id);
+
       repository = await prisma.repository.update({
-        where: { id: repository.id },
+        where: { id: existingRepo.id },
         data: {
           indexingStatus: 'indexing',
           indexingProgress: 'Parsing',
@@ -213,6 +266,10 @@ export async function scanLocalZip(req: Request, res: Response, next: NextFuncti
         }
       });
     } else {
+      // Check codebase analysis and active repository limits
+      await entitlementService.canAnalyzeCodebase(userId);
+      await entitlementService.canCreateActiveCodebase(userId);
+
       repository = await prisma.repository.create({
         data: {
           userId,
@@ -233,7 +290,7 @@ export async function scanLocalZip(req: Request, res: Response, next: NextFuncti
     }
 
     // Trigger background vector indexing passing the local zip path
-    performVectorIndexing(repository.id, false, { zipPath }).catch(err => {
+    performVectorIndexing(repository.id, isReindex, { zipPath, isNewAnalysis: !isReindex }).catch(err => {
       console.error(`[Background Indexing] Failed for local repo ${repository!.id}:`, err);
     });
 
@@ -270,6 +327,8 @@ export async function listUserRepos(req: Request, res: Response, next: NextFunct
         confidence: true,
         indexingStatus: true,
         indexingProgress: true,
+        isArchived: true,
+        reindexCount: true,
         createdAt: true
       },
       orderBy: { createdAt: 'desc' }
@@ -384,6 +443,49 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
 }
 
 /**
+ * Deletes a repository owned by the user, cleaning up local extracted files and all associated data.
+ */
+export async function deleteRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new AppError('Unauthorized.', 401);
+    }
+
+    const repo = await prisma.repository.findFirst({
+      where: { id: id as string, userId: userId as string },
+      select: { id: true, name: true, localPath: true }
+    });
+
+    if (!repo) {
+      throw new AppError('Repository not found or access denied.', 404);
+    }
+
+    // Clean up local filesystem directory if extracted files exist
+    if (repo.localPath && fs.existsSync(repo.localPath)) {
+      try {
+        await deleteFolderWithRetry(repo.localPath);
+      } catch (fsErr) {
+        console.warn(`[Delete Repo] Warning: Failed to delete directory ${repo.localPath}:`, fsErr);
+      }
+    }
+
+    // Delete repository from database (cascades to CodeChunks and ChatMessages)
+    await prisma.repository.delete({
+      where: { id: repo.id }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Repository "${repo.name}" deleted successfully.`
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * Calculates dependencies, affected routes, modules, and risk score for a selected file.
  * Automatically generates a human-friendly LLM explanation of the impact.
  */
@@ -398,6 +500,10 @@ export async function analyzeImpact(req: Request, res: Response, next: NextFunct
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+
+    // Verify entitlement for advanced deep impact analysis
+    await entitlementService.canUseAdvancedAnalysis(userId);
+
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: { id: true, dependencyGraph: true }
@@ -498,7 +604,7 @@ Explain WHY modifying this file propagates to these dependencies. Keep it short,
  * Standalone asynchronous vector indexing runner.
  * Automatically checks if repository is already indexed to return instantly unless force is true.
  */
-export async function performVectorIndexing(id: string, force = false, options?: { zipPath?: string }): Promise<void> {
+export async function performVectorIndexing(id: string, force = false, options?: { zipPath?: string; isNewAnalysis?: boolean }): Promise<void> {
   // ── Metrics helpers ───────────────────────────────────────────────────────
   function heapMB() { return Math.round(process.memoryUsage().heapUsed / 1024 / 1024); }
   function logStage(stage: string, durationMs?: number) {
@@ -585,19 +691,15 @@ export async function performVectorIndexing(id: string, force = false, options?:
 
     const extractStart = Date.now();
     console.log(`[Indexing] Extracting ZIP: ${zipPath} to ${extractPath}...`);
-    try {
-      if (process.platform === 'win32') {
-        const zip = new AdmZip(zipPath!);
-        zip.extractAllTo(extractPath, true);
-      } else {
-        const { execSync } = require('child_process');
-        execSync(`unzip -q "${zipPath}" -d "${extractPath}"`);
+    const zip = new AdmZip(zipPath!);
+    const zipEntries = zip.getEntries();
+    for (const entry of zipEntries) {
+      const entryName = entry.entryName;
+      if (entryName.includes('..') || path.isAbsolute(entryName) || /^[a-zA-Z]:/.test(entryName)) {
+        throw new AppError('Security violation: ZIP archive contains illegal path traversal entries.', 400, 'SECURITY_VIOLATION');
       }
-    } catch (err: any) {
-      console.warn(`[Indexing] Native unzip failed, falling back to AdmZip: ${err.message}`);
-      const zip = new AdmZip(zipPath!);
-      zip.extractAllTo(extractPath, true);
     }
+    zip.extractAllTo(extractPath, true);
     const extractTime = Date.now() - extractStart;
     logStage('extract', extractTime);
 
@@ -687,6 +789,11 @@ export async function performVectorIndexing(id: string, force = false, options?:
 
     const parseTime = Date.now() - parseStart;
     logStage('parse', parseTime);
+
+    // Enforce repository file count & size limits on scanned files based on user plan
+    if (repoRow.userId) {
+      await entitlementService.validateRepoSize(repoRow.userId, scannedFiles.length, totalSize);
+    }
 
     // Real progress: Discovery complete = 30%
     await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Parsed 30%' } });
@@ -892,6 +999,15 @@ export async function performVectorIndexing(id: string, force = false, options?:
       }
     });
 
+    // Authoritatively record usage in database upon successful completion
+    if (repoRow.userId) {
+      if (options?.isNewAnalysis) {
+        await entitlementService.recordCodebaseAnalysis(repoRow.userId);
+      } else if (force) {
+        await entitlementService.recordReindex(repoRow.userId, id);
+      }
+    }
+
     // If we fetched a latest SHA, try to persist it (best-effort, ignores schema errors)
     if (latestSha) {
       try {
@@ -973,6 +1089,9 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
       return;
     }
 
+    // Verify re-indexing entitlement
+    await entitlementService.canReindex(userId, id as string);
+
     // Set indexing status to indexing and starting progress
     await prisma.repository.update({
       where: { id: id as string },
@@ -983,7 +1102,7 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
     });
 
     // Trigger background vector indexing asynchronously
-    performVectorIndexing(id as string, !!force).catch(err => {
+    performVectorIndexing(id as string, true, { isNewAnalysis: false }).catch(err => {
       console.error(`[Background Indexing] Failed for repo ${id}:`, err);
     });
 
@@ -1011,6 +1130,10 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+
+    // Check monthly AI question entitlement
+    await entitlementService.canAskAI(userId);
+
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
@@ -1103,6 +1226,9 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       data: { repositoryId: id as string, sender: 'AI', message: aiResult.text, modelUsed: aiResult.modelUsed }
     });
 
+    // Authoritatively record monthly AI question usage
+    await entitlementService.recordAiQuestion(userId);
+
     res.status(200).json({
       success: true,
       data: {
@@ -1131,6 +1257,10 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+
+    // Check monthly AI question entitlement
+    await entitlementService.canAskAI(userId);
+
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
@@ -1248,6 +1378,9 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
           modelUsed: finalModel
         }
       });
+
+      // Authoritatively record monthly AI question usage
+      await entitlementService.recordAiQuestion(userId);
 
       res.write('data: [DONE]\n\n');
       res.end();
@@ -1477,11 +1610,56 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
   }
 }
 
+/**
+ * Archives a repository to free up active codebase slots without deleting data.
+ */
+export async function archiveRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new AppError('Unauthorized.', 401);
+    }
+    const updated = await entitlementService.archiveRepo(userId, id as string);
+    res.status(200).json({
+      success: true,
+      message: 'Repository archived successfully.',
+      data: updated
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Unarchives/activates an archived repository if active slots are available.
+ */
+export async function unarchiveRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new AppError('Unauthorized.', 401);
+    }
+    const updated = await entitlementService.unarchiveRepo(userId, id as string);
+    res.status(200).json({
+      success: true,
+      message: 'Repository activated successfully.',
+      data: updated
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export const repoController = {
   scanPublicRepo,
   scanLocalZip,
   listUserRepos,
   getRepoDetails,
+  deleteRepo,
+  archiveRepo,
+  unarchiveRepo,
   analyzeImpact,
   buildVectorIndex,
   chatWithRepo,
