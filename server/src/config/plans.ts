@@ -30,10 +30,10 @@ export interface PlanLimits {
 export const PLAN_LIMITS: Record<'free' | 'pro', PlanLimits> = {
   free: {
     name: 'free',
-    displayName: 'Free',
+    displayName: 'Explorer',
     priceMonthly: 0,
     period: 'forever',
-    tagline: 'Explore Archon on real codebases with zero friction.',
+    tagline: 'Deep architecture exploration for individual developers.',
     lifetimeAnalyses: 2,
     maxActiveCodebases: 1,
     maxFilesPerRepo: 400,
@@ -51,10 +51,10 @@ export const PLAN_LIMITS: Record<'free' | 'pro', PlanLimits> = {
   },
   pro: {
     name: 'pro',
-    displayName: 'Pro',
+    displayName: 'Architect',
     priceMonthly: 7.99,
     period: '/month',
-    tagline: 'Continuously understand and work with your codebases.',
+    tagline: 'Continuous codebase intelligence & living architecture maps.',
     lifetimeAnalyses: 999999,
     maxActiveCodebases: 10,
     maxFilesPerRepo: 2000,
