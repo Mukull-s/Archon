@@ -169,3 +169,33 @@ export async function verifyEmailToken(req: Request, res: Response, next: NextFu
     });
   } catch (err) { next(err); }
 }
+
+/** GET /api/auth/usage — Get current user entitlement usage and plan limits */
+export async function getUsage(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { entitlementService } = await import('../services/entitlement.service');
+    const data = await entitlementService.getUserUsageAndLimits(req.user!.userId);
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+/** POST /api/auth/upgrade — Development/testing plan change endpoint */
+export async function upgradePlan(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { entitlementService } = await import('../services/entitlement.service');
+    const plan = req.body.plan === 'pro' ? 'pro' : 'free';
+    await entitlementService.setPlan(req.user!.userId, plan);
+    const updated = await entitlementService.getUserUsageAndLimits(req.user!.userId);
+    res.status(200).json({
+      success: true,
+      message: `Plan updated to ${plan.toUpperCase()} successfully.`,
+      data: updated,
+    });
+  } catch (err) { next(err); }
+}
+
+/** GET /api/auth/plans — Public plan tiers and features */
+export async function getPlans(_req: Request, res: Response) {
+  const { PLAN_LIMITS } = await import('../config');
+  res.status(200).json({ success: true, data: PLAN_LIMITS });
+}

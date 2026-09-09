@@ -321,6 +321,7 @@ export class AuthService {
   private toAuthUser(user: {
     id: string; email: string; name: string | null; avatarUrl: string | null;
     provider: string; emailVerified: boolean; githubLogin: string | null;
+    plan?: string | null;
     createdAt: Date;
   }): AuthUser {
     return {
@@ -331,6 +332,7 @@ export class AuthService {
       provider: user.provider,
       emailVerified: user.emailVerified,
       githubLogin: user.githubLogin,
+      plan: user.plan === 'pro' ? 'pro' : 'free',
       createdAt: user.createdAt.toISOString(),
     };
   }

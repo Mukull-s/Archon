@@ -46,6 +46,8 @@ export function errorHandler(
     success: false,
     error: {
       message,
+      ...(err instanceof AppError && err.code ? { code: err.code } : {}),
+      ...(err instanceof AppError && err.details ? { details: err.details } : {}),
       // Only include stack trace in development
       ...(env.NODE_ENV === 'development' && { stack: err.stack }),
     },
