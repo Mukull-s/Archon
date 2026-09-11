@@ -1,59 +1,70 @@
-import { useState, useEffect, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useAuthStore } from '../stores/authStore'
+import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useAuthStore } from '../stores/authStore';
+import { Button } from './ui/DesignSystem';
 
 interface NavLink {
-  label: string
-  href: string
-  type: 'anchor' | 'route'
+  label: string;
+  href: string;
+  type: 'anchor' | 'route';
 }
 
 export default function Navbar() {
-  const [scrolled, setScrolled] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
-  const location = useLocation()
-  const navigate = useNavigate()
-  const menuRef = useRef<HTMLDivElement>(null)
+  const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const { user, isAuthenticated, logout } = useAuthStore()
+  const { user, isAuthenticated, logout } = useAuthStore();
 
   useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 40)
-    const handleResize = () => setIsMobile(window.innerWidth < 768)
-    window.addEventListener('scroll', handleScroll)
-    window.addEventListener('resize', handleResize)
+    const handleScroll = () => setScrolled(window.scrollY > 40);
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('scroll', handleScroll);
+    window.addEventListener('resize', handleResize);
     return () => {
-      window.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('resize', handleResize)
-    }
-  }, [])
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
+        setMenuOpen(false);
       }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && menuOpen) {
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [menuOpen]);
 
   const navLinks: NavLink[] = [
     { label: 'Features', href: '#features', type: 'anchor' },
     { label: 'How It Works', href: '#how-it-works', type: 'anchor' },
     { label: 'Pricing', href: '/pricing', type: 'route' },
     { label: 'Docs', href: '/docs', type: 'route' },
-  ]
+  ];
 
   const scrollToAnchor = (href: string) => {
     if (location.pathname !== '/') {
-      window.location.href = '/' + href
-      return
+      window.location.href = '/' + href;
+      return;
     }
-    document.querySelector(href)?.scrollIntoView({ behavior: 'smooth' })
-  }
+    document.querySelector(href)?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   return (
     <motion.nav
@@ -62,46 +73,46 @@ export default function Navbar() {
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
     >
-      <div style={{
-        maxWidth: '1120px', margin: '0 auto', padding: '0 24px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      }}>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between">
         {/* Logo Monogram */}
-        <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}>
-          <img src="/Archonlogo.png" alt="Archon Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
-          <span style={{ fontWeight: 700, fontSize: '16px', color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
+        <Link
+          to="/"
+          className="flex items-center gap-2 no-underline text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-md"
+        >
+          <img src="/Archonlogo.png" alt="Archon Logo" className="w-7 h-7 object-contain" />
+          <span className="font-heading font-bold text-base text-text-primary tracking-tight">
             Archon
           </span>
         </Link>
 
         {/* Center nav */}
         {!isMobile && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '2px', padding: '4px',
-            background: scrolled ? 'rgba(255,255,255,0.03)' : 'transparent',
-            border: scrolled ? '1px solid var(--border)' : '1px solid transparent',
-            borderRadius: '100px', transition: 'all 0.3s',
-          }}>
+          <div
+            className={`flex items-center gap-0.5 p-1 rounded-full transition-all duration-300 ${
+              scrolled
+                ? 'bg-surface-base/40 border border-border-subtle backdrop-blur-md'
+                : 'bg-transparent border border-transparent'
+            }`}
+          >
             {navLinks.map((link) => (
               link.type === 'route' ? (
-                <Link key={link.label} to={link.href} style={{
-                  background: 'transparent', border: 'none',
-                  color: location.pathname === link.href ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  fontSize: '13px', fontWeight: 500, fontFamily: 'var(--font-sans)',
-                  cursor: 'pointer', padding: '6px 14px', borderRadius: '100px',
-                  transition: 'color 0.2s', letterSpacing: '-0.01em', textDecoration: 'none',
-                }}>
+                <Link
+                  key={link.label}
+                  to={link.href}
+                  className={`text-[13px] font-medium py-1.5 px-3.5 rounded-full transition-colors duration-200 no-underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                    location.pathname === link.href
+                      ? 'text-text-primary bg-surface-elevated/40'
+                      : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                >
                   {link.label}
                 </Link>
               ) : (
-                <button key={link.label} onClick={() => scrollToAnchor(link.href)} style={{
-                  background: 'transparent', border: 'none',
-                  color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 500,
-                  fontFamily: 'var(--font-sans)', cursor: 'pointer', padding: '6px 14px',
-                  borderRadius: '100px', transition: 'color 0.2s', letterSpacing: '-0.01em',
-                }}
-                  onMouseEnter={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-primary)'}
-                  onMouseLeave={(e) => (e.target as HTMLButtonElement).style.color = 'var(--text-secondary)'}
+                <button
+                  key={link.label}
+                  type="button"
+                  onClick={() => scrollToAnchor(link.href)}
+                  className="bg-transparent border-0 text-text-secondary hover:text-text-primary text-[13px] font-medium py-1.5 px-3.5 rounded-full transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   {link.label}
                 </button>
@@ -111,201 +122,209 @@ export default function Navbar() {
         )}
 
         {/* Right actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="flex items-center gap-2">
           {isAuthenticated && user ? (
-            <div ref={menuRef} style={{ position: 'relative' }}>
-                <button
-                  onClick={() => setMenuOpen(!menuOpen)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-                    borderRadius: '100px', padding: '4px 12px 4px 4px',
-                    cursor: 'pointer', transition: 'all 0.2s',
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.borderColor = 'rgba(176,38,255,0.3)'}
-                  onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'}
+            <div ref={menuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setMenuOpen(!menuOpen)}
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                aria-label="User account menu"
+                className="flex items-center gap-2 h-9 pl-1 pr-3 py-1 rounded-full bg-surface-base/80 hover:bg-surface-elevated/90 border border-border-subtle/80 hover:border-accent/40 shadow-sm backdrop-blur-md transition-all duration-200 cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                {user.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.name || user.email}
+                    className="w-7 h-7 rounded-full shrink-0 aspect-square object-cover ring-1 ring-white/10"
+                  />
+                ) : (
+                  <div className="w-7 h-7 rounded-full shrink-0 aspect-square bg-gradient-to-br from-accent via-accent to-accent-hover text-white flex items-center justify-center text-xs font-semibold ring-1 ring-white/15 shadow-inner">
+                    {(user.name || user.email).charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <span className="text-xs font-medium text-text-primary group-hover:text-white transition-colors max-w-[120px] truncate tracking-tight">
+                  {user.name || user.email.split('@')[0]}
+                </span>
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                  className={`text-text-muted group-hover:text-text-secondary transition-transform duration-200 ${menuOpen ? 'rotate-180 text-accent' : 'rotate-0'}`}
                 >
-                  {user.avatarUrl ? (
-                    <img src={user.avatarUrl} alt={user.name || user.email}
-                      style={{ width: '26px', height: '26px', borderRadius: '50%', border: '1.5px solid rgba(176,38,255,0.3)' }}
-                    />
-                  ) : (
-                    <div style={{
-                      width: '26px', height: '26px', borderRadius: '50%',
-                      background: 'var(--grad-primary)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: '11px', fontWeight: 700, color: '#fff',
-                    }}>
-                      {(user.name || user.email).charAt(0).toUpperCase()}
-                    </div>
-                  )}
-                  <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)', fontFamily: 'var(--font-sans)' }}>
-                    {user.name || user.email.split('@')[0]}
-                  </span>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{
-                    color: 'var(--text-muted)', transform: menuOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s',
-                  }}>
-                    <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </button>
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
 
-                <AnimatePresence>
-                  {menuOpen && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -8, scale: 0.96 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -8, scale: 0.96 }}
-                      transition={{ duration: 0.15, ease: 'easeOut' }}
-                      style={{
-                        position: 'absolute', top: 'calc(100% + 8px)', right: 0, minWidth: '190px',
-                        background: 'rgba(15, 10, 25, 0.98)', border: '1px solid rgba(255,255,255,0.08)',
-                        borderRadius: '12px', padding: '6px',
-                        boxShadow: '0 16px 48px rgba(0,0,0,0.5)', backdropFilter: 'blur(20px)', zIndex: 100,
-                      }}
-                    >
-                      <div style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '4px' }}>
-                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{user.name || user.email.split('@')[0]}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{user.email}</div>
-                        <div style={{
-                          display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px',
-                          fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
-                          padding: '2px 8px', borderRadius: '100px',
-                          background: user.provider === 'github' ? 'rgba(255,255,255,0.06)' : user.provider === 'google' ? 'rgba(66,133,244,0.1)' : 'rgba(176,38,255,0.1)',
-                          color: user.provider === 'github' ? 'var(--text-secondary)' : user.provider === 'google' ? '#4285F4' : 'var(--accent)',
-                        }}>
-                          {user.provider}
-                        </div>
+              <AnimatePresence>
+                {menuOpen && (
+                  <motion.div
+                    role="menu"
+                    aria-label="User navigation"
+                    initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 6, scale: 0.96 }}
+                    transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                    className="absolute top-[calc(100%+8px)] right-0 w-60 bg-surface-base/95 backdrop-blur-2xl border border-border-subtle/90 rounded-2xl p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.7),0_0_1px_1px_rgba(255,255,255,0.06)] z-50"
+                  >
+                    {/* User profile header card */}
+                    <div className="p-3 rounded-xl bg-surface-elevated/50 border border-border-subtle/50 mb-1">
+                      <div className="text-xs font-semibold text-text-primary truncate tracking-tight">
+                        {user.name || user.email.split('@')[0]}
                       </div>
+                      <div className="text-[11px] text-text-muted truncate mt-0.5">
+                        {user.email}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium tracking-wide uppercase bg-accent/10 text-accent border border-accent/20">
+                          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                          {user.provider || 'Archon'}
+                        </span>
+                      </div>
+                    </div>
 
-                      <Link to="/dashboard" onClick={() => setMenuOpen(false)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: '8px',
-                          padding: '8px 12px', borderRadius: '8px',
-                          color: 'var(--text-secondary)', fontSize: '13px',
-                          textDecoration: 'none', transition: 'background 0.15s',
-                          marginBottom: '2px',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    <div className="space-y-0.5">
+                      <Link
+                        to="/dashboard"
+                        role="menuitem"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-surface-elevated/70 transition-all duration-150 group no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="3" width="7" height="9" />
-                          <rect x="14" y="3" width="7" height="5" />
-                          <rect x="14" y="12" width="7" height="9" />
-                          <rect x="3" y="16" width="7" height="5" />
+                        <span className="flex items-center gap-2.5">
+                          <svg className="w-3.5 h-3.5 text-text-muted group-hover:text-accent transition-colors duration-150" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <rect x="3" y="3" width="7" height="9" />
+                            <rect x="14" y="3" width="7" height="5" />
+                            <rect x="14" y="12" width="7" height="9" />
+                            <rect x="3" y="16" width="7" height="5" />
+                          </svg>
+                          <span>Dashboard</span>
+                        </span>
+                        <svg className="w-3.5 h-3.5 text-text-muted/40 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                         </svg>
-                        Dashboard
                       </Link>
 
-                      <Link to="/history" onClick={() => setMenuOpen(false)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: '8px',
-                          padding: '8px 12px', borderRadius: '8px',
-                          color: 'var(--text-secondary)', fontSize: '13px',
-                          textDecoration: 'none', transition: 'background 0.15s',
-                          marginBottom: '2px',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      <Link
+                        to="/history"
+                        role="menuitem"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-surface-elevated/70 transition-all duration-150 group no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                        <span className="flex items-center gap-2.5">
+                          <svg className="w-3.5 h-3.5 text-text-muted group-hover:text-accent transition-colors duration-150" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                          </svg>
+                          <span>My Repositories</span>
+                        </span>
+                        <svg className="w-3.5 h-3.5 text-text-muted/40 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                         </svg>
-                        My Repositories
                       </Link>
 
-                      <Link to="/profile" onClick={() => setMenuOpen(false)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: '8px',
-                          padding: '8px 12px', borderRadius: '8px',
-                          color: 'var(--text-secondary)', fontSize: '13px',
-                          textDecoration: 'none', transition: 'background 0.15s',
-                          marginBottom: '2px',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      <Link
+                        to="/profile"
+                        role="menuitem"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-surface-elevated/70 transition-all duration-150 group no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                          <circle cx="12" cy="7" r="4"/>
+                        <span className="flex items-center gap-2.5">
+                          <svg className="w-3.5 h-3.5 text-text-muted group-hover:text-accent transition-colors duration-150" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                            <circle cx="12" cy="7" r="4" />
+                          </svg>
+                          <span>My Profile</span>
+                        </span>
+                        <svg className="w-3.5 h-3.5 text-text-muted/40 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                         </svg>
-                        My Profile
                       </Link>
 
-                      <Link to="/settings" onClick={() => setMenuOpen(false)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: '8px',
-                          padding: '8px 12px', borderRadius: '8px',
-                          color: 'var(--text-secondary)', fontSize: '13px',
-                          textDecoration: 'none', transition: 'background 0.15s',
-                          marginBottom: '4px',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      <Link
+                        to="/settings"
+                        role="menuitem"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-surface-elevated/70 transition-all duration-150 group no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="12" cy="12" r="3" />
-                          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        <span className="flex items-center gap-2.5">
+                          <svg className="w-3.5 h-3.5 text-text-muted group-hover:text-accent transition-colors duration-150" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="3" />
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                          </svg>
+                          <span>Settings</span>
+                        </span>
+                        <svg className="w-3.5 h-3.5 text-text-muted/40 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                         </svg>
-                        Settings
                       </Link>
 
-                    {user.githubLogin && (
-                      <a href={`https://github.com/${user.githubLogin}`} target="_blank" rel="noopener noreferrer"
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: '8px',
-                          padding: '8px 12px', borderRadius: '8px',
-                          color: 'var(--text-secondary)', fontSize: '13px',
-                          textDecoration: 'none', transition: 'background 0.15s',
-                          marginBottom: '4px',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
-                          <path d="M9 18c-4.51 2-5-2-7-2"/>
-                        </svg>
-                        GitHub Profile
-                      </a>
-                    )}
+                      {user.githubLogin && (
+                        <a
+                          href={`https://github.com/${user.githubLogin}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          role="menuitem"
+                          className="flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-surface-elevated/70 transition-all duration-150 group no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        >
+                          <span className="flex items-center gap-2.5">
+                            <svg className="w-3.5 h-3.5 text-text-muted group-hover:text-accent transition-colors duration-150" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+                              <path d="M9 18c-4.51 2-5-2-7-2" />
+                            </svg>
+                            <span>GitHub Profile</span>
+                          </span>
+                          <svg className="w-3.5 h-3.5 text-text-muted/40 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="my-1 mx-1 h-px bg-border-subtle/50" />
 
                     <button
+                      type="button"
+                      role="menuitem"
                       onClick={() => { logout(); setMenuOpen(false); }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '8px',
-                        width: '100%', padding: '8px 12px', borderRadius: '8px',
-                        background: 'transparent', border: 'none', color: '#ef4444',
-                        fontSize: '13px', cursor: 'pointer', textAlign: 'left',
-                        fontFamily: 'var(--font-sans)', transition: 'background 0.15s',
-                        borderTop: '1px solid rgba(255,255,255,0.05)', marginTop: '4px',
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239,68,68,0.08)'}
-                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      className="flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs font-medium text-status-error/90 hover:text-status-error hover:bg-status-error/10 transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-error text-left group"
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                        <polyline points="16 17 21 12 16 7"/>
-                        <line x1="21" y1="12" x2="9" y2="12"/>
+                      <svg className="w-3.5 h-3.5 text-status-error/70 group-hover:text-status-error transition-colors duration-150" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
                       </svg>
-                      Sign Out
+                      <span>Sign Out</span>
                     </button>
                   </motion.div>
                 )}
               </AnimatePresence>
             </div>
-        ) : (
-            <>
-              <button className="btn-ghost" onClick={() => navigate('/auth')} style={{ padding: '7px 16px', fontSize: '13px' }}>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate('/auth')}
+              >
                 Sign In
-              </button>
-              <button className="btn-primary" onClick={() => navigate('/auth')} style={{ padding: '7px 16px', fontSize: '13px' }}>
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => navigate('/auth')}
+              >
                 Get Started
-              </button>
-            </>
+              </Button>
+            </div>
           )}
         </div>
       </div>
     </motion.nav>
-  )
+  );
 }
