@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import Navbar from '../components/Navbar';
 import Footer from '../components/sections/Footer';
 import { useAuthStore } from '../stores/authStore';
 import api from '../lib/api';
+import { Button, Card, Badge, FormField, Input, Modal, Spinner } from '../components/ui/DesignSystem';
 
 interface Repo {
   id: string;
@@ -190,241 +190,170 @@ export default function ProfilePage() {
   const providerName = user?.provider === 'github' ? 'GitHub' : user?.provider === 'google' ? 'Google' : 'Email Auth';
 
   return (
-    <div style={{ minHeight: '100vh', background: '#07060b', color: '#f4f4f5', display: 'flex', flexDirection: 'column' }}>
+    <div className="min-h-screen bg-bg-base text-text-primary flex flex-col">
       <Navbar />
 
-      <main style={{ flex: 1, maxWidth: '1080px', margin: '0 auto', width: '100%', padding: '120px 24px 70px' }}>
+      <main className="flex-1 max-w-[1080px] mx-auto w-full px-6 pt-[120px] pb-[70px]">
 
         {/* ── COMMAND HEADER ── */}
-        <section style={{
-          background: 'radial-gradient(ellipse 70% 50% at 50% -20%, rgba(176,38,255,0.12) 0%, rgba(15,12,23,0.6) 100%)',
-          border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: '20px',
-          padding: '32px 36px',
-          marginBottom: '32px',
-          position: 'relative',
-          overflow: 'hidden',
-          boxShadow: '0 20px 50px rgba(0,0,0,0.4)',
-        }}>
+        <section className="relative overflow-hidden rounded-[20px] p-7 sm:p-9 mb-8 border border-white/[0.08] shadow-[0_20px_50px_rgba(0,0,0,0.4)] bg-[radial-gradient(ellipse_70%_50%_at_50%_-20%,rgba(176,38,255,0.12)_0%,rgba(15,12,23,0.6)_100%)]">
           {/* Subtle top edge glow */}
-          <div style={{
-            position: 'absolute', top: 0, left: '10%', right: '10%', height: '1px',
-            background: 'linear-gradient(90deg, transparent, rgba(176,38,255,0.6), transparent)',
-          }} />
+          <div className="absolute top-0 left-[10%] right-[10%] h-px bg-gradient-to-r from-transparent via-[#b026ff]/60 to-transparent pointer-events-none" />
 
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: '24px',
-          }}>
+          <div className="flex items-center justify-between flex-wrap gap-6">
             {/* Identity badge */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-              <div style={{
-                width: '74px', height: '74px', borderRadius: '18px',
-                background: user?.avatarUrl
-                  ? 'transparent'
-                  : 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                border: '2px solid rgba(176,38,255,0.4)',
-                boxShadow: '0 0 24px rgba(176,38,255,0.25)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                overflow: 'hidden', flexShrink: 0,
-                fontSize: '28px', fontWeight: 800, color: '#fff',
-              }}>
+            <div className="flex items-center gap-5">
+              <div
+                className={`w-[74px] h-[74px] rounded-[18px] border-2 border-[#b026ff]/40 shadow-[0_0_24px_rgba(176,38,255,0.25)] flex items-center justify-center overflow-hidden shrink-0 text-[28px] font-extrabold text-white ${
+                  user?.avatarUrl ? 'bg-transparent' : 'bg-gradient-to-br from-[#b026ff] to-[#6366f1]'
+                }`}
+              >
                 {user?.avatarUrl ? (
-                  <img src={user.avatarUrl} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <img src={user.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
                 ) : (
                   (user?.name?.[0] || user?.email?.[0] || '?').toUpperCase()
                 )}
               </div>
 
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-                  <h1 style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.03em', color: '#fff', margin: 0 }}>
+                <div className="flex items-center gap-2.5 mb-1">
+                  <h1 className="text-[24px] font-extrabold tracking-[-0.03em] text-white m-0">
                     {user?.name || user?.email?.split('@')[0] || 'Developer'}
                   </h1>
 
                   {/* Tier pill */}
-                  <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '3px 10px',
-                    borderRadius: '100px',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    background: isArchitect
-                      ? 'linear-gradient(135deg, rgba(176,38,255,0.25) 0%, rgba(99,102,241,0.25) 100%)'
-                      : 'rgba(255,255,255,0.06)',
-                    border: isArchitect
-                      ? '1px solid rgba(176,38,255,0.5)'
-                      : '1px solid rgba(255,255,255,0.12)',
-                    color: isArchitect ? '#e879f9' : '#d4d4d8',
-                  }}>
-                    <span style={{
-                      width: '6px', height: '6px', borderRadius: '50%',
-                      background: isArchitect ? '#22c55e' : '#a1a1aa',
-                      boxShadow: isArchitect ? '0 0 8px #22c55e' : 'none',
-                    }} />
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tracking-[0.08em] uppercase ${
+                      isArchitect
+                        ? 'bg-gradient-to-r from-[#b026ff]/25 to-[#6366f1]/25 border border-[#b026ff]/50 text-[#e879f9]'
+                        : 'bg-white/[0.06] border border-white/[0.12] text-text-secondary'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        isArchitect ? 'bg-status-success shadow-[0_0_8px_#22c55e]' : 'bg-text-muted'
+                      }`}
+                    />
                     {tierDisplayName}
                   </span>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '13px', color: '#a1a1aa' }}>
+                <div className="flex items-center gap-3.5 text-[13px] text-text-muted">
                   <span>{user?.email}</span>
-                  <span style={{ opacity: 0.3 }}>•</span>
+                  <span className="opacity-30">•</span>
                   <span>{providerName}</span>
-                  <span style={{ opacity: 0.3 }}>•</span>
+                  <span className="opacity-30">•</span>
                   <span>Joined {joinedDate}</span>
                 </div>
               </div>
             </div>
 
             {/* Header Action Buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div className="flex items-center gap-3">
               {!isArchitect ? (
                 <button
                   type="button"
                   onClick={() => setShowUpgradeModal(true)}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '8px',
-                    padding: '10px 20px', borderRadius: '10px',
-                    background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                    border: 'none', color: '#fff', fontSize: '13px', fontWeight: 600,
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 20px rgba(176,38,255,0.35)',
-                    transition: 'transform 0.15s ease',
-                  }}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] bg-gradient-to-r from-[#b026ff] to-[#6366f1] text-white text-[13px] font-semibold cursor-pointer shadow-[0_4px_20px_rgba(176,38,255,0.35)] hover:brightness-110 active:scale-[0.98] transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b026ff] focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
                 >
                   <span>✦ Upgrade to Architect</span>
-                  <span style={{ fontSize: '11px', opacity: 0.85 }}>$7.99/mo</span>
+                  <span className="text-[11px] opacity-85">$7.99/mo</span>
                 </button>
               ) : (
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: '6px',
-                  padding: '8px 16px', borderRadius: '8px',
-                  background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
-                  color: '#4ade80', fontSize: '12px', fontWeight: 600,
-                }}>
+                <div className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-status-success/10 border border-status-success/30 text-status-success text-[12px] font-semibold">
                   <span>✓</span>
                   <span>Architect Subscription Active</span>
                 </div>
               )}
 
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 onClick={() => { logout(); navigate('/'); }}
-                style={{
-                  padding: '9px 16px', borderRadius: '8px',
-                  background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
-                  color: '#a1a1aa', fontSize: '12px', fontWeight: 500,
-                  cursor: 'pointer',
-                  transition: 'background 0.15s ease',
-                }}
+                className="text-text-muted hover:text-text-primary"
               >
                 Sign Out
-              </button>
+              </Button>
             </div>
           </div>
         </section>
 
         {/* ── HIGH-DENSITY NAVIGATION TABS ── */}
-        <div style={{
-          display: 'flex',
-          gap: '6px',
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
-          marginBottom: '32px',
-        }}>
+        <div role="tablist" className="flex gap-1.5 border-b border-border-subtle mb-8 overflow-x-auto scrollbar-none">
           {([
             { id: 'entitlements', label: 'Plan & Telemetry Quotas', badge: tierDisplayName },
             { id: 'codebases', label: 'Codebase Registry', count: repos.length },
             { id: 'account', label: 'Account Security' },
-          ] as const).map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                borderBottom: activeTab === tab.id ? '2px solid #b026ff' : '2px solid transparent',
-                padding: '12px 20px',
-                fontSize: '13px',
-                fontWeight: 600,
-                color: activeTab === tab.id ? '#fff' : '#71717a',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                transition: 'all 0.15s ease',
-                marginBottom: '-1px',
-              }}
-            >
-              <span>{tab.label}</span>
-              {'badge' in tab && (
-                <span style={{
-                  fontSize: '10px', padding: '2px 7px', borderRadius: '100px',
-                  background: isArchitect ? 'rgba(176,38,255,0.18)' : 'rgba(255,255,255,0.06)',
-                  color: isArchitect ? '#e879f9' : '#a1a1aa',
-                  border: isArchitect ? '1px solid rgba(176,38,255,0.3)' : '1px solid rgba(255,255,255,0.08)',
-                }}>
-                  {tab.badge}
-                </span>
-              )}
-              {'count' in tab && (
-                <span style={{
-                  fontSize: '10px', padding: '1px 6px', borderRadius: '100px',
-                  background: 'rgba(255,255,255,0.06)', color: '#a1a1aa',
-                }}>
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          ))}
+          ] as const).map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveTab(tab.id)}
+                className={`bg-transparent border-none border-b-2 py-3 px-5 text-[13px] font-semibold cursor-pointer inline-flex items-center gap-2 transition-all -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b026ff] rounded-t-sm whitespace-nowrap ${
+                  isActive
+                    ? 'border-b-[#b026ff] text-text-primary'
+                    : 'border-b-transparent text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                <span>{tab.label}</span>
+                {'badge' in tab && (
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full ${
+                      isArchitect
+                        ? 'bg-[#b026ff]/20 text-[#e879f9] border border-[#b026ff]/30'
+                        : 'bg-white/[0.06] text-text-muted border border-white/[0.08]'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
+                {'count' in tab && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/[0.06] text-text-muted">
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         {/* ── TAB 1: PLAN & TELEMETRY QUOTAS ── */}
         {activeTab === 'entitlements' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+          <div className="flex flex-col gap-7">
 
             {/* Plan Status Banner */}
-            <div style={{
-              background: isArchitect
-                ? 'linear-gradient(135deg, rgba(176,38,255,0.08) 0%, rgba(99,102,241,0.04) 100%)'
-                : 'rgba(255,255,255,0.02)',
-              border: isArchitect
-                ? '1px solid rgba(176,38,255,0.25)'
-                : '1px solid rgba(255,255,255,0.07)',
-              borderRadius: '16px',
-              padding: '24px 28px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '20px',
-            }}>
+            <div
+              className={`border rounded-2xl p-6 sm:p-7 flex items-center justify-between flex-wrap gap-5 ${
+                isArchitect
+                  ? 'bg-gradient-to-br from-[#b026ff]/[0.08] to-[#6366f1]/[0.04] border-[#b026ff]/25'
+                  : 'bg-surface-base/60 border-border-subtle'
+              }`}
+            >
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-                  <span style={{
-                    fontSize: '11px', fontWeight: 700, letterSpacing: '0.1em',
-                    textTransform: 'uppercase', color: isArchitect ? '#d946ef' : '#a1a1aa',
-                  }}>
+                <div className="flex items-center gap-2.5 mb-1.5">
+                  <span
+                    className={`text-[11px] font-bold tracking-[0.1em] uppercase ${
+                      isArchitect ? 'text-[#d946ef]' : 'text-text-muted'
+                    }`}
+                  >
                     {isArchitect ? 'Active Production Subscription' : 'Base Engineering Plan'}
                   </span>
-                  <span style={{ fontSize: '13px', color: '#71717a' }}>•</span>
-                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+                  <span className="text-[13px] text-text-muted">•</span>
+                  <span className="text-[13px] font-semibold text-text-primary">
                     {isArchitect ? '$7.99 / month' : '$0 forever'}
                   </span>
                 </div>
 
-                <h2 style={{ fontSize: '20px', fontWeight: 800, letterSpacing: '-0.02em', color: '#fff', margin: '0 0 6px' }}>
+                <h2 className="text-[20px] font-extrabold tracking-[-0.02em] text-text-primary m-0 mb-1.5">
                   {isArchitect
                     ? 'Continuous Codebase Intelligence & Living Architecture Maps'
                     : 'Deep Architecture Exploration for Individual Developers'}
                 </h2>
-                <p style={{ fontSize: '13px', color: '#a1a1aa', margin: 0, maxWidth: '640px', lineHeight: 1.5 }}>
+                <p className="text-[13px] text-text-secondary m-0 max-w-[640px] leading-relaxed">
                   {isArchitect
                     ? 'Your account maintains active AST indexes for up to 10 repositories with deep Blast Radius change impact simulations.'
                     : 'Analyze standalone codebases and inspect dependency hierarchies with authoritative AST parsing at zero friction.'}
@@ -432,24 +361,18 @@ export default function ProfilePage() {
               </div>
 
               {!isArchitect ? (
-                <button
-                  type="button"
+                <Button
+                  variant="primary"
+                  size="md"
                   onClick={() => setShowUpgradeModal(true)}
-                  style={{
-                    padding: '10px 22px', borderRadius: '10px',
-                    background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                    border: 'none', color: '#fff', fontSize: '13px', fontWeight: 600,
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 18px rgba(176,38,255,0.3)',
-                    whiteSpace: 'nowrap',
-                  }}
+                  className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 shadow-[0_4px_18px_rgba(176,38,255,0.3)] text-white whitespace-nowrap"
                 >
                   Upgrade to Architect ($7.99/mo) →
-                </button>
+                </Button>
               ) : (
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '12px', color: '#71717a' }}>Renewal / Reset Cycle</div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#4ade80', marginTop: '2px' }}>
+                <div className="text-right">
+                  <div className="text-[12px] text-text-muted">Renewal / Reset Cycle</div>
+                  <div className="text-[13px] font-semibold text-status-success mt-0.5">
                     Active & In Good Standing
                   </div>
                 </div>
@@ -458,28 +381,22 @@ export default function ProfilePage() {
 
             {/* 4 Bento Quota Gauges */}
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.01em', color: '#fff', margin: 0 }}>
+              <div className="flex justify-between items-baseline mb-4">
+                <h3 className="text-[15px] font-bold tracking-[-0.01em] text-text-primary m-0">
                   Real-Time Resource & Operation Quotas
                 </h3>
-                <span style={{ fontSize: '12px', color: '#71717a' }}>
+                <span className="text-[12px] text-text-muted">
                   Authoritative engine telemetry
                 </span>
               </div>
 
               {loadingUsage ? (
-                <div style={{
-                  padding: '48px 0', textAlign: 'center', color: '#71717a', fontSize: '13px',
-                  background: 'rgba(255,255,255,0.02)', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.06)',
-                }}>
-                  Querying live entitlement meters...
+                <div className="py-12 text-center text-text-muted text-[13px] bg-surface-base/60 rounded-xl border border-border-subtle flex items-center justify-center gap-2.5">
+                  <Spinner size="sm" />
+                  <span>Querying live entitlement meters...</span>
                 </div>
               ) : (
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
-                  gap: '16px',
-                }}>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] gap-4">
                   {/* Gauge 1: Lifetime Analyses */}
                   <TelemetryCard
                     label="Codebase Analyses"
@@ -521,17 +438,12 @@ export default function ProfilePage() {
             </div>
 
             {/* Architecture Capability Matrix */}
-            <div style={{
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px solid rgba(255,255,255,0.06)',
-              borderRadius: '16px',
-              padding: '24px 28px',
-            }}>
-              <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: '0 0 16px' }}>
+            <div className="bg-surface-base/60 border border-border-subtle rounded-2xl p-6 sm:p-7">
+              <h3 className="text-[15px] font-bold text-text-primary m-0 mb-4">
                 Entitlement Capabilities & Processing Ceilings
               </h3>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '16px' }}>
+              <div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-4">
                 <CapabilityItem
                   label="Repository Size Ceiling"
                   value={isArchitect ? "50 MB" : "15 MB"}
@@ -557,16 +469,13 @@ export default function ProfilePage() {
               </div>
 
               {!isArchitect && (
-                <div style={{
-                  marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)',
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px',
-                }}>
-                  <div style={{ fontSize: '13px', color: '#a1a1aa' }}>
+                <div className="mt-5 pt-4 border-t border-border-subtle/80 flex justify-between items-center flex-wrap gap-3">
+                  <div className="text-[13px] text-text-secondary">
                     Need to index larger repositories or simulate blast radius impacts?
                   </div>
                   <Link
                     to="/pricing"
-                    style={{ fontSize: '13px', color: '#c084fc', fontWeight: 600, textDecoration: 'none' }}
+                    className="text-[13px] text-[#c084fc] hover:underline font-semibold no-underline transition-colors"
                   >
                     Compare full plan specifications →
                   </Link>
@@ -579,118 +488,82 @@ export default function ProfilePage() {
 
         {/* ── TAB 2: CODEBASE REGISTRY ── */}
         {activeTab === 'codebases' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div className="flex flex-col gap-5">
             {/* Header with shortcut to History */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="flex justify-between items-center">
               <div>
-                <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', margin: 0 }}>
+                <h3 className="text-[16px] font-bold text-text-primary m-0">
                   Active & Archived Codebases
                 </h3>
-                <p style={{ fontSize: '13px', color: '#71717a', margin: '2px 0 0' }}>
+                <p className="text-[13px] text-text-muted mt-0.5 mb-0">
                   {usageData?.usage.activeCodebases ?? 0} of {usageData?.limits.maxActiveCodebases ?? 1} active slots utilized.
                 </p>
               </div>
 
               <Link
                 to="/history"
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: '6px',
-                  padding: '7px 14px', borderRadius: '8px',
-                  background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                  color: '#fff', fontSize: '12px', fontWeight: 600,
-                  textDecoration: 'none',
-                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-elevated hover:bg-surface-elevated/80 border border-border-subtle text-text-primary text-[12px] font-semibold no-underline transition-colors"
               >
                 Open Full Registry →
               </Link>
             </div>
 
             {reposLoading ? (
-              <div style={{ padding: '40px 0', textAlign: 'center', color: '#71717a', fontSize: '13px' }}>
-                Loading registered repositories...
+              <div className="py-10 text-center text-text-muted text-[13px] flex items-center justify-center gap-2.5">
+                <Spinner size="md" />
+                <span>Loading registered repositories...</span>
               </div>
             ) : repos.length === 0 ? (
-              <div style={{
-                background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
-                borderRadius: '14px', padding: '48px 24px', textAlign: 'center',
-              }}>
-                <div style={{ fontSize: '32px', marginBottom: '12px', opacity: 0.4 }}>📂</div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', margin: '0 0 6px' }}>
+              <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-12 text-center">
+                <div className="text-[32px] mb-3 opacity-40">📂</div>
+                <h4 className="text-[16px] font-bold text-text-primary m-0 mb-1.5">
                   No Codebases Registered Yet
                 </h4>
-                <p style={{ fontSize: '13px', color: '#71717a', maxWidth: '380px', margin: '0 auto 20px' }}>
+                <p className="text-[13px] text-text-muted max-w-[380px] mx-auto mb-5">
                   Analyze a GitHub repository or upload a ZIP archive to generate your first architecture map.
                 </p>
                 <Link
                   to="/dashboard/new"
-                  style={{
-                    display: 'inline-block',
-                    padding: '9px 20px', borderRadius: '8px',
-                    background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                    color: '#fff', fontSize: '13px', fontWeight: 600,
-                    textDecoration: 'none',
-                  }}
+                  className="inline-block px-5 py-2.5 rounded-lg bg-gradient-to-r from-[#b026ff] to-[#6366f1] text-white text-[13px] font-semibold no-underline shadow-[0_4px_16px_rgba(176,38,255,0.3)] hover:brightness-110 transition-all"
                 >
                   Analyze New Repository
                 </Link>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div className="flex flex-col gap-2.5">
                 {repos.map((repo) => {
                   const isArchived = Boolean(repo.isArchived);
                   return (
                     <div
                       key={repo.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '14px 20px',
-                        borderRadius: '12px',
-                        background: 'rgba(255,255,255,0.02)',
-                        border: '1px solid rgba(255,255,255,0.06)',
-                        transition: 'background 0.15s ease',
-                      }}
+                      className="flex items-center justify-between p-3.5 sm:p-5 rounded-xl bg-surface-base/80 border border-border-subtle hover:border-border-default transition-colors"
                     >
                       <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-[14px] font-semibold text-text-primary">
                             {repo.name}
                           </span>
                           {isArchived ? (
-                            <span style={{
-                              fontSize: '10px', padding: '2px 7px', borderRadius: '100px',
-                              background: 'rgba(255,255,255,0.05)', color: '#71717a',
-                              border: '1px solid rgba(255,255,255,0.08)',
-                            }}>
+                            <Badge variant="neutral">
                               Archived
-                            </span>
+                            </Badge>
                           ) : (
-                            <span style={{
-                              fontSize: '10px', padding: '2px 7px', borderRadius: '100px',
-                              background: 'rgba(34,197,94,0.08)', color: '#4ade80',
-                              border: '1px solid rgba(34,197,94,0.2)',
-                            }}>
+                            <Badge variant="success" showDot>
                               Active Slot
-                            </span>
+                            </Badge>
                           )}
                         </div>
-                        <div style={{ fontSize: '12px', color: '#71717a', marginTop: '3px' }}>
-                          Branch: <span style={{ color: '#a1a1aa' }}>{repo.branch || 'main'}</span>
+                        <div className="text-[12px] text-text-muted mt-1">
+                          Branch: <span className="text-text-secondary">{repo.branch || 'main'}</span>
                           {repo.fileCount ? ` • ${repo.fileCount} files` : ''}
                           {` • Indexed ${new Date(repo.createdAt).toLocaleDateString()}`}
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div className="flex items-center gap-2.5">
                         <Link
                           to={`/dashboard/${repo.id}`}
-                          style={{
-                            padding: '6px 14px', borderRadius: '6px',
-                            background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-                            color: '#fff', fontSize: '12px', fontWeight: 500,
-                            textDecoration: 'none',
-                          }}
+                          className="px-3.5 py-1.5 rounded-md bg-white/[0.06] hover:bg-white/[0.1] border border-border-subtle text-text-primary text-[12px] font-medium no-underline transition-colors"
                         >
                           Open Graph →
                         </Link>
@@ -705,165 +578,120 @@ export default function ProfilePage() {
 
         {/* ── TAB 3: ACCOUNT SECURITY ── */}
         {activeTab === 'account' && (
-          <div style={{ maxWidth: '640px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          <div className="max-w-[640px] flex flex-col gap-6">
             {/* Display Name Edit */}
-            <form onSubmit={handleSaveProfile} style={{
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px solid rgba(255,255,255,0.07)',
-              borderRadius: '14px',
-              padding: '24px 28px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '18px',
-            }}>
+            <form
+              onSubmit={handleSaveProfile}
+              className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4.5"
+            >
               <div>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>
+                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
                   Display Identity
                 </h3>
-                <p style={{ fontSize: '13px', color: '#71717a', margin: 0 }}>
+                <p className="text-[13px] text-text-muted m-0">
                   Manage the public name visible in shared architecture graphs and team views.
                 </p>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#a1a1aa', marginBottom: '6px' }}>
-                  Full Name
-                </label>
-                <input
+              <FormField id="profile-name" label="Full Name">
+                <Input
+                  id="profile-name"
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Your Name"
-                  style={{
-                    width: '100%', padding: '9px 12px', borderRadius: '8px',
-                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#fff', fontSize: '13px', outline: 'none',
-                  }}
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#a1a1aa', marginBottom: '6px' }}>
-                  Primary Email
-                </label>
-                <input
+              <FormField id="profile-email" label="Primary Email">
+                <Input
+                  id="profile-email"
                   type="email"
                   disabled
                   value={user?.email || ''}
-                  style={{
-                    width: '100%', padding: '9px 12px', borderRadius: '8px',
-                    background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
-                    color: '#71717a', fontSize: '13px', cursor: 'not-allowed',
-                  }}
                 />
-              </div>
+              </FormField>
 
               <div>
-                <button
+                <Button
                   type="submit"
+                  variant="primary"
+                  size="md"
                   disabled={profileSaving}
-                  style={{
-                    padding: '8px 18px', borderRadius: '8px',
-                    background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                    border: 'none', color: '#fff', fontSize: '13px', fontWeight: 600,
-                    cursor: 'pointer', opacity: profileSaving ? 0.6 : 1,
-                  }}
+                  isLoading={profileSaving}
+                  className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 text-white"
                 >
                   {profileSaving ? 'Saving Changes...' : 'Save Profile Changes'}
-                </button>
+                </Button>
               </div>
             </form>
 
             {/* Password Management */}
             {user?.provider === 'email' ? (
-              <form onSubmit={handleChangePassword} style={{
-                background: 'rgba(255,255,255,0.02)',
-                border: '1px solid rgba(255,255,255,0.07)',
-                borderRadius: '14px',
-                padding: '24px 28px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '18px',
-              }}>
+              <form
+                onSubmit={handleChangePassword}
+                className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4.5"
+              >
                 <div>
-                  <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>
+                  <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
                     Change Password
                   </h3>
-                  <p style={{ fontSize: '13px', color: '#71717a', margin: 0 }}>
+                  <p className="text-[13px] text-text-muted m-0">
                     Enter your existing password to set a new 8+ character password.
                   </p>
                 </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>Current Password</label>
-                  <input
+                <FormField id="current-password" label="Current Password" required>
+                  <Input
+                    id="current-password"
                     type="password"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
-                    style={{
-                      width: '100%', padding: '9px 12px', borderRadius: '8px',
-                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                      color: '#fff', fontSize: '13px', outline: 'none',
-                    }}
+                    required
                   />
-                </div>
+                </FormField>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>New Password</label>
-                  <input
+                <FormField id="new-password" label="New Password" helperText="Must be at least 8 characters" required>
+                  <Input
+                    id="new-password"
                     type="password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="At least 8 characters"
-                    style={{
-                      width: '100%', padding: '9px 12px', borderRadius: '8px',
-                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                      color: '#fff', fontSize: '13px', outline: 'none',
-                    }}
+                    required
                   />
-                </div>
+                </FormField>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>Confirm New Password</label>
-                  <input
+                <FormField id="confirm-password" label="Confirm New Password" required>
+                  <Input
+                    id="confirm-password"
                     type="password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    style={{
-                      width: '100%', padding: '9px 12px', borderRadius: '8px',
-                      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                      color: '#fff', fontSize: '13px', outline: 'none',
-                    }}
+                    required
                   />
-                </div>
+                </FormField>
 
                 <div>
-                  <button
+                  <Button
                     type="submit"
+                    variant="primary"
+                    size="md"
                     disabled={pwSaving}
-                    style={{
-                      padding: '8px 18px', borderRadius: '8px',
-                      background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                      border: 'none', color: '#fff', fontSize: '13px', fontWeight: 600,
-                      cursor: 'pointer', opacity: pwSaving ? 0.6 : 1,
-                    }}
+                    isLoading={pwSaving}
+                    className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 text-white"
                   >
                     {pwSaving ? 'Updating...' : 'Update Password'}
-                  </button>
+                  </Button>
                 </div>
               </form>
             ) : (
-              <div style={{
-                background: 'rgba(255,255,255,0.02)',
-                border: '1px solid rgba(255,255,255,0.07)',
-                borderRadius: '14px',
-                padding: '24px 28px',
-              }}>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: '0 0 6px' }}>
+              <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7">
+                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1.5">
                   Federated Identity
                 </h3>
-                <p style={{ fontSize: '13px', color: '#71717a', margin: 0, lineHeight: 1.5 }}>
-                  You are authenticated via <strong style={{ color: '#fff' }}>{providerName}</strong>. Security tokens and password policies are governed directly by your OAuth provider.
+                <p className="text-[13px] text-text-muted m-0 leading-relaxed">
+                  You are authenticated via <strong className="text-text-primary">{providerName}</strong>. Security tokens and password policies are governed directly by your OAuth provider.
                 </p>
               </div>
             )}
@@ -873,113 +701,50 @@ export default function ProfilePage() {
       </main>
 
       {/* ── UPGRADE TO ARCHITECT MODAL ── */}
-      <AnimatePresence>
-        {showUpgradeModal && (
-          <div
-            style={{
-              position: 'fixed', inset: 0, zIndex: 100,
-              background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              padding: '24px',
-            }}
-            onClick={() => !upgrading && setShowUpgradeModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                maxWidth: '480px', width: '100%',
-                background: '#0e0a16',
-                border: '1px solid rgba(176,38,255,0.3)',
-                borderRadius: '16px',
-                padding: '28px',
-                boxShadow: '0 20px 60px rgba(0,0,0,0.6), 0 0 40px rgba(176,38,255,0.15)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-                <div style={{
-                  width: '42px', height: '42px', borderRadius: '10px',
-                  background: 'rgba(176,38,255,0.15)', border: '1px solid rgba(176,38,255,0.35)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: '#d946ef', fontSize: '20px', fontWeight: 700,
-                }}>
-                  ✦
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: 0 }}>
-                    Upgrade to Archon Architect
-                  </h3>
-                  <p style={{ fontSize: '13px', color: '#919095', margin: '2px 0 0' }}>
-                    $7.99 / month — Instant entitlement activation
-                  </p>
-                </div>
-              </div>
-
-              <div style={{
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.06)',
-                borderRadius: '12px',
-                padding: '16px 18px',
-                fontSize: '13px',
-                color: '#d4d4d8',
-                lineHeight: 1.6,
-                marginBottom: '24px',
-              }}>
-                <div style={{ fontWeight: 600, color: '#fff', marginBottom: '8px' }}>
-                  What activates immediately:
-                </div>
-                <ul style={{ paddingLeft: '18px', margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <li><strong>10 active codebases</strong> retained with full index state</li>
-                  <li><strong>2,000 files & 50 MB</strong> capacity per repository</li>
-                  <li><strong>500 monthly AI questions</strong> & 30 re-indexes</li>
-                  <li><strong>Deep Impact & Blast Radius</strong> change simulations</li>
-                  <li><strong>Priority indexing queue</strong> with accelerated AST generation</li>
-                </ul>
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  disabled={upgrading}
-                  onClick={() => setShowUpgradeModal(false)}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: '8px',
-                    background: 'transparent',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#a1a1aa',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={upgrading}
-                  onClick={handleUpgradeToArchitect}
-                  style={{
-                    padding: '9px 22px',
-                    borderRadius: '8px',
-                    background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                    border: 'none',
-                    color: '#fff',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 16px rgba(176,38,255,0.3)',
-                    opacity: upgrading ? 0.6 : 1,
-                  }}
-                >
-                  {upgrading ? 'Activating...' : 'Activate Architect Plan ($7.99/mo)'}
-                </button>
-              </div>
-            </motion.div>
+      <Modal
+        isOpen={showUpgradeModal}
+        onClose={() => !upgrading && setShowUpgradeModal(false)}
+        title="Upgrade to Archon Architect"
+        description="$7.99 / month — Instant entitlement activation"
+        maxWidth="md"
+        className="border-[#b026ff]/30 shadow-[0_20px_60px_rgba(0,0,0,0.6),0_0_40px_rgba(176,38,255,0.15)]"
+      >
+        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 text-[13px] text-text-secondary leading-relaxed mb-6">
+          <div className="font-semibold text-white mb-2">
+            What activates immediately:
           </div>
-        )}
-      </AnimatePresence>
+          <ul className="pl-4.5 m-0 flex flex-col gap-1.5 list-disc">
+            <li><strong className="text-white">10 active codebases</strong> retained with full index state</li>
+            <li><strong className="text-white">2,000 files & 50 MB</strong> capacity per repository</li>
+            <li><strong className="text-white">500 monthly AI questions</strong> & 30 re-indexes</li>
+            <li><strong className="text-white">Deep Impact & Blast Radius</strong> change simulations</li>
+            <li><strong className="text-white">Priority indexing queue</strong> with accelerated AST generation</li>
+          </ul>
+        </div>
+
+        <div className="flex gap-3 justify-end">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={upgrading}
+            onClick={() => setShowUpgradeModal(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            disabled={upgrading}
+            isLoading={upgrading}
+            onClick={handleUpgradeToArchitect}
+            className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 shadow-[0_4px_16px_rgba(176,38,255,0.3)] text-white"
+          >
+            {upgrading ? 'Activating...' : 'Activate Architect Plan ($7.99/mo)'}
+          </Button>
+        </div>
+      </Modal>
 
       <Footer />
     </div>
@@ -1008,24 +773,24 @@ function TelemetryCard({
   const isAtLimit = percentage >= 100;
 
   return (
-    <div style={{
-      background: 'rgba(255,255,255,0.025)',
-      border: '1px solid rgba(255,255,255,0.07)',
-      borderRadius: '14px',
-      padding: '20px 22px',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'space-between',
-    }}>
+    <Card
+      variant="default"
+      hoverable={false}
+      className="p-5 flex flex-col justify-between rounded-xl bg-surface-base/80 border-border-subtle"
+    >
       <div>
-        <div style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '8px' }}>
+        <div className="text-[12px] font-semibold text-text-muted uppercase tracking-[0.04em] mb-2">
           {label}
         </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '6px' }}>
-          <span style={{ fontSize: '26px', fontWeight: 800, color: isAtLimit ? '#f87171' : isNearLimit ? '#fbbf24' : '#fff', letterSpacing: '-0.03em', fontFamily: "'JetBrains Mono', monospace, sans-serif" }}>
+        <div className="flex items-baseline gap-1.5 mb-1.5">
+          <span
+            className={`text-[26px] font-extrabold tracking-[-0.03em] font-mono ${
+              isAtLimit ? 'text-status-error' : isNearLimit ? 'text-status-warning' : 'text-text-primary'
+            }`}
+          >
             {used}
           </span>
-          <span style={{ fontSize: '13px', color: '#71717a' }}>
+          <span className="text-[13px] text-text-muted">
             {isUnlimited ? '(Unlimited)' : `/ ${limit} ${unit}`}
           </span>
         </div>
@@ -1033,30 +798,35 @@ function TelemetryCard({
 
       <div>
         {!isUnlimited ? (
-          <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.06)', borderRadius: '999px', overflow: 'hidden', margin: '10px 0 8px' }}>
+          <div
+            role="progressbar"
+            aria-valuenow={used}
+            aria-valuemin={0}
+            aria-valuemax={limit}
+            aria-label={`${label} quota`}
+            className="w-full h-1.5 bg-white/[0.06] rounded-full overflow-hidden my-2.5"
+          >
             <div
-              style={{
-                width: `${percentage}%`,
-                height: '100%',
-                background: isAtLimit
-                  ? 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)'
+              style={{ width: `${percentage}%` }}
+              className={`h-full transition-[width] duration-400 ease-out ${
+                isAtLimit
+                  ? 'bg-gradient-to-r from-red-500 to-red-600'
                   : isNearLimit
-                  ? 'linear-gradient(90deg, #f59e0b 0%, #d97706 100%)'
-                  : 'linear-gradient(90deg, #b026ff 0%, #6366f1 100%)',
-                transition: 'width 0.4s ease',
-              }}
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600'
+                  : 'bg-gradient-to-r from-[#b026ff] to-[#6366f1]'
+              }`}
             />
           </div>
         ) : (
-          <div style={{ width: '100%', height: '5px', background: 'rgba(34,197,94,0.15)', borderRadius: '999px', margin: '10px 0 8px' }}>
-            <div style={{ width: '100%', height: '100%', background: '#22c55e', borderRadius: '999px', opacity: 0.6 }} />
+          <div className="w-full h-1.5 bg-status-success/15 rounded-full overflow-hidden my-2.5">
+            <div className="w-full h-full bg-status-success/60 rounded-full" />
           </div>
         )}
-        <div style={{ fontSize: '11px', color: '#71717a', lineHeight: 1.4 }}>
+        <div className="text-[11px] text-text-muted leading-relaxed">
           {hint}
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -1072,24 +842,21 @@ function CapabilityItem({
   highlight?: boolean;
 }) {
   return (
-    <div style={{
-      background: 'rgba(255,255,255,0.02)',
-      border: '1px solid rgba(255,255,255,0.05)',
-      borderRadius: '10px',
-      padding: '14px 16px',
-    }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, color: '#71717a', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+    <div className="bg-white/[0.02] border border-border-subtle/60 rounded-lg p-3.5 sm:p-4">
+      <div className="text-[11px] font-semibold text-text-muted uppercase tracking-[0.04em]">
         {label}
       </div>
-      <div style={{
-        fontSize: '15px', fontWeight: 700, margin: '4px 0 2px',
-        color: highlight ? '#c084fc' : '#fff',
-      }}>
+      <div
+        className={`text-[15px] font-bold my-1 ${
+          highlight ? 'text-[#c084fc]' : 'text-text-primary'
+        }`}
+      >
         {value}
       </div>
-      <div style={{ fontSize: '11px', color: '#71717a' }}>
+      <div className="text-[11px] text-text-muted">
         {subtext}
       </div>
     </div>
   );
 }
+

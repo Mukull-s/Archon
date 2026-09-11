@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
+import { Spinner } from '../components/ui/DesignSystem';
 
 /**
  * Dashboard Index Route (/dashboard)
@@ -68,25 +69,10 @@ export default function DashboardIndex() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-          <div
-            style={{
-              width: '36px',
-              height: '36px',
-              border: '2.5px solid rgba(176, 38, 255, 0.15)',
-              borderTopColor: '#b026ff',
-              borderRadius: '50%',
-              animation: 'archon-spin 0.8s linear infinite',
-            }}
-          />
+          <Spinner size="lg" />
           <span style={{ fontSize: '13px', color: '#71717a' }}>Opening workspace...</span>
         </div>
       )}
-      <style>{`
-        @keyframes archon-spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 }
