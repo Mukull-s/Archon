@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { Spinner } from '../ui/DesignSystem';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -31,26 +32,12 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
           fontFamily: 'var(--font-sans, system-ui, sans-serif)',
         }}
       >
-        <div
-          style={{
-            width: '36px',
-            height: '36px',
-            border: '2.5px solid rgba(176, 38, 255, 0.15)',
-            borderTopColor: '#b026ff',
-            borderRadius: '50%',
-            animation: 'archon-spin 0.8s linear infinite',
-            marginBottom: '16px',
-          }}
-        />
+        <div style={{ marginBottom: '16px' }}>
+          <Spinner size="lg" />
+        </div>
         <span style={{ fontSize: '13px', letterSpacing: '-0.01em', color: '#71717a' }}>
           Verifying session...
         </span>
-        <style>{`
-          @keyframes archon-spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-        `}</style>
       </div>
     );
   }

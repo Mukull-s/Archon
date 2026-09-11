@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { toast } from 'sonner'
+import { Spinner } from '../components/ui/DesignSystem'
 
 /**
  * OAuth Callback Page
@@ -138,19 +139,15 @@ export default function AuthCallback() {
           </>
         ) : (
           <>
-            <div style={{
-              width: '36px', height: '36px',
-              border: '2.5px solid rgba(176,38,255,0.15)', borderTopColor: 'var(--accent, #b026ff)',
-              borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-              margin: '0 auto 16px',
-            }} />
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+              <Spinner size="lg" />
+            </div>
             <p style={{ color: '#a1a1aa', fontSize: '14px', fontWeight: 500 }}>
               Completing authentication...
             </p>
           </>
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }
