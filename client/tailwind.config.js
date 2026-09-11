@@ -8,15 +8,47 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Semantic Token Bridge (Phase 1)
+        bg: {
+          base: "var(--color-bg-base)",
+        },
+        surface: {
+          DEFAULT: "var(--color-surface-base)",
+          base: "var(--color-surface-base)",
+          elevated: "var(--color-surface-elevated)",
+          subtle: "var(--color-surface-subtle)",
+          dim: "#131316",
+          bright: "#39393c",
+          "container-lowest": "#0e0e11",
+          "container-low": "#1b1b1e",
+          container: "#1f1f22",
+          "container-high": "#2a2a2d",
+          "container-highest": "#353437",
+        },
+        border: {
+          subtle: "var(--color-border-subtle)",
+          default: "var(--color-border-default)",
+          strong: "var(--color-border-strong)",
+        },
+        text: {
+          primary: "var(--color-text-primary)",
+          secondary: "var(--color-text-secondary)",
+          muted: "var(--color-text-muted)",
+        },
+        accent: {
+          DEFAULT: "var(--color-accent)",
+          hover: "var(--color-accent-hover)",
+          subtle: "var(--color-accent-subtle)",
+        },
+        status: {
+          success: "var(--color-success)",
+          warning: "var(--color-warning)",
+          error: "var(--color-error)",
+          info: "var(--color-info)",
+        },
+
+        // Legacy / Stitch / Existing Token Compatibility (Preserved for zero regression)
         background: "#131316",
-        surface: "#131316",
-        "surface-dim": "#131316",
-        "surface-bright": "#39393c",
-        "surface-container-lowest": "#0e0e11",
-        "surface-container-low": "#1b1b1e",
-        "surface-container": "#1f1f22",
-        "surface-container-high": "#2a2a2d",
-        "surface-container-highest": "#353437",
         "on-surface": "#e4e1e5",
         "on-surface-variant": "#c8c5ca",
         outline: "#919095",
@@ -35,10 +67,11 @@ export default {
         "error-container": "#93000a",
       },
       borderRadius: {
-        sm: "0.125rem", // 2px
+        sm: "var(--radius-sm)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
+        pill: "var(--radius-pill)",
         DEFAULT: "0.25rem", // 4px
-        md: "0.375rem", // 6px
-        lg: "0.5rem", // 8px
         xl: "0.75rem", // 12px
       },
       spacing: {
@@ -50,7 +83,8 @@ export default {
         margin_desktop: "24px",
       },
       fontFamily: {
-        heading: ["Geist", "sans-serif"],
+        sans: ["Inter", "system-ui", "sans-serif"],
+        heading: ["Space Grotesk", "sans-serif"],
         body: ["Inter", "sans-serif"],
         mono: ["JetBrains Mono", "monospace"],
       },
