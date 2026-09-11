@@ -72,23 +72,45 @@ class IngestionService {
     const filePath = path.join(tempDir, `${owner}_${repo}_${crypto.randomUUID()}.zip`);
     
     // Fall back to server's global token if the user is not authenticated
-    const activeToken = token || process.env.GITHUB_FALLBACK_TOKEN;
+    const fallbackToken = process.env.GITHUB_FALLBACK_TOKEN;
+    let activeToken = token || fallbackToken;
     
     console.log(`Downloading repository zipball from ${url} (authenticated: ${!!activeToken})...`);
     
     try {
-      const response = await axios({
-        method: 'get',
-        url,
-        responseType: 'arraybuffer',
-        headers: {
-          'User-Agent': 'Archon-Intelligence-Platform',
-          ...(activeToken && { 'Authorization': `Bearer ${activeToken}` })
+      try {
+        const response = await axios({
+          method: 'get',
+          url,
+          responseType: 'arraybuffer',
+          headers: {
+            'User-Agent': 'Archon-Intelligence-Platform',
+            ...(activeToken && { 'Authorization': `Bearer ${activeToken}` })
+          }
+        });
+        
+        fs.writeFileSync(filePath, response.data);
+        return filePath;
+      } catch (firstError: any) {
+        // If the user's personal OAuth token is expired/revoked (401 Bad credentials),
+        // and we have a valid server GITHUB_FALLBACK_TOKEN, retry with the fallback token!
+        if (firstError.response?.status === 401 && token && fallbackToken && token !== fallbackToken) {
+          console.warn(`[GitHub Download] User token returned 401 (expired/revoked). Retrying download with GITHUB_FALLBACK_TOKEN...`);
+          activeToken = fallbackToken;
+          const retryResponse = await axios({
+            method: 'get',
+            url,
+            responseType: 'arraybuffer',
+            headers: {
+              'User-Agent': 'Archon-Intelligence-Platform',
+              'Authorization': `Bearer ${fallbackToken}`
+            }
+          });
+          fs.writeFileSync(filePath, retryResponse.data);
+          return filePath;
         }
-      });
-      
-      fs.writeFileSync(filePath, response.data);
-      return filePath;
+        throw firstError;
+      }
     } catch (error: any) {
       const status = error.response?.status;
       const responseData = error.response?.data ? error.response.data.toString() : '';
