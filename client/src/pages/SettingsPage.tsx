@@ -5,6 +5,7 @@ import Navbar from '../components/Navbar';
 import Footer from '../components/sections/Footer';
 import { useAuthStore } from '../stores/authStore';
 import api from '../lib/api';
+import { Button, Badge, FormField, Input, Toggle } from '../components/ui/DesignSystem';
 
 export default function SettingsPage() {
   const { user, fetchUser } = useAuthStore();
@@ -76,371 +77,262 @@ export default function SettingsPage() {
   const isArchitect = user?.plan === 'pro';
 
   return (
-    <div style={{ minHeight: '100vh', background: '#09090b', color: '#e4e1e5', display: 'flex', flexDirection: 'column' }}>
+    <div className="min-h-screen bg-bg-base text-text-primary flex flex-col">
       <Navbar />
 
-      <main style={{ flex: 1, maxWidth: '980px', margin: '0 auto', width: '100%', padding: '120px 24px 60px' }}>
-        <div style={{ marginBottom: '28px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#71717a', marginBottom: '8px' }}>
-            <Link to="/profile" style={{ color: '#a1a1aa', textDecoration: 'none' }}>Profile</Link>
+      <main className="flex-1 max-w-[980px] mx-auto w-full px-6 pt-[120px] pb-[60px]">
+        <div className="mb-7">
+          <div className="flex items-center gap-2 text-[13px] text-text-muted mb-2">
+            <Link to="/profile" className="text-text-secondary hover:text-text-primary no-underline transition-colors">
+              Profile
+            </Link>
             <span>/</span>
-            <span style={{ color: '#fff' }}>Settings</span>
+            <span className="text-text-primary">Settings</span>
           </div>
-          <h1 style={{ fontSize: '28px', fontWeight: 800, letterSpacing: '-0.03em', color: '#fff', marginBottom: '6px' }}>
+          <h1 className="text-[28px] font-extrabold tracking-[-0.03em] text-white m-0 mb-1.5">
             Workspace Settings
           </h1>
-          <p style={{ fontSize: '14px', color: '#919095' }}>
+          <p className="text-[14px] text-text-muted m-0">
             Manage your personal profile, workspace defaults, and security configurations.
           </p>
         </div>
 
         {/* Plan Entitlements Banner (pointing to Profile) */}
-        <div style={{
-          background: isArchitect
-            ? 'linear-gradient(135deg, rgba(176,38,255,0.1) 0%, rgba(99,102,241,0.06) 100%)'
-            : 'rgba(255,255,255,0.02)',
-          border: isArchitect ? '1px solid rgba(176,38,255,0.25)' : '1px solid rgba(255,255,255,0.08)',
-          borderRadius: '12px',
-          padding: '16px 20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '12px',
-          marginBottom: '32px',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{
-              width: '32px', height: '32px', borderRadius: '8px',
-              background: isArchitect ? 'rgba(176,38,255,0.15)' : 'rgba(255,255,255,0.05)',
-              border: isArchitect ? '1px solid rgba(176,38,255,0.3)' : '1px solid rgba(255,255,255,0.1)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: isArchitect ? '#d946ef' : '#a1a1aa', fontSize: '15px', fontWeight: 700,
-            }}>
+        <div
+          className={`border rounded-xl p-4 sm:px-5 flex items-center justify-between flex-wrap gap-3 mb-8 ${
+            isArchitect
+              ? 'bg-gradient-to-br from-[#b026ff]/10 to-[#6366f1]/[0.06] border-[#b026ff]/25'
+              : 'bg-surface-base/60 border-border-subtle'
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-8 h-8 rounded-lg flex items-center justify-center text-[15px] font-bold ${
+                isArchitect
+                  ? 'bg-[#b026ff]/15 border border-[#b026ff]/30 text-[#d946ef]'
+                  : 'bg-white/[0.05] border border-border-subtle text-text-muted'
+              }`}
+            >
               ✦
             </div>
             <div>
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
-                Active Plan: <span style={{ color: isArchitect ? '#c084fc' : '#a1a1aa' }}>{isArchitect ? 'Architect Tier' : 'Explorer Tier'}</span>
+              <div className="text-[13px] font-semibold text-text-primary">
+                Active Plan:{' '}
+                <span className={isArchitect ? 'text-[#c084fc]' : 'text-text-muted'}>
+                  {isArchitect ? 'Architect Tier' : 'Explorer Tier'}
+                </span>
               </div>
-              <div style={{ fontSize: '12px', color: '#71717a' }}>
+              <div className="text-[12px] text-text-muted">
                 View real-time codebase quotas, indexing meters, and plan entitlements in your Profile Command Center.
               </div>
             </div>
           </div>
           <Link
             to="/profile"
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: '6px',
-              padding: '7px 14px', borderRadius: '8px',
-              background: 'rgba(255,255,255,0.06)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              color: '#fff', fontSize: '12px', fontWeight: 600,
-              textDecoration: 'none',
-              transition: 'background 0.2s',
-            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-border-subtle text-text-primary text-[12px] font-semibold no-underline transition-colors"
           >
             Manage Plan & Quotas →
           </Link>
         </div>
 
         {/* Navigation Tabs */}
-        <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '28px' }}>
+        <div role="tablist" className="flex gap-1 border-b border-border-subtle mb-7 overflow-x-auto scrollbar-none">
           {([
             { id: 'general', label: 'Account Profile' },
             { id: 'preferences', label: 'Workspace Defaults' },
             { id: 'security', label: 'Security & Auth' },
-          ] as const).map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                borderBottom: activeTab === tab.id ? '2px solid var(--accent, #b026ff)' : '2px solid transparent',
-                padding: '10px 18px',
-                fontSize: '13px',
-                fontWeight: 600,
-                color: activeTab === tab.id ? '#fff' : '#71717a',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-            >
-              {tab.label}
-            </button>
-          ))}
+          ] as const).map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveTab(tab.id)}
+                className={`bg-transparent border-none border-b-2 py-2.5 px-4.5 text-[13px] font-semibold cursor-pointer transition-all -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-t-sm whitespace-nowrap ${
+                  isActive
+                    ? 'border-b-accent text-text-primary'
+                    : 'border-b-transparent text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
         {/* Tab Content */}
-        <div style={{ maxWidth: '640px' }}>
+        <div className="max-w-[640px]">
           {activeTab === 'general' && (
-            <form onSubmit={handleSaveProfile} style={{
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px solid rgba(255,255,255,0.07)',
-              borderRadius: '12px',
-              padding: '24px 28px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '20px',
-            }}>
+            <form
+              onSubmit={handleSaveProfile}
+              className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-5"
+            >
               <div>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>
+                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
                   Personal Profile
                 </h3>
-                <p style={{ fontSize: '13px', color: '#71717a', margin: 0 }}>
+                <p className="text-[13px] text-text-muted m-0">
                   Update your public display identity across Archon workspaces.
                 </p>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#a1a1aa', marginBottom: '6px' }}>
-                  Display Name
-                </label>
-                <input
+              <FormField id="settings-name" label="Display Name">
+                <Input
+                  id="settings-name"
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Your Name"
-                  style={{
-                    width: '100%',
-                    padding: '9px 12px',
-                    borderRadius: '8px',
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#fff',
-                    fontSize: '13px',
-                    outline: 'none',
-                  }}
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#a1a1aa', marginBottom: '6px' }}>
-                  Email Address
-                </label>
-                <input
+              <FormField
+                id="settings-email"
+                label="Email Address"
+                helperText={`Managed via your primary ${user?.provider || 'authentication'} account.`}
+              >
+                <Input
+                  id="settings-email"
                   type="email"
                   disabled
                   value={user?.email || ''}
-                  style={{
-                    width: '100%',
-                    padding: '9px 12px',
-                    borderRadius: '8px',
-                    background: 'rgba(255,255,255,0.02)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                    color: '#71717a',
-                    fontSize: '13px',
-                    cursor: 'not-allowed',
-                  }}
                 />
-                <span style={{ fontSize: '11px', color: '#71717a', marginTop: '4px', display: 'block' }}>
-                  Managed via your primary {user?.provider || 'authentication'} account.
-                </span>
-              </div>
+              </FormField>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-start', paddingTop: '8px' }}>
-                <button
+              <div className="pt-2">
+                <Button
                   type="submit"
+                  variant="primary"
+                  size="md"
                   disabled={savingProfile}
-                  style={{
-                    padding: '8px 18px',
-                    borderRadius: '8px',
-                    background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                    border: 'none',
-                    color: '#fff',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    opacity: savingProfile ? 0.6 : 1,
-                  }}
+                  isLoading={savingProfile}
                 >
                   {savingProfile ? 'Saving...' : 'Save Profile Changes'}
-                </button>
+                </Button>
               </div>
             </form>
           )}
 
           {activeTab === 'preferences' && (
-            <div style={{
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px solid rgba(255,255,255,0.07)',
-              borderRadius: '12px',
-              padding: '24px 28px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '24px',
-            }}>
+            <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-6">
               <div>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>
+                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
                   Workspace Automation & Indexing
                 </h3>
-                <p style={{ fontSize: '13px', color: '#71717a', margin: 0 }}>
+                <p className="text-[13px] text-text-muted m-0">
                   Configure how Archon interacts with repositories and handles automatic synchronization.
                 </p>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#a1a1aa', marginBottom: '6px' }}>
-                  Default Repository Branch
-                </label>
-                <input
+              <FormField id="default-branch" label="Default Repository Branch">
+                <Input
+                  id="default-branch"
                   type="text"
                   value={defaultBranch}
                   onChange={(e) => setDefaultBranch(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '9px 12px',
-                    borderRadius: '8px',
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#fff',
-                    fontSize: '13px',
-                    outline: 'none',
-                  }}
                 />
-              </div>
+              </FormField>
 
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                <div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Auto-synchronize Repository Commits</div>
-                  <div style={{ fontSize: '12px', color: '#71717a' }}>Queue an indexing pass when repository webhooks trigger</div>
-                </div>
-                <input
-                  type="checkbox"
+              <div className="pt-3 border-t border-border-subtle/60">
+                <Toggle
+                  id="auto-reindex-toggle"
+                  label="Auto-synchronize Repository Commits"
+                  description="Queue an indexing pass when repository webhooks trigger"
                   checked={autoReindexOnPush}
-                  onChange={(e) => setAutoReindexOnPush(e.target.checked)}
-                  style={{ accentColor: '#b026ff', width: '16px', height: '16px', cursor: 'pointer' }}
+                  onChange={setAutoReindexOnPush}
+                  className="w-full"
                 />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                <div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Telemetry & Performance Analytics</div>
-                  <div style={{ fontSize: '12px', color: '#71717a' }}>Share anonymous AST parse metrics to improve indexer latency</div>
-                </div>
-                <input
-                  type="checkbox"
+              <div className="pt-3 border-t border-border-subtle/60">
+                <Toggle
+                  id="telemetry-toggle"
+                  label="Telemetry & Performance Analytics"
+                  description="Share anonymous AST parse metrics to improve indexer latency"
                   checked={telemetryEnabled}
-                  onChange={(e) => setTelemetryEnabled(e.target.checked)}
-                  style={{ accentColor: '#b026ff', width: '16px', height: '16px', cursor: 'pointer' }}
+                  onChange={setTelemetryEnabled}
+                  className="w-full"
                 />
               </div>
 
               <div>
-                <button
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="md"
                   onClick={() => toast.success('Workspace preferences saved.')}
-                  style={{
-                    padding: '8px 18px',
-                    borderRadius: '8px',
-                    background: 'rgba(255,255,255,0.08)',
-                    border: '1px solid rgba(255,255,255,0.12)',
-                    color: '#fff',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
                 >
                   Save Preferences
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {activeTab === 'security' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div style={{
-                background: 'rgba(255,255,255,0.02)',
-                border: '1px solid rgba(255,255,255,0.07)',
-                borderRadius: '12px',
-                padding: '24px 28px',
-              }}>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>
+            <div className="flex flex-col gap-5">
+              <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7">
+                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
                   Authentication Security
                 </h3>
-                <p style={{ fontSize: '13px', color: '#71717a', margin: '0 0 16px' }}>
+                <p className="text-[13px] text-text-muted m-0 mb-4">
                   Your account is secured via {user?.provider === 'github' ? 'GitHub OAuth' : user?.provider === 'google' ? 'Google OAuth' : 'Email and Password'}.
                 </p>
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: '8px',
-                  padding: '6px 12px', borderRadius: '8px',
-                  background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
-                  fontSize: '12px', color: '#4ade80', fontWeight: 600,
-                }}>
-                  ✓ Verified active session
-                </div>
+                <Badge variant="success" showDot>
+                  Verified active session
+                </Badge>
               </div>
 
               {user?.provider === 'email' && (
-                <form onSubmit={handlePasswordChange} style={{
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid rgba(255,255,255,0.07)',
-                  borderRadius: '12px',
-                  padding: '24px 28px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '16px',
-                }}>
-                  <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#fff', margin: 0 }}>
+                <form
+                  onSubmit={handlePasswordChange}
+                  className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4"
+                >
+                  <h3 className="text-[15px] font-bold text-text-primary m-0">
                     Change Password
                   </h3>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>Current Password</label>
-                    <input
+                  <FormField id="current-password" label="Current Password" required>
+                    <Input
+                      id="current-password"
                       type="password"
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
-                      style={{
-                        width: '100%', padding: '9px 12px', borderRadius: '8px',
-                        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff', fontSize: '13px', outline: 'none',
-                      }}
+                      required
                     />
-                  </div>
+                  </FormField>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>New Password</label>
-                    <input
+                  <FormField id="new-password" label="New Password" helperText="Must be at least 8 characters" required>
+                    <Input
+                      id="new-password"
                       type="password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
                       placeholder="At least 8 characters"
-                      style={{
-                        width: '100%', padding: '9px 12px', borderRadius: '8px',
-                        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff', fontSize: '13px', outline: 'none',
-                      }}
+                      required
                     />
-                  </div>
+                  </FormField>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>Confirm New Password</label>
-                    <input
+                  <FormField id="confirm-password" label="Confirm New Password" required>
+                    <Input
+                      id="confirm-password"
                       type="password"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
-                      style={{
-                        width: '100%', padding: '9px 12px', borderRadius: '8px',
-                        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff', fontSize: '13px', outline: 'none',
-                      }}
+                      required
                     />
-                  </div>
+                  </FormField>
 
-                  <div>
-                    <button
+                  <div className="pt-2">
+                    <Button
                       type="submit"
+                      variant="primary"
+                      size="md"
                       disabled={savingPassword}
-                      style={{
-                        padding: '8px 18px', borderRadius: '8px',
-                        background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                        border: 'none', color: '#fff', fontSize: '13px', fontWeight: 600,
-                        cursor: 'pointer', opacity: savingPassword ? 0.6 : 1,
-                      }}
+                      isLoading={savingPassword}
                     >
                       {savingPassword ? 'Updating...' : 'Update Password'}
-                    </button>
+                    </Button>
                   </div>
                 </form>
               )}
@@ -453,3 +345,4 @@ export default function SettingsPage() {
     </div>
   );
 }
+

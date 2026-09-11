@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import Navbar from '../components/Navbar';
 import Footer from '../components/sections/Footer';
 import api from '../lib/api';
+import { Button, Badge, Input, Modal, Spinner } from '../components/ui/DesignSystem';
 
 interface RepoSummary {
   id: string;
@@ -57,17 +58,6 @@ export default function HistoryPage() {
     window.scrollTo(0, 0);
     fetchRepos();
   }, [fetchRepos]);
-
-  // Keyboard accessibility: close delete modal on Escape
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && repoToDelete && !isDeleting) {
-        setRepoToDelete(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [repoToDelete, isDeleting]);
 
   const handleDelete = async () => {
     if (!repoToDelete || isDeleting) return;
@@ -179,262 +169,150 @@ export default function HistoryPage() {
   }, [repos, searchQuery, activeFilter]);
 
   return (
-    <div style={{ minHeight: '100vh', background: '#09090b', color: '#e4e1e5', display: 'flex', flexDirection: 'column', fontFamily: 'var(--font-sans, system-ui)' }}>
+    <div className="min-h-screen bg-bg-base text-text-primary flex flex-col font-sans">
       <Navbar />
 
-      <main style={{ flex: 1, maxWidth: '1200px', margin: '0 auto', width: '100%', padding: '110px 24px 70px' }}>
+      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 pt-28 pb-16">
         {/* Top Header & Command Title */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '20px', marginBottom: '32px' }}>
+        <div className="flex items-start justify-between flex-wrap gap-5 mb-8">
           <div>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 10px', borderRadius: '100px', background: 'rgba(255, 255, 255, 0.04)', border: '1px solid rgba(255, 255, 255, 0.08)', marginBottom: '12px' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#a855f7' }} />
-              <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#a1a1aa' }}>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-elevated border border-border-subtle mb-3">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
                 Codebase Registry
               </span>
             </div>
-            <h1 style={{ fontSize: '30px', fontWeight: 700, letterSpacing: '-0.03em', color: '#ffffff', margin: '0 0 8px 0', lineHeight: 1.2 }}>
+            <h1 className="text-3xl font-bold tracking-tight text-text-primary mb-2 leading-tight">
               Repositories & Workspaces
             </h1>
-            <p style={{ fontSize: '14px', color: '#71717a', margin: 0, maxWidth: '640px', lineHeight: 1.5 }}>
+            <p className="text-sm text-text-muted max-w-2xl leading-relaxed m-0">
               Centralized intelligence index of parsed repositories, AST dependency models, and live architecture workspaces.
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button
+          <div className="flex items-center gap-3">
+            <Button
+              variant="primary"
+              size="md"
               onClick={() => navigate('/')}
-              className="btn-primary"
-              style={{
-                padding: '9px 18px',
-                fontSize: '13px',
-                fontWeight: 600,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-              }}
+              icon={
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              }
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              <span>Index New Codebase</span>
-            </button>
+              Index New Codebase
+            </Button>
           </div>
         </div>
 
         {/* Telemetry Overview Strip */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: '14px',
-            marginBottom: '32px',
-          }}
-        >
-          <div
-            style={{
-              background: 'rgba(255, 255, 255, 0.02)',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              borderRadius: '10px',
-              padding: '16px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 mb-8">
+          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               Active Codebases
             </span>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <span style={{ fontSize: '24px', fontWeight: 700, color: '#fff', fontFamily: 'var(--font-mono, monospace)' }}>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-text-primary font-mono">
                 {telemetry.activeCount}
               </span>
-              <span style={{ fontSize: '12px', color: '#71717a' }}>
+              <span className="text-xs text-text-muted">
                 active ({telemetry.archivedCount} archived)
               </span>
             </div>
           </div>
 
-          <div
-            style={{
-              background: 'rgba(255, 255, 255, 0.02)',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              borderRadius: '10px',
-              padding: '16px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               Indexed Files
             </span>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <span style={{ fontSize: '24px', fontWeight: 700, color: '#fff', fontFamily: 'var(--font-mono, monospace)' }}>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-text-primary font-mono">
                 {telemetry.totalFiles.toLocaleString()}
               </span>
-              <span style={{ fontSize: '12px', color: '#71717a' }}>AST nodes</span>
+              <span className="text-xs text-text-muted">AST nodes</span>
             </div>
           </div>
 
-          <div
-            style={{
-              background: 'rgba(255, 255, 255, 0.02)',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              borderRadius: '10px',
-              padding: '16px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               Registry Volume
             </span>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <span style={{ fontSize: '24px', fontWeight: 700, color: '#fff', fontFamily: 'var(--font-mono, monospace)' }}>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-text-primary font-mono">
                 {telemetry.totalSize}
               </span>
-              <span style={{ fontSize: '12px', color: '#71717a' }}>source payload</span>
+              <span className="text-xs text-text-muted">source payload</span>
             </div>
           </div>
 
-          <div
-            style={{
-              background: 'rgba(255, 255, 255, 0.02)',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              borderRadius: '10px',
-              padding: '16px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               Mean Graph Health
             </span>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <span style={{ fontSize: '24px', fontWeight: 700, color: telemetry.avgConfidence >= 80 ? '#4ade80' : '#facc15', fontFamily: 'var(--font-mono, monospace)' }}>
+            <div className="flex items-baseline gap-2">
+              <span
+                className={`text-2xl font-bold font-mono ${
+                  telemetry.avgConfidence >= 80 ? 'text-status-success' : 'text-status-warning'
+                }`}
+              >
                 {telemetry.avgConfidence > 0 ? `${telemetry.avgConfidence}%` : 'N/A'}
               </span>
-              <span style={{ fontSize: '12px', color: '#71717a' }}>confidence</span>
+              <span className="text-xs text-text-muted">confidence</span>
             </div>
           </div>
         </div>
 
         {/* Command Control Bar: Search + Filter Pills + View Switcher */}
-        <div
-          style={{
-            background: 'rgba(18, 18, 22, 0.7)',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
-            borderRadius: '12px',
-            padding: '12px 16px',
-            marginBottom: '24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: '14px',
-            backdropFilter: 'blur(16px)',
-          }}
-        >
+        <div className="bg-surface-base/70 border border-border-subtle rounded-xl p-3 sm:px-4 mb-6 flex items-center justify-between flex-wrap gap-3.5 backdrop-blur-md shadow-sm">
           {/* Search Box */}
-          <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: '420px' }}>
-            <input
+          <div className="relative flex-1 min-w-[260px] max-w-[420px]">
+            <Input
               type="text"
               placeholder="Filter by repository name, framework, or language..."
               aria-label="Filter repositories by name, framework, or language"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '9px 12px 9px 38px',
-                borderRadius: '8px',
-                background: 'rgba(255, 255, 255, 0.03)',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                color: '#ffffff',
-                fontSize: '13px',
-                outline: 'none',
-                boxSizing: 'border-box',
-                fontFamily: 'var(--font-sans, system-ui)',
-                transition: 'border-color 0.2s',
-              }}
-              onFocus={(e) => (e.target.style.borderColor = 'rgba(168, 85, 247, 0.5)')}
-              onBlur={(e) => (e.target.style.borderColor = 'rgba(255, 255, 255, 0.08)')}
+              leftIcon={
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+              }
+              rightIcon={
+                searchQuery ? (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Clear search input"
+                    className="text-text-muted hover:text-text-primary text-xs p-1 cursor-pointer transition-colors"
+                  >
+                    ✕
+                  </button>
+                ) : undefined
+              }
             />
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#71717a"
-              strokeWidth="2"
-              aria-hidden="true"
-              style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }}
-            >
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                aria-label="Clear search input"
-                style={{
-                  position: 'absolute',
-                  right: '10px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: '#919095',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  padding: '2px',
-                }}
-              >
-                ✕
-              </button>
-            )}
           </div>
 
           {/* Filter Pills */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
               onClick={() => setActiveFilter('all')}
-              style={{
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 500,
-                borderRadius: '6px',
-                border: '1px solid',
-                borderColor: activeFilter === 'all' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                background: activeFilter === 'all' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                color: activeFilter === 'all' ? '#fff' : '#71717a',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer ${
+                activeFilter === 'all'
+                  ? 'bg-surface-elevated text-text-primary border-border-default shadow-xs'
+                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
+              }`}
             >
               All Codebases ({repos.length})
             </button>
             <button
               onClick={() => setActiveFilter('github')}
-              style={{
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 500,
-                borderRadius: '6px',
-                border: '1px solid',
-                borderColor: activeFilter === 'github' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                background: activeFilter === 'github' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                color: activeFilter === 'github' ? '#fff' : '#71717a',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                activeFilter === 'github'
+                  ? 'bg-surface-elevated text-text-primary border-border-default shadow-xs'
+                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
+              }`}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
@@ -443,21 +321,11 @@ export default function HistoryPage() {
             </button>
             <button
               onClick={() => setActiveFilter('local')}
-              style={{
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 500,
-                borderRadius: '6px',
-                border: '1px solid',
-                borderColor: activeFilter === 'local' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                background: activeFilter === 'local' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                color: activeFilter === 'local' ? '#fff' : '#71717a',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                activeFilter === 'local'
+                  ? 'bg-surface-elevated text-text-primary border-border-default shadow-xs'
+                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
+              }`}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -468,42 +336,27 @@ export default function HistoryPage() {
             </button>
             <button
               onClick={() => setActiveFilter('high-confidence')}
-              style={{
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 500,
-                borderRadius: '6px',
-                border: '1px solid',
-                borderColor: activeFilter === 'high-confidence' ? 'rgba(74, 222, 128, 0.4)' : 'rgba(255, 255, 255, 0.06)',
-                background: activeFilter === 'high-confidence' ? 'rgba(74, 222, 128, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                color: activeFilter === 'high-confidence' ? '#4ade80' : '#71717a',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer ${
+                activeFilter === 'high-confidence'
+                  ? 'bg-status-success/15 text-status-success border-status-success/30 shadow-xs'
+                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
+              }`}
             >
               High Confidence (≥80%)
             </button>
           </div>
 
           {/* View Mode Toggle */}
-          <div role="group" aria-label="Layout view selector" style={{ display: 'flex', alignItems: 'center', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '8px', padding: '3px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+          <div role="group" aria-label="Layout view selector" className="flex items-center bg-surface-base/60 rounded-lg p-1 border border-border-subtle">
             <button
               onClick={() => setViewMode('table')}
               aria-label="Switch to table view"
               aria-pressed={viewMode === 'table'}
-              style={{
-                padding: '5px 9px',
-                background: viewMode === 'table' ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                color: viewMode === 'table' ? '#fff' : '#71717a',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '11px',
-                fontWeight: 600,
-              }}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === 'table'
+                  ? 'bg-surface-elevated text-text-primary shadow-xs'
+                  : 'text-text-muted hover:text-text-primary bg-transparent'
+              }`}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <line x1="3" y1="6" x2="21" y2="6" />
@@ -516,19 +369,11 @@ export default function HistoryPage() {
               onClick={() => setViewMode('cards')}
               aria-label="Switch to card view"
               aria-pressed={viewMode === 'cards'}
-              style={{
-                padding: '5px 9px',
-                background: viewMode === 'cards' ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                color: viewMode === 'cards' ? '#fff' : '#71717a',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '11px',
-                fontWeight: 600,
-              }}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === 'cards'
+                  ? 'bg-surface-elevated text-text-primary shadow-xs'
+                  : 'text-text-muted hover:text-text-primary bg-transparent'
+              }`}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <rect x="3" y="3" width="7" height="7" />
@@ -543,101 +388,35 @@ export default function HistoryPage() {
 
         {/* Dynamic Content: Loading / Error / Empty / Table / Cards */}
         {loading ? (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '90px 0',
-              background: 'rgba(255, 255, 255, 0.01)',
-              borderRadius: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.04)',
-            }}
-          >
-            <div
-              style={{
-                width: '36px',
-                height: '36px',
-                border: '2px solid rgba(255, 255, 255, 0.1)',
-                borderTopColor: '#a855f7',
-                borderRadius: '50%',
-                animation: 'archon-spin 0.8s linear infinite',
-                marginBottom: '16px',
-              }}
-            />
-            <span style={{ fontSize: '13px', fontWeight: 500, color: '#a1a1aa' }}>Querying Codebase Registry...</span>
-            <span style={{ fontSize: '11px', color: '#52525b', marginTop: '4px' }}>Loading AST graph models and repository summaries</span>
+          <div className="flex flex-col items-center justify-center py-20 bg-surface-base/40 rounded-xl border border-border-subtle/50 text-center">
+            <Spinner size="lg" className="mb-4 text-accent" />
+            <span className="text-[13px] font-medium text-text-secondary">Querying Codebase Registry...</span>
+            <span className="text-[11px] text-text-muted mt-1">Loading AST graph models and repository summaries</span>
           </div>
         ) : error ? (
           /* Error State */
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '50px 24px',
-              background: 'rgba(239, 68, 68, 0.03)',
-              border: '1px solid rgba(239, 68, 68, 0.2)',
-              borderRadius: '12px',
-            }}
-          >
-            <div
-              style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '12px',
-                background: 'rgba(239, 68, 68, 0.1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 16px',
-                color: '#f87171',
-              }}
-            >
+          <div className="text-center p-8 sm:p-12 bg-status-error/5 border border-status-error/20 rounded-xl">
+            <div className="w-12 h-12 rounded-xl bg-status-error/10 flex items-center justify-center mx-auto mb-4 text-status-error">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="12" y1="8" x2="12" y2="12" />
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
-            <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>
+            <h3 className="text-[17px] font-semibold text-text-primary mb-2">
               Registry Connection Failed
             </h3>
-            <p style={{ fontSize: '13px', color: '#a1a1aa', maxWidth: '440px', margin: '0 auto 20px', lineHeight: 1.5 }}>
+            <p className="text-[13px] text-text-muted max-w-md mx-auto mb-5 leading-relaxed">
               {error}
             </p>
-            <button
-              onClick={fetchRepos}
-              className="btn-primary"
-              style={{ padding: '8px 20px', fontSize: '13px', cursor: 'pointer', borderRadius: '6px' }}
-            >
+            <Button variant="secondary" size="md" onClick={fetchRepos}>
               Retry Connection
-            </button>
+            </Button>
           </div>
         ) : filteredRepos.length === 0 ? (
           /* Empty State */
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '72px 24px',
-              background: 'rgba(255, 255, 255, 0.015)',
-              border: '1px dashed rgba(255, 255, 255, 0.1)',
-              borderRadius: '12px',
-            }}
-          >
-            <div
-              style={{
-                width: '52px',
-                height: '52px',
-                borderRadius: '12px',
-                background: 'rgba(255, 255, 255, 0.04)',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 18px',
-                color: '#a1a1aa',
-              }}
-            >
+          <div className="text-center p-12 sm:p-16 bg-surface-base/30 border border-dashed border-border-default rounded-xl">
+            <div className="w-12 h-12 rounded-xl bg-surface-elevated border border-border-subtle flex items-center justify-center mx-auto mb-4 text-text-muted">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
                 <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
                 <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
@@ -646,100 +425,75 @@ export default function HistoryPage() {
               </svg>
             </div>
 
-            <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>
+            <h3 className="text-[17px] font-semibold text-text-primary mb-2">
               {searchQuery || activeFilter !== 'all' ? 'No matching codebases found' : 'No Codebases Indexed Yet'}
             </h3>
-            <p style={{ fontSize: '13px', color: '#71717a', maxWidth: '460px', margin: '0 auto 24px', lineHeight: 1.5 }}>
+            <p className="text-[13px] text-text-muted max-w-md mx-auto mb-6 leading-relaxed">
               {searchQuery || activeFilter !== 'all'
                 ? 'No repositories in your registry match the active criteria. Try broadening your search or resetting filters.'
                 : 'Archon indexes your codebase into high-fidelity AST dependency graphs, architectural blast-radius traces, and cognitive reasoning maps.'}
             </p>
 
             {searchQuery || activeFilter !== 'all' ? (
-              <button
+              <Button
+                variant="secondary"
+                size="md"
                 onClick={() => {
                   setSearchQuery('');
                   setActiveFilter('all');
                 }}
-                className="btn-secondary"
-                style={{ padding: '7px 18px', fontSize: '13px', cursor: 'pointer', borderRadius: '6px' }}
               >
                 Reset All Filters
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
+                variant="primary"
+                size="md"
                 onClick={() => navigate('/')}
-                className="btn-primary"
-                style={{ padding: '9px 20px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', borderRadius: '6px' }}
               >
                 Index Your First Codebase
-              </button>
+              </Button>
             )}
           </div>
         ) : viewMode === 'table' ? (
           /* ========================================================================= */
           /* TABLE VIEW: Dense, startup command-center registry                        */
           /* ========================================================================= */
-          <div
-            style={{
-              background: 'rgba(18, 18, 22, 0.5)',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              borderRadius: '12px',
-              overflow: 'hidden',
-              backdropFilter: 'blur(16px)',
-            }}
-          >
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '860px' }}>
+          <div className="bg-surface-base/50 border border-border-subtle rounded-xl overflow-hidden backdrop-blur-md shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left min-w-[860px]">
                 <thead>
-                  <tr style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.06)', background: 'rgba(255, 255, 255, 0.02)' }}>
-                    <th scope="col" style={{ padding: '12px 20px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+                  <tr className="border-b border-border-subtle bg-surface-base/60">
+                    <th scope="col" className="py-3 px-5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
                       Repository & Source
                     </th>
-                    <th scope="col" style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
                       Architecture
                     </th>
-                    <th scope="col" style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
                       AST Health
                     </th>
-                    <th scope="col" style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
                       Footprint
                     </th>
-                    <th scope="col" style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a' }}>
+                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
                       Indexed
                     </th>
-                    <th scope="col" style={{ padding: '12px 20px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#71717a', textAlign: 'right' }}>
+                    <th scope="col" className="py-3 px-5 text-[11px] font-semibold uppercase tracking-wider text-text-muted text-right">
                       Actions
                     </th>
                   </tr>
                 </thead>
-                <tbody>
-                  {filteredRepos.map((repo, idx) => (
+                <tbody className="divide-y divide-border-subtle/50">
+                  {filteredRepos.map((repo) => (
                     <tr
                       key={repo.id}
-                      style={{
-                        borderBottom: idx === filteredRepos.length - 1 ? 'none' : '1px solid rgba(255, 255, 255, 0.04)',
-                        transition: 'background 0.15s ease',
-                      }}
-                      className="registry-row"
+                      className="hover:bg-surface-elevated/40 transition-colors duration-150"
                     >
                       {/* Repo & Source */}
-                      <td style={{ padding: '14px 20px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <div
-                            style={{
-                              width: '32px',
-                              height: '32px',
-                              borderRadius: '6px',
-                              background: 'rgba(255, 255, 255, 0.04)',
-                              border: '1px solid rgba(255, 255, 255, 0.08)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              color: '#d4d4d8',
-                              flexShrink: 0,
-                            }}
-                          >
+                      <td className="py-3.5 px-5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-md bg-surface-elevated border border-border-subtle flex items-center justify-center text-text-secondary flex-shrink-0">
                             {repo.isLocal ? (
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -756,77 +510,27 @@ export default function HistoryPage() {
                           <div>
                             <Link
                               to={`/dashboard/${repo.id}`}
-                              style={{
-                                color: '#ffffff',
-                                fontSize: '13px',
-                                fontWeight: 600,
-                                textDecoration: 'none',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                transition: 'color 0.15s',
-                              }}
-                              className="repo-title-link"
+                              className="text-text-primary hover:text-accent text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors no-underline"
                             >
                               <span>{repo.owner ? `${repo.owner}/${repo.name}` : repo.name}</span>
                             </Link>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '3px' }}>
-                              <span
-                                style={{
-                                  fontSize: '10px',
-                                  padding: '1px 6px',
-                                  borderRadius: '100px',
-                                  fontWeight: 600,
-                                  letterSpacing: '0.03em',
-                                  textTransform: 'uppercase',
-                                  background:
-                                    repo.indexingStatus === 'completed'
-                                      ? 'rgba(34, 197, 94, 0.1)'
-                                      : repo.indexingStatus === 'indexing'
-                                      ? 'rgba(56, 189, 248, 0.1)'
-                                      : 'rgba(239, 68, 68, 0.1)',
-                                  color:
-                                    repo.indexingStatus === 'completed'
-                                      ? '#4ade80'
-                                      : repo.indexingStatus === 'indexing'
-                                      ? '#38bdf8'
-                                      : '#f87171',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                }}
+                            <div className="flex items-center gap-2 mt-1">
+                              <Badge
+                                variant={
+                                  repo.indexingStatus === 'completed'
+                                    ? 'success'
+                                    : repo.indexingStatus === 'indexing'
+                                    ? 'info'
+                                    : 'danger'
+                                }
+                                showDot
                               >
-                                <span
-                                  style={{
-                                    width: '5px',
-                                    height: '5px',
-                                    borderRadius: '50%',
-                                    background:
-                                      repo.indexingStatus === 'completed'
-                                        ? '#22c55e'
-                                        : repo.indexingStatus === 'indexing'
-                                        ? '#38bdf8'
-                                        : '#ef4444',
-                                  }}
-                                />
                                 {repo.indexingStatus === 'completed' ? 'Indexed' : repo.indexingStatus}
-                              </span>
-                              <span
-                                style={{
-                                  fontSize: '10px',
-                                  padding: '1px 6px',
-                                  borderRadius: '100px',
-                                  fontWeight: 600,
-                                  letterSpacing: '0.03em',
-                                  textTransform: 'uppercase',
-                                  background: repo.isArchived ? 'rgba(255, 255, 255, 0.05)' : 'rgba(168, 85, 247, 0.1)',
-                                  color: repo.isArchived ? '#71717a' : '#c084fc',
-                                  border: repo.isArchived ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid rgba(168, 85, 247, 0.3)',
-                                }}
-                              >
+                              </Badge>
+                              <Badge variant={repo.isArchived ? 'neutral' : 'purple'}>
                                 {repo.isArchived ? 'Archived' : 'Active'}
-                              </span>
-                              <span style={{ fontSize: '11px', color: '#71717a', fontFamily: 'var(--font-mono, monospace)' }}>
+                              </Badge>
+                              <span className="text-[11px] text-text-muted font-mono">
                                 {repo.isLocal ? 'local-zip' : 'github'}
                               </span>
                             </div>
@@ -835,30 +539,23 @@ export default function HistoryPage() {
                       </td>
 
                       {/* Architecture */}
-                      <td style={{ padding: '14px 16px' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          <span style={{ fontSize: '12px', fontWeight: 500, color: '#d4d4d8' }}>
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs font-medium text-text-secondary">
                             {repo.framework || 'General Project'}
                           </span>
                           {Array.isArray(repo.languages) && repo.languages.length > 0 && (
-                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                            <div className="flex gap-1 flex-wrap">
                               {repo.languages.slice(0, 3).map((lang) => (
                                 <span
                                   key={lang}
-                                  style={{
-                                    fontSize: '10px',
-                                    padding: '1px 5px',
-                                    borderRadius: '4px',
-                                    background: 'rgba(255, 255, 255, 0.04)',
-                                    color: '#a1a1aa',
-                                    fontFamily: 'var(--font-mono, monospace)',
-                                  }}
+                                  className="text-[10px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted font-mono"
                                 >
                                   {lang}
                                 </span>
                               ))}
                               {repo.languages.length > 3 && (
-                                <span style={{ fontSize: '10px', color: '#71717a' }}>
+                                <span className="text-[10px] text-text-muted">
                                   +{repo.languages.length - 3}
                                 </span>
                               )}
@@ -868,84 +565,55 @@ export default function HistoryPage() {
                       </td>
 
                       {/* AST Health */}
-                      <td style={{ padding: '14px 16px' }}>
+                      <td className="py-3.5 px-4">
                         {repo.confidence > 0 ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div
-                              style={{
-                                width: '44px',
-                                height: '4px',
-                                borderRadius: '100px',
-                                background: 'rgba(255, 255, 255, 0.08)',
-                                overflow: 'hidden',
-                              }}
-                            >
+                          <div className="flex items-center gap-2">
+                            <div className="w-11 h-1 rounded-full bg-surface-elevated overflow-hidden">
                               <div
-                                style={{
-                                  width: `${repo.confidence}%`,
-                                  height: '100%',
-                                  background: repo.confidence >= 80 ? '#22c55e' : '#eab308',
-                                  borderRadius: '100px',
-                                }}
+                                className={`h-full rounded-full ${
+                                  repo.confidence >= 80 ? 'bg-status-success' : 'bg-status-warning'
+                                }`}
+                                style={{ width: `${repo.confidence}%` }}
                               />
                             </div>
                             <span
-                              style={{
-                                fontSize: '12px',
-                                fontWeight: 600,
-                                fontFamily: 'var(--font-mono, monospace)',
-                                color: repo.confidence >= 80 ? '#4ade80' : '#facc15',
-                              }}
+                              className={`text-xs font-semibold font-mono ${
+                                repo.confidence >= 80 ? 'text-status-success' : 'text-status-warning'
+                              }`}
                             >
                               {repo.confidence}%
                             </span>
                           </div>
                         ) : (
-                          <span style={{ fontSize: '12px', color: '#71717a', fontFamily: 'var(--font-mono, monospace)' }}>
-                            –
-                          </span>
+                          <span className="text-xs text-text-muted font-mono">–</span>
                         )}
                       </td>
 
                       {/* Footprint */}
-                      <td style={{ padding: '14px 16px' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: 'var(--font-mono, monospace)' }}>
-                          <span style={{ fontSize: '12px', color: '#e4e4e7' }}>
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-col gap-0.5 font-mono">
+                          <span className="text-xs text-text-primary">
                             {repo.fileCount.toLocaleString()} files
                           </span>
-                          <span style={{ fontSize: '11px', color: '#71717a' }}>
+                          <span className="text-[11px] text-text-muted">
                             {formatSize(repo.totalSize)}
                           </span>
                         </div>
                       </td>
 
                       {/* Indexed At */}
-                      <td style={{ padding: '14px 16px' }}>
-                        <span style={{ fontSize: '12px', color: '#71717a', whiteSpace: 'nowrap' }}>
+                      <td className="py-3.5 px-4">
+                        <span className="text-xs text-text-muted whitespace-nowrap">
                           {formatRelativeTime(repo.createdAt)}
                         </span>
                       </td>
 
                       {/* Actions */}
-                      <td style={{ padding: '14px 20px', textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' }}>
+                      <td className="py-3.5 px-5 text-right">
+                        <div className="inline-flex items-center gap-2 justify-end">
                           <Link
                             to={`/dashboard/${repo.id}`}
-                            style={{
-                              padding: '5px 12px',
-                              borderRadius: '6px',
-                              background: 'rgba(255, 255, 255, 0.05)',
-                              border: '1px solid rgba(255, 255, 255, 0.1)',
-                              color: '#fff',
-                              fontSize: '12px',
-                              fontWeight: 500,
-                              textDecoration: 'none',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '5px',
-                              transition: 'all 0.15s',
-                            }}
-                            className="launch-btn"
+                            className="px-3 py-1.5 rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-border-subtle hover:border-border-default text-text-primary text-xs font-medium inline-flex items-center gap-1.5 transition-colors no-underline"
                           >
                             <span>Launch</span>
                             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
@@ -954,60 +622,31 @@ export default function HistoryPage() {
                             </svg>
                           </Link>
 
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => repo.isArchived ? handleUnarchive(repo.id, repo.name) : handleArchive(repo.id, repo.name)}
                             title={repo.isArchived ? `Activate ${repo.name} (uses 1 active slot)` : `Archive ${repo.name} (frees 1 active slot)`}
                             aria-label={repo.isArchived ? `Activate repository ${repo.name}` : `Archive repository ${repo.name}`}
-                            style={{
-                              padding: '5px 10px',
-                              borderRadius: '6px',
-                              background: repo.isArchived ? 'rgba(168, 85, 247, 0.1)' : 'rgba(255, 255, 255, 0.04)',
-                              border: repo.isArchived ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(255, 255, 255, 0.08)',
-                              color: repo.isArchived ? '#c084fc' : '#a1a1aa',
-                              fontSize: '11px',
-                              fontWeight: 500,
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              transition: 'all 0.15s',
-                            }}
+                            className={repo.isArchived ? 'text-accent hover:text-accent-hover' : 'text-text-muted hover:text-text-primary'}
                           >
                             {repo.isArchived ? 'Activate' : 'Archive'}
-                          </button>
+                          </Button>
 
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => setRepoToDelete(repo)}
                             title={`Purge ${repo.name} from registry`}
                             aria-label={`Delete repository ${repo.name}`}
-                            style={{
-                              background: 'transparent',
-                              border: '1px solid rgba(255, 255, 255, 0.08)',
-                              borderRadius: '6px',
-                              color: '#71717a',
-                              padding: '5px 8px',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              transition: 'all 0.15s',
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-                              e.currentTarget.style.color = '#f87171';
-                              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
-                              e.currentTarget.style.color = '#71717a';
-                              e.currentTarget.style.background = 'transparent';
-                            }}
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                              <polyline points="3 6 5 6 21 6" />
-                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            </svg>
-                          </button>
+                            className="text-text-muted hover:text-status-error hover:bg-status-error/10"
+                            icon={
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                              </svg>
+                            }
+                          />
                         </div>
                       </td>
                     </tr>
@@ -1020,41 +659,17 @@ export default function HistoryPage() {
           /* ========================================================================= */
           /* CARDS VIEW: Modern telemetry architecture cards                           */
           /* ========================================================================= */
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredRepos.map((repo) => (
               <div
                 key={repo.id}
-                style={{
-                  background: 'rgba(18, 18, 22, 0.5)',
-                  border: '1px solid rgba(255, 255, 255, 0.06)',
-                  borderRadius: '12px',
-                  padding: '20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'space-between',
-                  transition: 'all 0.2s ease',
-                  position: 'relative',
-                  backdropFilter: 'blur(16px)',
-                }}
-                className="registry-card"
+                className="bg-surface-base/50 hover:bg-surface-base/80 border border-border-subtle hover:border-border-default rounded-xl p-5 flex flex-col justify-between transition-all duration-200 backdrop-blur-md shadow-sm hover:shadow-md hover:-translate-y-0.5"
               >
                 <div>
                   {/* Top Bar: Source badge + Status pill + timestamp */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', gap: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          padding: '2px 8px',
-                          borderRadius: '100px',
-                          background: 'rgba(255, 255, 255, 0.04)',
-                          border: '1px solid rgba(255, 255, 255, 0.08)',
-                          color: '#e4e4e7',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '5px',
-                        }}
-                      >
+                  <div className="flex items-center justify-between mb-3.5 gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/[0.04] border border-border-subtle text-text-primary inline-flex items-center gap-1.5">
                         {repo.isLocal ? (
                           <>
                             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -1073,78 +688,50 @@ export default function HistoryPage() {
                           </>
                         )}
                       </span>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          padding: '2px 8px',
-                          borderRadius: '100px',
-                          background:
-                            repo.indexingStatus === 'completed'
-                              ? 'rgba(34, 197, 94, 0.1)'
-                              : 'rgba(56, 189, 248, 0.1)',
-                          color:
-                            repo.indexingStatus === 'completed'
-                              ? '#4ade80'
-                              : '#38bdf8',
-                          fontWeight: 600,
-                          letterSpacing: '0.03em',
-                          textTransform: 'uppercase',
-                        }}
+                      <Badge
+                        variant={
+                          repo.indexingStatus === 'completed'
+                            ? 'success'
+                            : repo.indexingStatus === 'indexing'
+                            ? 'info'
+                            : 'danger'
+                        }
+                        showDot
                       >
                         {repo.indexingStatus === 'completed' ? 'Indexed' : repo.indexingStatus}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          padding: '2px 8px',
-                          borderRadius: '100px',
-                          background: repo.isArchived ? 'rgba(255, 255, 255, 0.05)' : 'rgba(168, 85, 247, 0.1)',
-                          color: repo.isArchived ? '#71717a' : '#c084fc',
-                          border: repo.isArchived ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid rgba(168, 85, 247, 0.3)',
-                          fontWeight: 600,
-                          letterSpacing: '0.03em',
-                          textTransform: 'uppercase',
-                        }}
-                      >
+                      </Badge>
+                      <Badge variant={repo.isArchived ? 'neutral' : 'purple'}>
                         {repo.isArchived ? 'Archived' : 'Active'}
-                      </span>
+                      </Badge>
                     </div>
 
-                    <span style={{ fontSize: '11px', color: '#71717a' }}>
+                    <span className="text-[11px] text-text-muted">
                       {formatRelativeTime(repo.createdAt)}
                     </span>
                   </div>
 
                   {/* Title */}
-                  <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', marginBottom: '6px', wordBreak: 'break-word' }}>
+                  <h3 className="text-[15px] font-semibold text-text-primary mb-1.5 break-words">
                     <Link
                       to={`/dashboard/${repo.id}`}
-                      style={{ color: '#fff', textDecoration: 'none' }}
-                      className="repo-title-link"
+                      className="text-text-primary hover:text-accent transition-colors no-underline"
                     >
                       {repo.owner ? `${repo.owner}/${repo.name}` : repo.name}
                     </Link>
                   </h3>
 
                   {/* Framework & Language Chips */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: 500, color: '#d4d4d8' }}>
+                  <div className="flex items-center gap-1.5 flex-wrap mb-4">
+                    <span className="text-xs font-medium text-text-secondary">
                       {repo.framework || 'General Project'}
                     </span>
                     {Array.isArray(repo.languages) && repo.languages.length > 0 && (
                       <>
-                        <span style={{ color: '#52525b' }}>•</span>
+                        <span className="text-text-muted">•</span>
                         {repo.languages.slice(0, 3).map((lang) => (
                           <span
                             key={lang}
-                            style={{
-                              fontSize: '10px',
-                              padding: '1px 5px',
-                              borderRadius: '4px',
-                              background: 'rgba(255, 255, 255, 0.04)',
-                              color: '#a1a1aa',
-                              fontFamily: 'var(--font-mono, monospace)',
-                            }}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted font-mono"
                           >
                             {lang}
                           </span>
@@ -1154,33 +741,26 @@ export default function HistoryPage() {
                   </div>
 
                   {/* Metric Strip */}
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(3, 1fr)',
-                      gap: '8px',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px solid rgba(255, 255, 255, 0.04)',
-                      borderRadius: '8px',
-                      padding: '10px',
-                      marginBottom: '18px',
-                    }}
-                  >
+                  <div className="grid grid-cols-3 gap-2 bg-surface-base/40 border border-border-subtle/50 rounded-lg p-2.5 mb-4">
                     <div>
-                      <span style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', display: 'block' }}>Files</span>
-                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff', fontFamily: 'var(--font-mono, monospace)' }}>
+                      <span className="text-[10px] text-text-muted uppercase block">Files</span>
+                      <span className="text-[13px] font-semibold text-text-primary font-mono">
                         {repo.fileCount.toLocaleString()}
                       </span>
                     </div>
                     <div>
-                      <span style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', display: 'block' }}>Payload</span>
-                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff', fontFamily: 'var(--font-mono, monospace)' }}>
+                      <span className="text-[10px] text-text-muted uppercase block">Payload</span>
+                      <span className="text-[13px] font-semibold text-text-primary font-mono">
                         {formatSize(repo.totalSize)}
                       </span>
                     </div>
                     <div>
-                      <span style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', display: 'block' }}>Confidence</span>
-                      <span style={{ fontSize: '13px', fontWeight: 600, color: repo.confidence >= 80 ? '#4ade80' : '#facc15', fontFamily: 'var(--font-mono, monospace)' }}>
+                      <span className="text-[10px] text-text-muted uppercase block">Confidence</span>
+                      <span
+                        className={`text-[13px] font-semibold font-mono ${
+                          repo.confidence >= 80 ? 'text-status-success' : 'text-status-warning'
+                        }`}
+                      >
                         {repo.confidence > 0 ? `${repo.confidence}%` : '–'}
                       </span>
                     </div>
@@ -1188,23 +768,10 @@ export default function HistoryPage() {
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '14px', borderTop: '1px solid rgba(255, 255, 255, 0.04)' }}>
+                <div className="flex items-center gap-2 pt-3.5 border-t border-border-subtle/50">
                   <Link
                     to={`/dashboard/${repo.id}`}
-                    className="btn-primary"
-                    style={{
-                      flex: 1,
-                      textAlign: 'center',
-                      padding: '7px 12px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      textDecoration: 'none',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      borderRadius: '6px',
-                    }}
+                    className="flex-1 text-center py-2 px-3 text-xs font-semibold rounded-md bg-accent hover:bg-accent-hover text-white inline-flex items-center justify-center gap-1.5 transition-colors no-underline shadow-xs"
                   >
                     <span>Launch Workspace</span>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -1213,50 +780,30 @@ export default function HistoryPage() {
                     </svg>
                   </Link>
 
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => repo.isArchived ? handleUnarchive(repo.id, repo.name) : handleArchive(repo.id, repo.name)}
                     title={repo.isArchived ? `Activate ${repo.name} (uses 1 active slot)` : `Archive ${repo.name} (frees 1 active slot)`}
                     aria-label={repo.isArchived ? `Activate repository ${repo.name}` : `Archive repository ${repo.name}`}
-                    style={{
-                      background: repo.isArchived ? 'rgba(168, 85, 247, 0.1)' : 'rgba(255, 255, 255, 0.04)',
-                      border: repo.isArchived ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(255, 255, 255, 0.08)',
-                      borderRadius: '6px',
-                      color: repo.isArchived ? '#c084fc' : '#a1a1aa',
-                      padding: '7px 12px',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      transition: 'all 0.15s ease',
-                    }}
+                    className={repo.isArchived ? 'text-accent hover:text-accent-hover' : 'text-text-muted hover:text-text-primary'}
                   >
                     {repo.isArchived ? 'Activate' : 'Archive'}
-                  </button>
+                  </Button>
 
-                  <button
+                  <Button
+                    variant="danger"
+                    size="sm"
                     onClick={() => setRepoToDelete(repo)}
                     aria-label={`Delete repository ${repo.name}`}
-                    style={{
-                      background: 'rgba(239, 68, 68, 0.08)',
-                      border: '1px solid rgba(239, 68, 68, 0.2)',
-                      borderRadius: '6px',
-                      color: '#f87171',
-                      padding: '7px 10px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      transition: 'all 0.15s ease',
-                    }}
                     title={`Delete repository ${repo.name}`}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    </svg>
-                  </button>
+                    icon={
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                    }
+                  />
                 </div>
               </div>
             ))}
@@ -1265,156 +812,49 @@ export default function HistoryPage() {
       </main>
 
       {/* Confirmation Modal for Permanent Codebase Purge */}
-      {repoToDelete && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="purge-dialog-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(8px)',
-            padding: '20px',
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isDeleting) {
-              setRepoToDelete(null);
-            }
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '440px',
-              background: '#121118',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              borderRadius: '14px',
-              padding: '24px',
-              boxShadow: '0 24px 60px rgba(0, 0, 0, 0.7)',
-              color: '#fff',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
-              <div
-                style={{
-                  width: '38px',
-                  height: '38px',
-                  borderRadius: '10px',
-                  background: 'rgba(239, 68, 68, 0.12)',
-                  border: '1px solid rgba(239, 68, 68, 0.25)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#ef4444',
-                  flexShrink: 0,
-                }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                  <line x1="12" y1="9" x2="12" y2="13" />
-                  <line x1="12" y1="17" x2="12.01" y2="17" />
-                </svg>
-              </div>
-              <div>
-                <h3 id="purge-dialog-title" style={{ fontSize: '17px', fontWeight: 600, margin: 0, letterSpacing: '-0.02em' }}>
-                  Purge Codebase from Registry
-                </h3>
-                <span style={{ fontSize: '12px', color: '#71717a' }}>Irreversible architectural model removal</span>
-              </div>
-            </div>
-
-            <p style={{ fontSize: '13px', color: '#a1a1aa', lineHeight: 1.55, marginBottom: '22px' }}>
-              Are you sure you want to permanently purge <strong style={{ color: '#fff' }}>{repoToDelete.owner ? `${repoToDelete.owner}/${repoToDelete.name}` : repoToDelete.name}</strong>?
-              All indexed AST dependency nodes, vector embeddings, and workspace traces will be completely erased.
+      <Modal
+        isOpen={Boolean(repoToDelete)}
+        onClose={() => !isDeleting && setRepoToDelete(null)}
+        title="Purge Codebase from Registry"
+        description="Irreversible architectural model removal"
+        maxWidth="md"
+      >
+        {repoToDelete && (
+          <div className="space-y-4 pt-1">
+            <p className="text-[13px] text-text-muted leading-relaxed m-0">
+              Are you sure you want to permanently purge{' '}
+              <strong className="text-text-primary font-semibold">
+                {repoToDelete.owner ? `${repoToDelete.owner}/${repoToDelete.name}` : repoToDelete.name}
+              </strong>
+              ? All indexed AST dependency nodes, vector embeddings, and workspace traces will be completely erased.
             </p>
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px' }}>
-              <button
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <Button
                 type="button"
+                variant="secondary"
+                size="md"
                 disabled={isDeleting}
                 onClick={() => setRepoToDelete(null)}
-                style={{
-                  padding: '8px 15px',
-                  borderRadius: '6px',
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  color: '#e4e4e7',
-                  fontSize: '13px',
-                  cursor: isDeleting ? 'not-allowed' : 'pointer',
-                  fontWeight: 500,
-                }}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="danger"
+                size="md"
                 disabled={isDeleting}
+                isLoading={isDeleting}
                 onClick={handleDelete}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '6px',
-                  background: '#dc2626',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  color: '#fff',
-                  fontSize: '13px',
-                  cursor: isDeleting ? 'not-allowed' : 'pointer',
-                  fontWeight: 600,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
               >
-                {isDeleting ? (
-                  <>
-                    <div
-                      style={{
-                        width: '13px',
-                        height: '13px',
-                        border: '2px solid rgba(255, 255, 255, 0.3)',
-                        borderTopColor: '#fff',
-                        borderRadius: '50%',
-                        animation: 'archon-spin 0.8s linear infinite',
-                      }}
-                    />
-                    <span>Purging...</span>
-                  </>
-                ) : (
-                  <span>Purge Codebase</span>
-                )}
-              </button>
+                Purge Codebase
+              </Button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       <Footer />
-
-      <style>{`
-        @keyframes archon-spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-        .registry-row:hover {
-          background: rgba(255, 255, 255, 0.02) !important;
-        }
-        .registry-card:hover {
-          border-color: rgba(255, 255, 255, 0.12) !important;
-          transform: translateY(-2px);
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-        }
-        .repo-title-link:hover {
-          color: #c15cff !important;
-        }
-        .launch-btn:hover {
-          background: rgba(168, 85, 247, 0.15) !important;
-          border-color: rgba(168, 85, 247, 0.4) !important;
-        }
-      `}</style>
     </div>
   );
 }

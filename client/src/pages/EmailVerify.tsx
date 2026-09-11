@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../lib/api'
+import { Spinner } from '../components/ui/DesignSystem'
 
 /**
  * Email Verification Page
@@ -48,12 +49,9 @@ export default function EmailVerify() {
       }}>
         {status === 'loading' && (
           <>
-            <div style={{
-              width: '40px', height: '40px',
-              border: '3px solid rgba(176,38,255,0.15)', borderTopColor: 'var(--accent)',
-              borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-              margin: '0 auto 20px',
-            }} />
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+              <Spinner size="lg" />
+            </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '15px' }}>Verifying your email...</p>
           </>
         )}
@@ -75,7 +73,6 @@ export default function EmailVerify() {
           </>
         )}
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }

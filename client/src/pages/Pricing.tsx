@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import Navbar from '../components/Navbar';
@@ -7,6 +7,7 @@ import FAQSection from '../components/sections/FAQSection';
 import Footer from '../components/sections/Footer';
 import { useAuthStore } from '../stores/authStore';
 import api from '../lib/api';
+import { Button, Badge, Modal } from '../components/ui/DesignSystem';
 
 interface PlanFeature {
   text: string;
@@ -141,64 +142,41 @@ export default function Pricing() {
   const currentPlan = user?.plan || 'free';
 
   return (
-    <div id="pricing-wrapper" style={{ position: 'relative', zIndex: 1, minHeight: '100vh', background: '#050308', overflowX: 'hidden' }}>
+    <div id="pricing-wrapper" className="relative z-10 min-h-screen bg-bg-base text-text-primary overflow-x-hidden font-sans">
       <Navbar />
 
       {/* Hero */}
-      <section style={{
-        paddingTop: '140px', paddingBottom: '60px',
-        textAlign: 'center', position: 'relative',
-      }}>
+      <section className="pt-36 pb-16 text-center relative">
         {/* Atmospheric ambient glow */}
-        <div style={{
-          position: 'absolute', inset: 0, pointerEvents: 'none',
-          background: 'radial-gradient(ellipse 60% 40% at 50% 30%, rgba(176,38,255,0.08) 0%, transparent 60%)',
-        }} />
+        <div
+          className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_60%_40%_at_50%_30%,var(--tw-gradient-stops))] from-accent/10 to-transparent"
+          aria-hidden="true"
+        />
 
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: 'easeOut' }}
-          style={{ position: 'relative', maxWidth: '680px', margin: '0 auto', padding: '0 24px' }}
+          className="relative max-w-2xl mx-auto px-6"
         >
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: '8px',
-            padding: '4px 12px', borderRadius: '100px',
-            background: 'rgba(176,38,255,0.08)', border: '1px solid rgba(176,38,255,0.25)',
-            marginBottom: '16px',
-          }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#b026ff' }} />
-            <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#c084fc' }}>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface-elevated/70 border border-border-subtle mb-4">
+            <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+            <span className="text-[11px] font-bold tracking-widest uppercase text-accent">
               Transparent Engineering Tiers
             </span>
           </div>
-          <h1 style={{
-            fontSize: 'clamp(32px, 5vw, 52px)',
-            fontWeight: 800, letterSpacing: '-0.04em',
-            lineHeight: 1.15, color: '#fff', marginBottom: '16px',
-          }}>
+          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-text-primary mb-4 leading-tight">
             Predictable limits for production engineering.
           </h1>
-          <p style={{
-            fontSize: '15px', color: '#a1a1aa',
-            lineHeight: 1.6, letterSpacing: '-0.01em',
-          }}>
+          <p className="text-[15px] text-text-secondary leading-relaxed tracking-tight">
             Start with deep architecture inspection at zero cost. Upgrade to Architect to keep multiple repositories continuously synchronized and indexed.
           </p>
         </motion.div>
       </section>
 
       {/* Pricing Grid */}
-      <section style={{ padding: '0 24px 90px' }}>
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 460px))',
-          maxWidth: '960px',
-          margin: '0 auto',
-          gap: '24px',
-          justifyContent: 'center',
-          alignItems: 'stretch',
-        }}>
+      <section className="px-6 pb-24">
+        <div className="grid grid-cols-1 md:grid-cols-2 max-w-4xl mx-auto gap-6 justify-center items-stretch">
           {PLANS.map((plan, i) => {
             const isCurrent = isAuthenticated && currentPlan === plan.id;
             return (
@@ -207,7 +185,7 @@ export default function Pricing() {
                 initial={{ opacity: 0, y: 30 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5, delay: 0.15 + i * 0.1 }}
-                style={{ display: 'flex' }}
+                className="flex"
               >
                 <PricingCard
                   plan={plan}
@@ -223,113 +201,49 @@ export default function Pricing() {
       </section>
 
       {/* Upgrade to Architect Modal */}
-      <AnimatePresence>
-        {showConfirmModal && (
-          <div
-            style={{
-              position: 'fixed', inset: 0, zIndex: 100,
-              background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              padding: '24px',
-            }}
-            onClick={() => !upgrading && setShowConfirmModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                maxWidth: '480px', width: '100%',
-                background: '#0e0a16',
-                border: '1px solid rgba(176,38,255,0.3)',
-                borderRadius: '16px',
-                padding: '28px',
-                boxShadow: '0 20px 60px rgba(0,0,0,0.6), 0 0 40px rgba(176,38,255,0.15)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-                <div style={{
-                  width: '42px', height: '42px', borderRadius: '10px',
-                  background: 'rgba(176,38,255,0.15)', border: '1px solid rgba(176,38,255,0.35)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: '#d946ef', fontSize: '20px', fontWeight: 700,
-                }}>
-                  ✦
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: 0 }}>
-                    Upgrade to Archon Architect
-                  </h3>
-                  <p style={{ fontSize: '13px', color: '#919095', margin: '2px 0 0' }}>
-                    $7.99 / month — Instant entitlement activation
-                  </p>
-                </div>
-              </div>
-
-              <div style={{
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.06)',
-                borderRadius: '12px',
-                padding: '16px 18px',
-                fontSize: '13px',
-                color: '#d4d4d8',
-                lineHeight: 1.6,
-                marginBottom: '24px',
-              }}>
-                <div style={{ fontWeight: 600, color: '#fff', marginBottom: '8px' }}>
-                  What activates immediately:
-                </div>
-                <ul style={{ paddingLeft: '18px', margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <li><strong>10 active codebases</strong> retained with full index state</li>
-                  <li><strong>2,000 files & 50 MB</strong> capacity per repository</li>
-                  <li><strong>500 monthly AI questions</strong> & 30 re-indexes</li>
-                  <li><strong>Deep Impact & Blast Radius</strong> change simulations</li>
-                  <li><strong>Priority indexing queue</strong> with accelerated AST generation</li>
-                </ul>
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  disabled={upgrading}
-                  onClick={() => setShowConfirmModal(false)}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: '8px',
-                    background: 'transparent',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#a1a1aa',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={upgrading}
-                  onClick={confirmUpgrade}
-                  style={{
-                    padding: '9px 22px',
-                    borderRadius: '8px',
-                    background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                    border: 'none',
-                    color: '#fff',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 16px rgba(176,38,255,0.3)',
-                    opacity: upgrading ? 0.6 : 1,
-                  }}
-                >
-                  {upgrading ? 'Activating...' : 'Activate Architect Plan ($7.99/mo)'}
-                </button>
-              </div>
-            </motion.div>
+      <Modal
+        isOpen={showConfirmModal}
+        onClose={() => !upgrading && setShowConfirmModal(false)}
+        title="Upgrade to Archon Architect"
+        description="$7.99 / month — Instant entitlement activation"
+        maxWidth="md"
+        className="border-accent/30 shadow-2xl"
+      >
+        <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 text-[13px] text-text-secondary leading-relaxed mb-6">
+          <div className="font-semibold text-text-primary mb-2">
+            What activates immediately:
           </div>
-        )}
-      </AnimatePresence>
+          <ul className="pl-4.5 m-0 flex flex-col gap-1.5 list-disc">
+            <li><strong className="text-text-primary">10 active codebases</strong> retained with full index state</li>
+            <li><strong className="text-text-primary">2,000 files & 50 MB</strong> capacity per repository</li>
+            <li><strong className="text-text-primary">500 monthly AI questions</strong> & 30 re-indexes</li>
+            <li><strong className="text-text-primary">Deep Impact & Blast Radius</strong> change simulations</li>
+            <li><strong className="text-text-primary">Priority indexing queue</strong> with accelerated AST generation</li>
+          </ul>
+        </div>
+
+        <div className="flex gap-3 justify-end">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={upgrading}
+            onClick={() => setShowConfirmModal(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            disabled={upgrading}
+            isLoading={upgrading}
+            onClick={confirmUpgrade}
+          >
+            {upgrading ? 'Activating...' : 'Activate Architect Plan ($7.99/mo)'}
+          </Button>
+        </div>
+      </Modal>
 
       <FAQSection />
       <Footer />
@@ -346,7 +260,6 @@ interface PricingCardProps {
 }
 
 function PricingCard({ plan, isCurrent, currentPlan, isAuthenticated, onAction }: PricingCardProps) {
-  const [hovered, setHovered] = useState(false);
   const isArchitectUser = isAuthenticated && currentPlan === 'pro';
 
   // Determine button text and disabled state
@@ -368,181 +281,102 @@ function PricingCard({ plan, isCurrent, currentPlan, isAuthenticated, onAction }
 
   return (
     <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        position: 'relative',
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        background: plan.popular
-          ? 'linear-gradient(180deg, rgba(176,38,255,0.08) 0%, rgba(10,4,18,0.95) 100%)'
-          : 'rgba(255,255,255,0.02)',
-        border: plan.popular
-          ? hovered ? '1px solid rgba(176,38,255,0.5)' : '1px solid rgba(176,38,255,0.32)'
-          : hovered ? '1px solid rgba(255,255,255,0.15)' : '1px solid rgba(255,255,255,0.07)',
-        borderRadius: '20px',
-        padding: '36px 30px',
-        boxShadow: plan.popular
-          ? '0 0 50px rgba(176,38,255,0.12), 0 20px 60px rgba(0,0,0,0.4)'
-          : '0 8px 40px rgba(0,0,0,0.2)',
-        transform: hovered ? 'translateY(-3px)' : 'translateY(0)',
-        transition: 'transform 0.25s ease, border-color 0.25s ease',
-      }}
+      className={`relative flex flex-col w-full rounded-2xl p-7 sm:p-8 transition-all duration-200 ${
+        plan.popular
+          ? 'bg-surface-elevated/90 border-2 border-accent/40 shadow-xl hover:border-accent/60 hover:-translate-y-1'
+          : 'bg-surface-subtle/60 border border-border-subtle hover:border-border-default hover:-translate-y-1'
+      }`}
     >
       {/* Top accent line for Architect */}
       {plan.popular && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
-          background: 'linear-gradient(90deg, transparent, #b026ff, #6366f1, transparent)',
-        }} />
+        <div
+          className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-accent to-transparent rounded-t-2xl"
+          aria-hidden="true"
+        />
       )}
 
       {/* Badge area */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: '26px', marginBottom: '16px' }}>
-        {plan.popular ? (
-          <span style={{
-            background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-            borderRadius: '100px',
-            padding: '4px 12px',
-            fontSize: '11px', fontWeight: 700,
-            color: '#fff', letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-          }}>
-            {plan.badge}
-          </span>
-        ) : (
-          <span style={{
-            background: 'rgba(255,255,255,0.06)',
-            borderRadius: '100px',
-            padding: '4px 12px',
-            fontSize: '11px', fontWeight: 600,
-            color: '#a1a1aa', letterSpacing: '0.04em',
-            textTransform: 'uppercase',
-          }}>
-            {plan.badge}
-          </span>
-        )}
+      <div className="flex justify-between items-center min-h-[26px] mb-4">
+        <Badge
+          variant={plan.popular ? 'purple' : 'neutral'}
+          className="uppercase text-[11px] font-bold tracking-wider px-3 py-1"
+        >
+          {plan.badge}
+        </Badge>
 
         {isCurrent && (
-          <span style={{
-            border: '1px solid #22c55e',
-            background: 'rgba(34,197,94,0.1)',
-            color: '#4ade80',
-            borderRadius: '100px',
-            padding: '3px 10px',
-            fontSize: '11px',
-            fontWeight: 700,
-          }}>
+          <Badge
+            variant="success"
+            className="text-[11px] font-bold px-2.5 py-0.5"
+          >
             ✓ Active Tier
-          </span>
+          </Badge>
         )}
       </div>
 
       {/* Title and Purpose */}
-      <div style={{
-        fontSize: '20px', fontWeight: 800, color: '#fff',
-        marginBottom: '4px', letterSpacing: '-0.02em',
-      }}>
+      <h3 className="text-xl font-heading font-extrabold text-text-primary mb-1 tracking-tight">
         {plan.name}
-      </div>
-      <div style={{ fontSize: '13px', color: '#c084fc', fontWeight: 500, marginBottom: '14px' }}>
+      </h3>
+      <div className="text-xs text-accent font-medium mb-3.5 italic">
         "{plan.purpose}"
       </div>
 
       {/* Price */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '12px' }}>
-        <span style={{
-          fontSize: '44px', fontWeight: 800, color: '#fff',
-          letterSpacing: '-0.04em', lineHeight: 1,
-        }}>
+      <div className="flex items-baseline gap-1.5 mb-3">
+        <span className="text-4xl sm:text-5xl font-extrabold text-text-primary tracking-tight leading-none">
           {plan.price}
         </span>
-        <span style={{ fontSize: '14px', color: '#71717a' }}>
+        <span className="text-sm text-text-muted">
           {plan.period}
         </span>
       </div>
 
       {/* Description */}
-      <p style={{
-        fontSize: '13px', color: '#a1a1aa',
-        marginBottom: '28px', lineHeight: 1.5,
-        minHeight: '40px',
-      }}>
+      <p className="text-xs text-text-secondary mb-7 leading-relaxed min-h-[40px]">
         {plan.desc}
       </p>
 
       {/* CTA Button */}
-      <button
-        onClick={onAction}
+      <Button
+        variant={isButtonDisabled ? 'secondary' : plan.popular ? 'primary' : 'secondary'}
+        size="lg"
         disabled={isButtonDisabled}
-        style={{
-          width: '100%',
-          padding: '12px 0',
-          fontSize: '14px',
-          fontWeight: 600,
-          borderRadius: '10px',
-          marginBottom: '32px',
-          cursor: isButtonDisabled ? 'default' : 'pointer',
-          transition: 'all 0.2s',
-          ...(isButtonDisabled
-            ? {
-                background: 'rgba(255,255,255,0.04)',
-                color: '#71717a',
-                border: '1px solid rgba(255,255,255,0.08)',
-              }
-            : plan.popular
-            ? {
-                background: 'linear-gradient(135deg, #b026ff 0%, #6366f1 100%)',
-                color: '#fff',
-                border: 'none',
-                boxShadow: '0 4px 20px rgba(176,38,255,0.3)',
-              }
-            : {
-                background: 'rgba(255,255,255,0.06)',
-                color: '#fff',
-                border: '1px solid rgba(255,255,255,0.12)',
-              }),
-        }}
+        onClick={onAction}
+        className="w-full mb-8 font-semibold"
       >
         {buttonLabel}
-      </button>
+      </Button>
 
       {/* Features List */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '11px', flex: 1 }}>
-        <div style={{ fontSize: '12px', fontWeight: 600, color: '#71717a', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>
+      <div className="flex flex-col gap-2.5 flex-1">
+        <div className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-0.5">
           Included Capabilities:
         </div>
-        {plan.features.map((feat) => (
-          <div
-            key={feat.text}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              fontSize: '13px',
-              color: feat.included ? (feat.highlight ? '#f4f4f5' : '#d4d4d8') : '#52525b',
-              fontWeight: feat.highlight ? 600 : 400,
-            }}
-          >
-            <span
-              style={{
-                width: '16px',
-                height: '16px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '11px',
-                flexShrink: 0,
-                color: feat.included ? '#22c55e' : '#52525b',
-                opacity: feat.included ? 1 : 0.4,
-              }}
+        <ul className="flex flex-col gap-2.5 m-0 p-0 list-none">
+          {plan.features.map((feat) => (
+            <li
+              key={feat.text}
+              className={`flex items-center gap-2.5 text-xs ${
+                feat.included
+                  ? feat.highlight
+                    ? 'text-text-primary font-semibold'
+                    : 'text-text-secondary font-normal'
+                  : 'text-text-muted opacity-50'
+              }`}
             >
-              {feat.included ? '✓' : '—'}
-            </span>
-            <span>{feat.text}</span>
-          </div>
-        ))}
+              <span
+                className={`w-4 h-4 flex items-center justify-center text-xs shrink-0 ${
+                  feat.included ? 'text-status-success' : 'text-text-muted'
+                }`}
+                aria-hidden="true"
+              >
+                {feat.included ? '✓' : '—'}
+              </span>
+              <span>{feat.text}</span>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );

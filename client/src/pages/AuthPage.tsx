@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuthStore } from '../stores/authStore'
 import Beams from '../components/Beams'
+import { FormField, Input, Spinner } from '../components/ui/DesignSystem'
 
 type AuthMode = 'login' | 'signup'
 
@@ -76,29 +77,11 @@ export default function AuthPage() {
   }
 
   return (
-    <div id="auth-wrapper" style={{
-      minHeight: '100vh',
-      display: 'flex',
-      background: '#000',
-      position: 'relative',
-      overflow: 'hidden',
-    }}>
+    <div id="auth-wrapper" className="min-h-screen flex bg-black relative overflow-hidden">
       {/* ── LEFT SIDE: Beams Background + Headline ── */}
-      <div className="auth-left" style={{
-        flex: 1,
-        position: 'relative',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-        minHeight: '100vh',
-      }}>
+      <div className="auth-left hidden min-[901px]:flex flex-1 relative items-center justify-center overflow-hidden min-h-screen">
         {/* Beams 3D Background */}
-        <div style={{
-          position: 'absolute', inset: 0, zIndex: 0,
-          opacity: 0.7,
-          pointerEvents: 'none',
-        }}>
+        <div className="absolute inset-0 z-0 opacity-70 pointer-events-none">
           <Beams
             beamWidth={3}
             beamHeight={30}
@@ -112,71 +95,48 @@ export default function AuthPage() {
         </div>
 
         {/* Overlay gradient for readability */}
-        <div style={{
-          position: 'absolute', inset: 0, zIndex: 1,
-          background: 'linear-gradient(135deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.7) 100%)',
-        }} />
+        <div className="absolute inset-0 z-[1] bg-gradient-to-br from-black/60 via-black/30 to-black/70 pointer-events-none" />
 
         {/* Headline content */}
         <motion.div
           initial={{ opacity: 0, x: -30 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
-          style={{
-            position: 'relative', zIndex: 2,
-            padding: '60px 48px',
-            maxWidth: '520px',
-          }}
+          className="relative z-[2] p-12 max-w-[520px]"
         >
           {/* Logo Monogram */}
-          <Link to="/" style={{
-            display: 'inline-flex', alignItems: 'center', gap: '8px',
-            textDecoration: 'none', marginBottom: '48px',
-          }}>
-            <img src="/Archonlogo.png" alt="Archon Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
-            <span style={{ fontWeight: 700, fontSize: '18px', color: '#fff', letterSpacing: '-0.03em' }}>
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 no-underline mb-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-sm"
+          >
+            <img src="/Archonlogo.png" alt="Archon Logo" className="w-8 h-8 object-contain" />
+            <span className="font-bold text-[18px] text-white tracking-[-0.03em]">
               Archon
             </span>
           </Link>
 
-          <h1 style={{
-            fontSize: '42px', fontWeight: 800, color: '#fff',
-            lineHeight: 1.1, letterSpacing: '-0.04em',
-            margin: '0 0 16px',
-          }}>
+          <h1 className="text-[42px] font-extrabold text-white leading-[1.1] tracking-[-0.04em] mb-4">
             Understand your
             <br />
-            <span style={{
-              background: 'linear-gradient(135deg, #FF9FFC, #b026ff, #7b2ff7)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-            }}>
+            <span className="bg-gradient-to-r from-[#FF9FFC] via-[#b026ff] to-[#7b2ff7] bg-clip-text text-transparent">
               entire codebase
             </span>
             <br />
             in seconds.
           </h1>
 
-          <p style={{
-            fontSize: '16px', color: 'rgba(255,255,255,0.55)',
-            lineHeight: 1.6, margin: '0 0 36px',
-            maxWidth: '400px',
-          }}>
+          <p className="text-[16px] text-white/55 leading-[1.6] mb-9 max-w-[400px]">
             Archon maps every dependency, predicts the impact of your changes, and helps you ship with confidence — powered by AI.
           </p>
 
           {/* Feature pills */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+          <div className="flex flex-wrap gap-2">
             {['Impact Analysis', 'Dependency Mapping', 'AI-Powered Chat', 'Zero Config'].map((feature) => (
-              <span key={feature} style={{
-                display: 'inline-flex', alignItems: 'center', gap: '6px',
-                padding: '6px 14px', borderRadius: '100px',
-                background: 'rgba(255,255,255,0.04)',
-                border: '1px solid rgba(255,255,255,0.08)',
-                fontSize: '12px', fontWeight: 500,
-                color: 'rgba(255,255,255,0.5)',
-              }}>
-                <span style={{ color: '#FF9FFC' }}>✦</span>
+              <span
+                key={feature}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/[0.04] border border-white/[0.08] text-[12px] font-medium text-white/50 select-none"
+              >
+                <span className="text-[#FF9FFC]" aria-hidden="true">✦</span>
                 {feature}
               </span>
             ))}
@@ -185,65 +145,42 @@ export default function AuthPage() {
       </div>
 
       {/* ── RIGHT SIDE: Auth Form ── */}
-      <div className="auth-right" style={{
-        width: '480px', minWidth: '480px',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(8, 5, 15, 0.95)',
-        borderLeft: '1px solid rgba(255,255,255,0.04)',
-        padding: '40px',
-        position: 'relative', zIndex: 2,
-      }}>
+      <div className="auth-right w-full min-[901px]:w-[480px] min-[901px]:min-w-[480px] flex items-center justify-center bg-[#08050f]/95 min-[901px]:border-l border-white/[0.04] p-6 sm:p-10 relative z-[2] min-h-screen">
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1], delay: 0.3 }}
-          style={{ width: '100%', maxWidth: '360px' }}
+          className="w-full max-w-[360px]"
         >
           {/* Title */}
-          <h2 style={{
-            fontSize: '24px', fontWeight: 700, color: '#fff',
-            margin: '0 0 4px', letterSpacing: '-0.03em',
-          }}>
+          <h2 className="text-[24px] font-bold text-white mb-1 tracking-[-0.03em]">
             {authMode === 'login' ? 'Welcome back' : 'Create your account'}
           </h2>
-          <p style={{
-            fontSize: '13px', color: 'var(--text-muted)',
-            margin: '0 0 28px',
-          }}>
+          <p className="text-[13px] text-text-muted mb-7">
             {authMode === 'login' ? 'Sign in to continue to Archon' : 'Start analyzing your codebase with AI'}
           </p>
 
           {/* OAuth buttons */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
-            <button onClick={() => handleOAuth('github')} disabled={isLoading}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-                width: '100%', padding: '11px 16px',
-                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: 'var(--radius-md)', color: '#fff', fontSize: '13.5px', fontWeight: 500,
-                cursor: isLoading ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-sans)', transition: 'all 0.2s',
-              }}
-              onMouseEnter={(e) => { if (!isLoading) { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)' } }}
-              onMouseLeave={(e) => { if (!isLoading) { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)' } }}
+          <div className="flex flex-col gap-2.5 mb-5">
+            <button
+              type="button"
+              onClick={() => handleOAuth('github')}
+              disabled={isLoading}
+              className="w-full h-11 px-4 flex items-center justify-center gap-2.5 rounded-md text-[13.5px] font-medium text-white font-sans transition-all duration-200 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.08] hover:border-white/[0.15] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base"
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
               </svg>
               Continue with GitHub
             </button>
 
-            <button onClick={() => handleOAuth('google')} disabled={isLoading}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-                width: '100%', padding: '11px 16px',
-                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: 'var(--radius-md)', color: '#fff', fontSize: '13.5px', fontWeight: 500,
-                cursor: isLoading ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-sans)', transition: 'all 0.2s',
-              }}
-              onMouseEnter={(e) => { if (!isLoading) { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)' } }}
-              onMouseLeave={(e) => { if (!isLoading) { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)' } }}
+            <button
+              type="button"
+              onClick={() => handleOAuth('google')}
+              disabled={isLoading}
+              className="w-full h-11 px-4 flex items-center justify-center gap-2.5 rounded-md text-[13.5px] font-medium text-white font-sans transition-all duration-200 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.08] hover:border-white/[0.15] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base"
             >
-              <svg width="18" height="18" viewBox="0 0 24 24">
+              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
                 <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
                 <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
@@ -254,66 +191,102 @@ export default function AuthPage() {
           </div>
 
           {/* Divider */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', margin: '20px 0' }}>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>or</span>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-white/[0.06]" />
+            <span className="text-[11px] text-text-muted font-medium uppercase tracking-[0.05em] select-none">or</span>
+            <div className="flex-1 h-px bg-white/[0.06]" />
           </div>
 
           {/* Email form */}
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
             <AnimatePresence mode="wait">
               {authMode === 'signup' && (
-                <motion.div key="name" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
-                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Full name</label>
-                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" required
-                    className="auth-input" />
+                <motion.div
+                  key="name"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <FormField id="auth-name" label="Full name" required>
+                    <Input
+                      id="auth-name"
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="John Doe"
+                      required
+                      className="bg-white/[0.03] border-white/[0.08] focus-visible:border-[#FF9FFC]/60 focus-visible:ring-[#FF9FFC]/40 text-[13.5px]"
+                    />
+                  </FormField>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Email address</label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required
-                className="auth-input" />
-            </div>
+            <FormField id="auth-email" label="Email address" required>
+              <Input
+                id="auth-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                required
+                className="bg-white/[0.03] border-white/[0.08] focus-visible:border-[#FF9FFC]/60 focus-visible:ring-[#FF9FFC]/40 text-[13.5px]"
+              />
+            </FormField>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '6px' }}>Password</label>
-              <div style={{ position: 'relative' }}>
-                <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)}
-                  placeholder={authMode === 'signup' ? 'Min 8 characters' : 'Enter your password'} required minLength={authMode === 'signup' ? 8 : undefined}
-                  className="auth-input" style={{ paddingRight: '42px' }} />
-                <button type="button" onClick={() => setShowPassword(!showPassword)}
-                  style={{
-                    position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
-                    background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px',
-                  }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <div className="flex flex-col gap-1.5 w-full">
+              <label
+                htmlFor="auth-password"
+                className="block text-[12px] font-medium text-text-secondary select-none"
+              >
+                Password <span className="text-status-error ml-1" aria-hidden="true">*</span>
+              </label>
+              <div className="relative flex items-center w-full">
+                <Input
+                  id="auth-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={authMode === 'signup' ? 'Min 8 characters' : 'Enter your password'}
+                  required
+                  minLength={authMode === 'signup' ? 8 : undefined}
+                  className="pr-10 bg-white/[0.03] border-white/[0.08] focus-visible:border-[#FF9FFC]/60 focus-visible:ring-[#FF9FFC]/40 text-[13.5px]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-2.5 p-1 text-text-muted hover:text-text-primary transition-colors cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF9FFC]/40"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                     {showPassword ? (
-                      <><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/>
+                      <>
+                        <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/>
                         <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/>
-                        <line x1="1" y1="1" x2="23" y2="23"/></>
+                        <line x1="1" y1="1" x2="23" y2="23"/>
+                      </>
                     ) : (
-                      <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
+                      <>
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                      </>
                     )}
                   </svg>
                 </button>
               </div>
             </div>
 
-            <button type="submit" disabled={isLoading}
-              style={{
-                width: '100%', padding: '11px 16px', marginTop: '4px',
-                background: isLoading ? 'rgba(176,38,255,0.3)' : 'linear-gradient(135deg, #b026ff, #7b2ff7)',
-                border: 'none', borderRadius: 'var(--radius-md)', color: '#fff', fontSize: '14px', fontWeight: 600,
-                cursor: isLoading ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-sans)',
-                transition: 'all 0.2s', letterSpacing: '-0.01em',
-              }}>
+            <button
+              type="submit"
+              disabled={isLoading}
+              aria-busy={isLoading ? true : undefined}
+              className="w-full h-11 px-5 mt-1 rounded-md font-heading font-semibold text-[14px] text-white tracking-[-0.01em] transition-all duration-200 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b026ff] focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base bg-gradient-to-r from-[#b026ff] to-[#7b2ff7] hover:brightness-110 active:scale-[0.99] shadow-[0_0_20px_rgba(176,38,255,0.35)]"
+            >
               {isLoading ? (
-                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                  <span className="auth-spinner" />
-                  {authMode === 'signup' ? 'Creating account...' : 'Signing in...'}
+                <span className="flex items-center justify-center gap-2">
+                  <Spinner size="sm" className="text-white" />
+                  <span>{authMode === 'signup' ? 'Creating account...' : 'Signing in...'}</span>
                 </span>
               ) : (
                 authMode === 'signup' ? 'Create Account' : 'Sign In'
@@ -322,54 +295,19 @@ export default function AuthPage() {
           </form>
 
           {/* Toggle mode */}
-          <p style={{ textAlign: 'center', marginTop: '20px', marginBottom: 0, fontSize: '13px', color: 'var(--text-muted)' }}>
+          <p className="text-center mt-5 mb-0 text-[13px] text-text-muted">
             {authMode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
-              style={{
-                background: 'none', border: 'none', color: '#FF9FFC', cursor: 'pointer',
-                fontSize: '13px', fontWeight: 600, fontFamily: 'var(--font-sans)', padding: 0,
-              }}>
+            <button
+              type="button"
+              onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+              className="bg-transparent border-none text-[#FF9FFC] hover:underline cursor-pointer text-[13px] font-semibold font-sans p-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF9FFC] rounded-sm"
+            >
               {authMode === 'login' ? 'Sign up' : 'Sign in'}
             </button>
           </p>
         </motion.div>
       </div>
-
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .auth-input {
-          width: 100%;
-          padding: 10px 14px;
-          background: rgba(255,255,255,0.03);
-          border: 1px solid rgba(255,255,255,0.08);
-          border-radius: var(--radius-md);
-          color: #fff;
-          font-size: 13.5px;
-          font-family: var(--font-sans);
-          outline: none;
-          transition: border-color 0.2s;
-          box-sizing: border-box;
-        }
-        .auth-input:focus {
-          border-color: rgba(255,159,252,0.4);
-        }
-        .auth-input::placeholder {
-          color: rgba(255,255,255,0.2);
-        }
-        .auth-spinner {
-          width: 14px;
-          height: 14px;
-          border: 2px solid rgba(255,255,255,0.3);
-          border-top-color: #fff;
-          border-radius: 50%;
-          animation: spin 0.6s linear infinite;
-          display: inline-block;
-        }
-        @media (max-width: 900px) {
-          .auth-left { display: none !important; }
-          .auth-right { min-width: 100% !important; width: 100% !important; }
-        }
-      `}</style>
     </div>
   )
 }
+

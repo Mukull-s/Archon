@@ -46,145 +46,236 @@ export const Typography = ({
 };
 
 // ==========================================
+// 1.5 SPINNER
+// ==========================================
+
+export interface SpinnerProps extends React.SVGAttributes<SVGSVGElement> {
+  size?: 'sm' | 'md' | 'lg';
+}
+
+export const Spinner = ({ size = 'md', className = '', ...props }: SpinnerProps) => {
+  const getSizeStyles = () => {
+    switch (size) {
+      case 'sm': return 'w-3.5 h-3.5';
+      case 'md': return 'w-5 h-5';
+      case 'lg': return 'w-8 h-8';
+      default: return 'w-5 h-5';
+    }
+  };
+
+  return (
+    <svg
+      className={`animate-spin text-accent ${getSizeStyles()} ${className}`}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      role="status"
+      aria-label="Loading"
+      {...props}
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="3"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+};
+
+// ==========================================
 // 2. BUTTONS
 // ==========================================
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'accent-glow';
   size?: 'sm' | 'md' | 'lg';
   icon?: React.ReactNode;
+  isLoading?: boolean;
 }
 
-export const Button = ({
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({
   variant = 'secondary',
   size = 'md',
   icon,
+  isLoading = false,
+  disabled,
   className = '',
   children,
   ...props
-}: ButtonProps) => {
-  const baseStyles = 'inline-flex items-center justify-center font-heading font-medium tracking-tight rounded-[6px] transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none cursor-pointer';
+}, ref) => {
+  const baseStyles = 'inline-flex items-center justify-center font-heading font-medium tracking-tight rounded-md transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base select-none';
   
   const getVariantStyles = () => {
     switch (variant) {
       case 'primary':
-        return 'bg-[#3b82f6] hover:bg-[#2563eb] text-white border border-transparent';
+        return 'bg-accent hover:bg-accent-hover text-white border border-transparent shadow-sm';
       case 'secondary':
-        return 'bg-transparent hover:bg-[#27272a] text-[#fafafa] border border-[#27272a]';
+        return 'bg-transparent hover:bg-surface-elevated text-text-primary border border-border-subtle';
       case 'ghost':
-        return 'bg-transparent hover:bg-[#1f1f22]/50 text-[#c8c5ca] border border-transparent';
+        return 'bg-transparent hover:bg-surface-elevated/60 text-text-secondary hover:text-text-primary border border-transparent';
       case 'danger':
-        return 'bg-[#93000a]/20 hover:bg-[#93000a]/40 text-[#ffb4ab] border border-[#93000a]';
+        return 'bg-status-error/15 hover:bg-status-error/25 text-status-error border border-status-error/40';
+      case 'accent-glow':
+        return 'bg-accent hover:bg-accent-hover text-white border border-transparent shadow-[0_0_20px_rgba(176,38,255,0.35)]';
+      default:
+        return 'bg-transparent hover:bg-surface-elevated text-text-primary border border-border-subtle';
     }
   };
 
   const getSizeStyles = () => {
     switch (size) {
       case 'sm':
-        return 'px-3 py-1.5 text-[12px] gap-1.5';
+        return 'h-8 px-3 text-[12px] gap-1.5';
       case 'md':
-        return 'px-4 py-2 text-[13px] gap-2';
+        return 'h-9 px-4 text-[13px] gap-2';
       case 'lg':
-        return 'px-5 py-2.5 text-[14px] gap-2.5';
+        return 'h-11 px-5 text-[14px] gap-2.5';
+      default:
+        return 'h-9 px-4 text-[13px] gap-2';
     }
   };
 
+  const isButtonDisabled = disabled || isLoading;
+
   return (
     <button
+      ref={ref}
+      disabled={isButtonDisabled}
+      aria-busy={isLoading ? true : undefined}
       className={`${baseStyles} ${getVariantStyles()} ${getSizeStyles()} ${className}`}
       {...props}
     >
-      {icon && <span className="flex-shrink-0">{icon}</span>}
-      {children}
+      {isLoading ? (
+        <>
+          <Spinner size={size === 'lg' ? 'md' : 'sm'} className="text-current" />
+          {children && <span>{children}</span>}
+        </>
+      ) : (
+        <>
+          {icon && <span className="flex-shrink-0" aria-hidden="true">{icon}</span>}
+          {children}
+        </>
+      )}
     </button>
   );
-};
+});
+Button.displayName = 'Button';
 
 // ==========================================
 // 3. PANELS
 // ==========================================
 
-interface PanelProps extends React.HTMLAttributes<HTMLDivElement> {
-  variant?: 'base' | 'lowest' | 'high';
+export interface PanelProps extends React.HTMLAttributes<HTMLDivElement> {
+  variant?: 'base' | 'lowest' | 'high' | 'subtle';
   bordered?: boolean;
 }
 
-export const Panel = ({
+export const Panel = React.forwardRef<HTMLDivElement, PanelProps>(({
   variant = 'base',
   bordered = true,
   className = '',
   children,
   ...props
-}: PanelProps) => {
+}, ref) => {
   const getBgClass = () => {
     switch (variant) {
       case 'lowest':
-        return 'bg-[#0e0e11]';
+        return 'bg-surface-base';
       case 'base':
-        return 'bg-[#131316]';
+        return 'bg-surface-subtle';
       case 'high':
-        return 'bg-[#1f1f22]';
+        return 'bg-surface-elevated';
+      case 'subtle':
+        return 'bg-surface-subtle';
+      default:
+        return 'bg-surface-subtle';
     }
   };
 
-  const borderClass = bordered ? 'border border-[#27272a] rounded-[8px]' : '';
+  const borderClass = bordered ? 'border border-border-subtle rounded-lg' : '';
 
   return (
-    <div className={`${getBgClass()} ${borderClass} ${className}`} {...props}>
+    <div ref={ref} className={`${getBgClass()} ${borderClass} ${className}`} {...props}>
       {children}
     </div>
   );
-};
+});
+Panel.displayName = 'Panel';
 
 // ==========================================
 // 4. CARDS
 // ==========================================
 
-interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
+export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
+  variant?: 'default' | 'elevated' | 'interactive';
   hoverable?: boolean;
   accent?: 'blue' | 'purple' | 'red' | 'green' | 'none';
 }
 
-export const Card = ({
+export const Card = React.forwardRef<HTMLDivElement, CardProps>(({
+  variant = 'default',
   hoverable = true,
   accent = 'none',
   className = '',
   children,
   ...props
-}: CardProps) => {
+}, ref) => {
   const getAccentClass = () => {
     switch (accent) {
       case 'blue':
-        return 'border-t-2 border-t-[#3b82f6]';
+        return 'border-t-2 border-t-accent';
       case 'purple':
         return 'border-t-2 border-t-[#a855f7]';
       case 'red':
-        return 'border-t-2 border-t-[#ffb4ab]';
+        return 'border-t-2 border-t-status-error';
       case 'green':
-        return 'border-t-2 border-t-[#10b981]';
+        return 'border-t-2 border-t-status-success';
       default:
         return '';
     }
   };
 
-  const hoverClass = hoverable ? 'hover:bg-[#2a2a2d] transition-all duration-150 cursor-pointer' : '';
+  const getVariantStyles = () => {
+    switch (variant) {
+      case 'elevated':
+        return 'bg-surface-elevated shadow-card';
+      case 'interactive':
+        return 'bg-surface-elevated hover:bg-surface-elevated/80 border-border-default hover:border-border-strong cursor-pointer';
+      case 'default':
+      default:
+        return 'bg-surface-elevated';
+    }
+  };
+
+  const isInteractive = hoverable || variant === 'interactive';
+  const hoverClass = isInteractive ? 'hover:bg-surface-elevated/90 transition-all duration-150 cursor-pointer' : '';
 
   return (
     <div
-      className={`bg-[#1f1f22] border border-[#27272a] rounded-[8px] p-4 ${getAccentClass()} ${hoverClass} ${className}`}
+      ref={ref}
+      className={`${getVariantStyles()} border border-border-subtle rounded-lg p-4 ${getAccentClass()} ${hoverClass} ${className}`}
       {...props}
     >
       {children}
     </div>
   );
-};
+});
+Card.displayName = 'Card';
 
 // ==========================================
 // 5. BADGES
 // ==========================================
 
-interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
-  variant?: 'info' | 'success' | 'warning' | 'danger' | 'neutral';
+export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
+  variant?: 'info' | 'success' | 'warning' | 'danger' | 'neutral' | 'blue' | 'green' | 'purple' | 'red';
   showDot?: boolean;
 }
 
@@ -198,34 +289,45 @@ export const Badge = ({
   const getStyleClass = () => {
     switch (variant) {
       case 'info':
-        return 'bg-[#3b82f6]/10 text-[#adc6ff] border border-[#3b82f6]/20';
+      case 'blue':
+        return 'bg-status-info/10 text-[#adc6ff] border border-status-info/20';
       case 'success':
-        return 'bg-[#10b981]/10 text-[#10b981] border border-[#10b981]/20';
+      case 'green':
+        return 'bg-status-success/10 text-status-success border border-status-success/20';
       case 'warning':
-        return 'bg-[#eab308]/10 text-[#eab308] border border-[#eab308]/20';
+        return 'bg-status-warning/10 text-status-warning border border-status-warning/20';
       case 'danger':
-        return 'bg-[#93000a]/10 text-[#ffb4ab] border border-[#93000a]/20';
+      case 'red':
+        return 'bg-status-error/10 text-[#ffb4ab] border border-status-error/20';
+      case 'purple':
+        return 'bg-[#a855f7]/10 text-[#ddb7ff] border border-[#a855f7]/20';
       case 'neutral':
-        return 'bg-[#27272a]/40 text-[#c8c5ca] border border-[#27272a]/80';
+      default:
+        return 'bg-surface-elevated text-text-secondary border border-border-subtle';
     }
   };
 
   const getDotColor = () => {
     switch (variant) {
-      case 'info': return 'bg-[#3b82f6]';
-      case 'success': return 'bg-[#10b981]';
-      case 'warning': return 'bg-[#eab308]';
-      case 'danger': return 'bg-[#ffb4ab]';
-      case 'neutral': return 'bg-[#c8c5ca]';
+      case 'info':
+      case 'blue': return 'bg-status-info';
+      case 'success':
+      case 'green': return 'bg-status-success';
+      case 'warning': return 'bg-status-warning';
+      case 'danger':
+      case 'red': return 'bg-status-error';
+      case 'purple': return 'bg-[#a855f7]';
+      case 'neutral':
+      default: return 'bg-text-secondary';
     }
   };
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono font-medium rounded-[4px] uppercase tracking-wide ${getStyleClass()} ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono font-medium rounded-sm uppercase tracking-wide ${getStyleClass()} ${className}`}
       {...props}
     >
-      {showDot && <span className={`w-1.5 h-1.5 rounded-full ${getDotColor()}`} />}
+      {showDot && <span className={`w-1.5 h-1.5 rounded-full ${getDotColor()}`} aria-hidden="true" />}
       {children}
     </span>
   );
@@ -580,6 +682,370 @@ export const ErrorState = ({
           </Button>
         </div>
       )}
+    </div>
+  );
+};
+
+// ==========================================
+// 12. INPUTS
+// ==========================================
+
+export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  hasError?: boolean;
+  leftIcon?: React.ReactNode;
+  rightIcon?: React.ReactNode;
+}
+
+export const Input = React.forwardRef<HTMLInputElement, InputProps>(({
+  hasError = false,
+  leftIcon,
+  rightIcon,
+  disabled,
+  className = '',
+  id,
+  'aria-describedby': ariaDescribedBy,
+  ...props
+}, ref) => {
+  const baseInputStyles = 'w-full bg-surface-base border rounded-md text-[13px] font-body text-text-primary placeholder:text-text-muted transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base';
+  
+  const borderAndRingStyles = hasError
+    ? 'border-status-error/80 focus-visible:ring-status-error/80 focus-visible:border-status-error'
+    : 'border-border-subtle hover:border-border-default focus-visible:ring-accent focus-visible:border-accent';
+
+  const paddingStyles = leftIcon && rightIcon
+    ? 'pl-9 pr-9 py-2'
+    : leftIcon
+    ? 'pl-9 pr-3 py-2'
+    : rightIcon
+    ? 'pl-3 pr-9 py-2'
+    : 'px-3 py-2';
+
+  return (
+    <div className="relative flex items-center w-full">
+      {leftIcon && (
+        <span className="absolute left-3 text-text-muted pointer-events-none flex items-center justify-center" aria-hidden="true">
+          {leftIcon}
+        </span>
+      )}
+      <input
+        ref={ref}
+        id={id}
+        disabled={disabled}
+        aria-invalid={hasError ? true : undefined}
+        aria-describedby={ariaDescribedBy}
+        className={`${baseInputStyles} ${borderAndRingStyles} ${paddingStyles} ${className}`}
+        {...props}
+      />
+      {rightIcon && (
+        <span className="absolute right-3 text-text-muted pointer-events-none flex items-center justify-center" aria-hidden="true">
+          {rightIcon}
+        </span>
+      )}
+    </div>
+  );
+});
+Input.displayName = 'Input';
+
+// ==========================================
+// 13. FORM FIELD
+// ==========================================
+
+export interface FormFieldProps {
+  id?: string;
+  label?: string;
+  required?: boolean;
+  helperText?: string;
+  error?: string;
+  children: React.ReactNode;
+  className?: string;
+}
+
+export const FormField = ({
+  id,
+  label,
+  required = false,
+  helperText,
+  error,
+  children,
+  className = '',
+}: FormFieldProps) => {
+  const generatedId = React.useId();
+  const inputId = id || generatedId;
+  const helperId = helperText ? `${inputId}-helper` : undefined;
+  const errorId = error ? `${inputId}-error` : undefined;
+  const describedBy = [errorId, helperId].filter(Boolean).join(' ') || undefined;
+
+  return (
+    <div className={`flex flex-col gap-1.5 w-full ${className}`}>
+      {label && (
+        <label
+          htmlFor={inputId}
+          className="block text-[12px] font-medium text-text-secondary select-none"
+        >
+          {label}
+          {required && <span className="text-status-error ml-1" aria-hidden="true">*</span>}
+        </label>
+      )}
+
+      {/* Render children and pass id + aria-describedby if it is a single valid React element */}
+      {React.isValidElement(children)
+        ? React.cloneElement(children as React.ReactElement<any>, {
+            id: inputId,
+            'aria-describedby': describedBy,
+            hasError: Boolean(error),
+          })
+        : children}
+
+      {error ? (
+        <span id={errorId} role="alert" className="text-[11px] text-status-error font-medium">
+          {error}
+        </span>
+      ) : helperText ? (
+        <span id={helperId} className="text-[11px] text-text-muted">
+          {helperText}
+        </span>
+      ) : null}
+    </div>
+  );
+};
+
+// ==========================================
+// 14. MODAL
+// ==========================================
+
+export interface ModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  title?: string;
+  description?: string;
+  children: React.ReactNode;
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl';
+  className?: string;
+}
+
+export const Modal = ({
+  isOpen,
+  onClose,
+  title,
+  description,
+  children,
+  maxWidth = 'md',
+  className = '',
+}: ModalProps) => {
+  const titleId = React.useId();
+  const descId = React.useId();
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+  const previousActiveElement = React.useRef<HTMLElement | null>(null);
+
+  // Focus trap, initial focus, and focus restoration for WCAG 2.2 AA compliance
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    // Store active element to restore focus on modal unmount
+    previousActiveElement.current = document.activeElement as HTMLElement | null;
+
+    // Move focus into modal dialog
+    const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    const timer = setTimeout(() => {
+      if (dialogRef.current) {
+        const firstFocusable = dialogRef.current.querySelector<HTMLElement>(focusableSelector);
+        if (firstFocusable) {
+          firstFocusable.focus();
+        } else {
+          dialogRef.current.focus();
+        }
+      }
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape dismissal
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+
+      // Tab key focus trap containment
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(focusableSelector);
+        if (focusableElements.length === 0) {
+          e.preventDefault();
+          return;
+        }
+
+        const firstElement = focusableElements[0];
+        const lastElement = focusableElements[focusableElements.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === firstElement) {
+            e.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          if (document.activeElement === lastElement) {
+            e.preventDefault();
+            firstElement.focus();
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (previousActiveElement.current && typeof previousActiveElement.current.focus === 'function') {
+        previousActiveElement.current.focus();
+      }
+    };
+  }, [isOpen, onClose]);
+
+  const getMaxWidthClass = () => {
+    switch (maxWidth) {
+      case 'sm': return 'max-w-[380px]';
+      case 'md': return 'max-w-[460px]';
+      case 'lg': return 'max-w-[560px]';
+      case 'xl': return 'max-w-[680px]';
+      default: return 'max-w-[460px]';
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={title ? titleId : undefined}
+          aria-describedby={description ? descId : undefined}
+          className="fixed inset-0 z-modal flex items-center justify-center p-4"
+        >
+          {/* Backdrop with click-to-close */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            onClick={onClose}
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm"
+            aria-hidden="true"
+          />
+
+          {/* Dialog Container */}
+          <motion.div
+            ref={dialogRef}
+            tabIndex={-1}
+            initial={{ opacity: 0, scale: 0.96, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+            transition={{ duration: 0.15 }}
+            className={`relative z-10 w-full ${getMaxWidthClass()} bg-surface-elevated border border-border-subtle rounded-lg shadow-modal p-6 text-text-primary focus:outline-none ${className}`}
+          >
+            {/* Header */}
+            {(title || description) && (
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  {title && (
+                    <h3 id={titleId} className="text-[17px] font-heading font-semibold tracking-tight text-text-primary m-0">
+                      {title}
+                    </h3>
+                  )}
+                  {description && (
+                    <p id={descId} className="text-[12px] text-text-secondary mt-1 mb-0">
+                      {description}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="Close dialog"
+                  className="p-1 rounded-sm text-text-muted hover:text-text-primary hover:bg-surface-subtle transition-colors cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            {/* Content */}
+            <div className="text-[13px] font-body text-text-secondary">
+              {children}
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+};
+
+// ==========================================
+// 15. TOGGLE
+// ==========================================
+
+export interface ToggleProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  label?: string;
+  description?: string;
+  id?: string;
+  className?: string;
+}
+
+export const Toggle = ({
+  checked,
+  onChange,
+  disabled = false,
+  label,
+  description,
+  id,
+  className = '',
+}: ToggleProps) => {
+  const generatedId = React.useId();
+  const toggleId = id || generatedId;
+
+  return (
+    <div className={`inline-flex items-center justify-between gap-4 ${className}`}>
+      {(label || description) && (
+        <div className="flex flex-col">
+          {label && (
+            <label
+              htmlFor={toggleId}
+              className={`text-[13px] font-medium select-none ${
+                disabled ? 'text-text-muted cursor-not-allowed' : 'text-text-primary cursor-pointer'
+              }`}
+            >
+              {label}
+            </label>
+          )}
+          {description && (
+            <span className="text-[11px] text-text-muted select-none">
+              {description}
+            </span>
+          )}
+        </div>
+      )}
+      <button
+        type="button"
+        id={toggleId}
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
+        className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-pill border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base disabled:opacity-50 disabled:cursor-not-allowed ${
+          checked ? 'bg-accent' : 'bg-surface-subtle border-border-subtle'
+        }`}
+      >
+        <span
+          aria-hidden="true"
+          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+            checked ? 'translate-x-4' : 'translate-x-0 bg-text-secondary'
+          }`}
+        />
+      </button>
     </div>
   );
 };

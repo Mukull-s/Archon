@@ -5,6 +5,7 @@ import Footer from '../components/sections/Footer';
 import { DOC_CATEGORIES, ALL_DOC_PAGES } from '../data/docsContent';
 import { DOC_ARTICLES } from '../data/docsArticles';
 import DocSearchModal from '../components/docs/DocSearchModal';
+import { Badge } from '../components/ui/DesignSystem';
 
 export default function DocsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -14,11 +15,19 @@ export default function DocsPage() {
   const pageParam = searchParams.get('page');
   const activePageId = (pageParam && DOC_ARTICLES[pageParam]) ? pageParam : 'what-is-archon';
 
-  const [activeSectionId, setActiveSectionId] = useState<string>('');
+  const article = DOC_ARTICLES[activePageId] || DOC_ARTICLES['what-is-archon'];
+
+  // Initialize active section to first section of current article
+  const [activeSectionId, setActiveSectionId] = useState<string>(
+    () => article.sections[0]?.id || ''
+  );
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const article = DOC_ARTICLES[activePageId] || DOC_ARTICLES['what-is-archon'];
+  // Sync activeSectionId whenever activePageId changes
+  useEffect(() => {
+    setActiveSectionId(article.sections[0]?.id || '');
+  }, [activePageId]);
 
   // Scroll directly to top whenever activePageId changes
   useEffect(() => {
@@ -46,39 +55,88 @@ export default function DocsPage() {
 
   // Intersection Observer for right-hand TOC scroll spy
   useEffect(() => {
-    const sectionElements = article.sections
-      .map(s => document.getElementById(s.id))
+    const sectionIds = article.sections.map(s => s.id);
+    if (sectionIds.length === 0) {
+      setActiveSectionId('');
+      return;
+    }
+
+    // Default to first section initially
+    setActiveSectionId(sectionIds[0]);
+
+    const sectionElements = sectionIds
+      .map(id => document.getElementById(id))
       .filter(Boolean) as HTMLElement[];
 
     if (sectionElements.length === 0) return;
 
+    // Track which headings are in or above the reading zone
+    const visibleHeadings = new Map<string, number>();
+
     const observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
+        entries.forEach((entry) => {
+          const id = entry.target.id;
           if (entry.isIntersecting) {
-            setActiveSectionId(entry.target.id);
-            break;
+            visibleHeadings.set(id, entry.boundingClientRect.top);
+          } else {
+            visibleHeadings.delete(id);
+            // If heading scrolled down out of view (user scrolled UP past this heading)
+            if (entry.boundingClientRect.top > 85) {
+              const index = sectionIds.indexOf(id);
+              if (index > 0) {
+                setActiveSectionId(sectionIds[index - 1]);
+              }
+            }
+          }
+        });
+
+        if (visibleHeadings.size > 0) {
+          // Select the topmost visible heading according to document order
+          const firstVisible = sectionIds.find((id) => visibleHeadings.has(id));
+          if (firstVisible) {
+            setActiveSectionId(firstVisible);
           }
         }
       },
-      { rootMargin: '-80px 0px -60% 0px', threshold: 0 }
+      {
+        // Root margin: -85px top to clear fixed 80px Navbar; -60% bottom to focus on top 40% reading zone
+        rootMargin: '-85px 0px -60% 0px',
+        threshold: 0,
+      }
     );
 
     sectionElements.forEach(el => observer.observe(el));
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      visibleHeadings.clear();
+    };
   }, [article]);
+
+  const scrollToHeading = (elementId: string) => {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    const navbarHeight = 80;
+    const breathingRoom = 16;
+    const targetY = el.getBoundingClientRect().top + window.scrollY - (navbarHeight + breathingRoom);
+
+    window.scrollTo({ top: targetY, behavior: 'smooth' });
+    if ((window as any).lenis) {
+      try {
+        (window as any).lenis.scrollTo(targetY);
+      } catch {}
+    }
+  };
 
   const handleSelectPage = (pageId: string, sectionId?: string) => {
     setSearchParams({ page: pageId });
     setIsMobileMenuOpen(false);
 
     if (sectionId) {
+      setActiveSectionId(sectionId);
       setTimeout(() => {
-        const el = document.getElementById(sectionId);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }, 50);
+        scrollToHeading(sectionId);
+      }, 60);
     } else {
       window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
       document.documentElement.scrollTop = 0;
@@ -97,105 +155,44 @@ export default function DocsPage() {
   const nextPage = currentIndex < ALL_DOC_PAGES.length - 1 ? ALL_DOC_PAGES[currentIndex + 1] : null;
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: '#09090b',
-      color: '#e4e1e5',
-      display: 'flex',
-      flexDirection: 'column',
-      fontFamily: 'var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif)',
-    }}>
+    <div className="min-h-screen bg-bg-base text-text-primary flex flex-col font-sans">
       {/* Top Navbar */}
       <Navbar />
 
       {/* Main Documentation Shell */}
-      <div style={{
-        maxWidth: '1440px',
-        margin: '0 auto',
-        width: '100%',
-        paddingTop: '80px', // Clear fixed navbar
-        flex: 1,
-        display: 'flex',
-        position: 'relative',
-      }}>
+      <div className="max-w-[1440px] mx-auto w-full pt-20 flex-1 flex items-start relative">
         {/* ============================================================ */}
         {/* LEFT SIDEBAR (Desktop) */}
         {/* ============================================================ */}
         <aside
-          className="docs-sidebar"
+          className="docs-sidebar hidden md:block w-[270px] flex-shrink-0 self-start border-r border-border-subtle pt-6 px-4 pb-20 pl-6 sticky top-20 h-[calc(100vh-80px)] overflow-y-auto overscroll-contain"
           data-lenis-prevent
-          style={{
-            width: '270px',
-            flexShrink: 0,
-            borderRight: '1px solid rgba(255, 255, 255, 0.07)',
-            padding: '24px 16px 80px 24px',
-            position: 'sticky',
-            top: '80px',
-            height: 'calc(100vh - 80px)',
-            overflowY: 'auto',
-            overscrollBehavior: 'contain',
-          }}
+          aria-label="Documentation navigation"
         >
           {/* Quick Search Button */}
           <button
+            type="button"
             onClick={() => setIsSearchOpen(true)}
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '9px 12px',
-              borderRadius: '8px',
-              background: 'rgba(255, 255, 255, 0.03)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              color: '#71717a',
-              fontSize: '13px',
-              cursor: 'pointer',
-              marginBottom: '24px',
-              transition: 'all 0.15s ease',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.borderColor = 'rgba(176, 38, 255, 0.3)';
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
-            }}
+            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-surface-subtle/50 hover:bg-surface-elevated/60 border border-border-subtle hover:border-accent/40 text-text-tertiary hover:text-text-secondary text-[13px] cursor-pointer mb-6 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            aria-label="Search docs (⌘K)"
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <div className="flex items-center gap-2">
+              <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <circle cx="11" cy="11" r="8"/>
                 <line x1="21" y1="21" x2="16.65" y2="16.65"/>
               </svg>
               <span>Search docs...</span>
             </div>
-            <span style={{
-              fontSize: '10px',
-              fontWeight: 600,
-              padding: '2px 5px',
-              borderRadius: '4px',
-              background: 'rgba(255, 255, 255, 0.08)',
-              color: '#a1a1aa',
-              fontFamily: 'monospace',
-            }}>
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-surface-elevated text-text-secondary font-mono border border-border-subtle/40">
               ⌘K
             </span>
           </button>
 
           {/* Navigation Categories */}
-          <nav>
+          <nav aria-label="Documentation categories">
             {DOC_CATEGORIES.map((cat) => (
-              <div key={cat.title} style={{ marginBottom: '22px' }}>
-                <div style={{
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.06em',
-                  color: '#71717a',
-                  paddingLeft: '8px',
-                  marginBottom: '6px',
-                }}>
+              <div key={cat.title} className="mb-5">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary pl-2 mb-1.5 select-none">
                   {cat.title}
                 </div>
                 <div>
@@ -204,36 +201,14 @@ export default function DocsPage() {
                     return (
                       <button
                         key={p.id}
+                        type="button"
                         onClick={() => handleSelectPage(p.id)}
-                        style={{
-                          width: '100%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          textAlign: 'left',
-                          padding: '7px 10px',
-                          borderRadius: '6px',
-                          background: isActive ? 'rgba(176, 38, 255, 0.1)' : 'transparent',
-                          color: isActive ? '#fff' : '#a1a1aa',
-                          fontSize: '13px',
-                          fontWeight: isActive ? 600 : 400,
-                          border: 'none',
-                          borderLeft: isActive ? '2px solid var(--accent, #b026ff)' : '2px solid transparent',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s ease',
-                          marginBottom: '2px',
-                        }}
-                        onMouseEnter={e => {
-                          if (!isActive) {
-                            e.currentTarget.style.color = '#fff';
-                            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
-                          }
-                        }}
-                        onMouseLeave={e => {
-                          if (!isActive) {
-                            e.currentTarget.style.color = '#a1a1aa';
-                            e.currentTarget.style.background = 'transparent';
-                          }
-                        }}
+                        className={`w-full flex items-center text-left py-1.5 px-2.5 rounded-md text-[13px] border-l-2 cursor-pointer transition-colors duration-150 mb-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                          isActive
+                            ? 'bg-accent/10 text-white font-semibold border-accent'
+                            : 'bg-transparent text-text-secondary font-normal border-transparent hover:text-white hover:bg-surface-subtle/60'
+                        }`}
+                        aria-current={isActive ? 'page' : undefined}
                       >
                         {p.title}
                       </button>
@@ -248,32 +223,15 @@ export default function DocsPage() {
         {/* ============================================================ */}
         {/* MOBILE NAVIGATION BAR & DRAWER */}
         {/* ============================================================ */}
-        <div className="docs-mobile-bar" style={{
-          display: 'none',
-          padding: '12px 16px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          background: '#0d0d11',
-          width: '100%',
-          position: 'sticky',
-          top: '70px',
-          zIndex: 40,
-        }}>
+        <div className="docs-mobile-bar flex md:hidden items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface-base w-full sticky top-[70px] z-40">
           <button
+            type="button"
             onClick={() => setIsMobileMenuOpen(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '6px 12px',
-              borderRadius: '6px',
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              color: '#f4f4f5',
-              fontSize: '13px',
-              cursor: 'pointer',
-            }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-surface-subtle border border-border-subtle text-text-primary text-[13px] hover:bg-surface-elevated hover:border-border-default cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            aria-label="Open documentation navigation menu"
+            aria-expanded={isMobileMenuOpen}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
               <line x1="3" y1="12" x2="21" y2="12"/>
               <line x1="3" y1="6" x2="21" y2="6"/>
               <line x1="3" y1="18" x2="21" y2="18"/>
@@ -281,17 +239,10 @@ export default function DocsPage() {
             <span>Menu & Topics</span>
           </button>
           <button
+            type="button"
             onClick={() => setIsSearchOpen(true)}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '6px',
-              background: 'transparent',
-              border: 'none',
-              color: '#a1a1aa',
-              fontSize: '13px',
-              cursor: 'pointer',
-              marginLeft: 'auto',
-            }}
+            className="px-3 py-1.5 rounded-md bg-transparent border-0 text-text-secondary hover:text-text-primary text-[13px] cursor-pointer ml-auto transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            aria-label="Search documentation"
           >
             🔍 Search
           </button>
@@ -301,59 +252,49 @@ export default function DocsPage() {
         {isMobileMenuOpen && (
           <div
             onClick={() => setIsMobileMenuOpen(false)}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              zIndex: 1000,
-              background: 'rgba(0, 0, 0, 0.7)',
-              backdropFilter: 'blur(4px)',
-            }}
+            className="fixed inset-0 z-[1000] bg-black/70 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Documentation menu"
           >
             <div
               onClick={e => e.stopPropagation()}
-              style={{
-                width: '80%',
-                maxWidth: '320px',
-                height: '100%',
-                background: '#121217',
-                borderRight: '1px solid rgba(255, 255, 255, 0.1)',
-                padding: '24px 16px',
-                overflowY: 'auto',
-              }}
+              className="w-4/5 max-w-[320px] h-full bg-surface-base border-r border-border-subtle p-5 overflow-y-auto"
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <span style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>Documentation Topics</span>
+              <div className="flex justify-between items-center mb-5">
+                <span className="text-[15px] font-bold text-white">Documentation Topics</span>
                 <button
+                  type="button"
                   onClick={() => setIsMobileMenuOpen(false)}
-                  style={{ background: 'transparent', border: 'none', color: '#71717a', fontSize: '18px', cursor: 'pointer' }}
+                  className="bg-transparent border-0 text-text-tertiary hover:text-text-primary text-lg cursor-pointer p-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  aria-label="Close menu"
                 >
                   ✕
                 </button>
               </div>
               {DOC_CATEGORIES.map((cat) => (
-                <div key={cat.title} style={{ marginBottom: '18px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: '#71717a', marginBottom: '6px' }}>
+                <div key={cat.title} className="mb-4">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary mb-1.5 pl-1 select-none">
                     {cat.title}
                   </div>
-                  {cat.pages.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => handleSelectPage(p.id)}
-                      style={{
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        background: p.id === activePageId ? 'rgba(176, 38, 255, 0.15)' : 'transparent',
-                        color: p.id === activePageId ? '#fff' : '#a1a1aa',
-                        fontSize: '13px',
-                        border: 'none',
-                        display: 'block',
-                      }}
-                    >
-                      {p.title}
-                    </button>
-                  ))}
+                  {cat.pages.map((p) => {
+                    const isActive = p.id === activePageId;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleSelectPage(p.id)}
+                        className={`w-full text-left py-2 px-2.5 rounded-md text-[13px] border-0 block cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                          isActive
+                            ? 'bg-accent/15 text-white font-semibold'
+                            : 'bg-transparent text-text-secondary hover:text-white hover:bg-surface-subtle/60'
+                        }`}
+                        aria-current={isActive ? 'page' : undefined}
+                      >
+                        {p.title}
+                      </button>
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -363,148 +304,66 @@ export default function DocsPage() {
         {/* ============================================================ */}
         {/* CENTER COLUMN: MAIN CONTENT */}
         {/* ============================================================ */}
-        <main
-          style={{
-            flex: 1,
-            minWidth: 0,
-            padding: '40px 48px 80px',
-            maxWidth: '860px',
-          }}
-        >
+        <main className="flex-1 min-w-0 px-4 py-6 md:px-12 md:py-10 pb-20 max-w-[860px]">
           {/* Breadcrumbs */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '12px',
-            color: '#71717a',
-            marginBottom: '16px',
-          }}>
-            <span
+          <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-text-tertiary mb-4">
+            <button
+              type="button"
               onClick={() => handleSelectPage('what-is-archon')}
-              style={{ cursor: 'pointer', transition: 'color 0.15s' }}
-              onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
-              onMouseLeave={e => (e.currentTarget.style.color = '#71717a')}
+              className="cursor-pointer hover:text-white transition-colors bg-transparent border-0 p-0 text-xs text-text-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-sm"
             >
               Docs
-            </span>
-            <span>/</span>
+            </button>
+            <span aria-hidden="true">/</span>
             <span>{article.category}</span>
-            <span>/</span>
-            <span style={{ color: '#d4d4d8' }}>{article.title}</span>
-          </div>
+            <span aria-hidden="true">/</span>
+            <span className="text-text-primary font-medium">{article.title}</span>
+          </nav>
 
           {/* Category Pill */}
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            padding: '3px 10px',
-            borderRadius: '100px',
-            background: 'rgba(176, 38, 255, 0.08)',
-            border: '1px solid rgba(176, 38, 255, 0.2)',
-            fontSize: '10px',
-            fontWeight: 700,
-            color: 'var(--accent, #b026ff)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-            marginBottom: '12px',
-          }}>
+          <Badge
+            variant="purple"
+            className="mb-3 text-[10px] font-bold uppercase tracking-wider bg-accent/10 border-accent/25 text-accent"
+          >
             {article.category}
-          </div>
+          </Badge>
 
           {/* Article Title */}
-          <h1 style={{
-            fontSize: '32px',
-            fontWeight: 700,
-            letterSpacing: '-0.025em',
-            color: '#fff',
-            marginBottom: '12px',
-            lineHeight: 1.25,
-          }}>
+          <h1 className="text-3xl font-bold tracking-tight text-white mb-3 leading-tight">
             {article.title}
           </h1>
 
           {/* Lead Summary */}
-          <p style={{
-            fontSize: '16px',
-            lineHeight: 1.7,
-            color: '#a1a1aa',
-            marginBottom: '32px',
-            paddingBottom: '24px',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          }}>
+          <p className="text-base leading-relaxed text-text-secondary mb-8 pb-6 border-b border-border-subtle">
             {article.lead}
           </p>
 
           {/* Article Body */}
-          <div className="docs-content-body" style={{ color: '#d4d4d8' }}>
+          <div className="docs-content-body text-text-secondary">
             {article.body}
           </div>
 
           {/* Bottom Pagination Links */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: '16px',
-            marginTop: '64px',
-            paddingTop: '24px',
-            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-          }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-16 pt-6 border-t border-border-subtle">
             {prevPage ? (
               <button
+                type="button"
                 onClick={() => handleSelectPage(prevPage.id)}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  padding: '16px',
-                  borderRadius: '8px',
-                  background: 'rgba(255, 255, 255, 0.02)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = 'rgba(176, 38, 255, 0.3)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.02)';
-                }}
+                className="flex flex-col items-start p-4 rounded-lg bg-surface-subtle/40 hover:bg-surface-elevated/60 border border-border-subtle hover:border-accent/40 cursor-pointer text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
-                <span style={{ fontSize: '11px', color: '#71717a', marginBottom: '4px' }}>← PREVIOUS</span>
-                <span style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{prevPage.title}</span>
+                <span className="text-[11px] font-medium text-text-tertiary mb-1">← PREVIOUS</span>
+                <span className="text-sm font-semibold text-white">{prevPage.title}</span>
               </button>
             ) : <div />}
 
             {nextPage && (
               <button
+                type="button"
                 onClick={() => handleSelectPage(nextPage.id)}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'flex-end',
-                  padding: '16px',
-                  borderRadius: '8px',
-                  background: 'rgba(255, 255, 255, 0.02)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  cursor: 'pointer',
-                  textAlign: 'right',
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = 'rgba(176, 38, 255, 0.3)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.02)';
-                }}
+                className="flex flex-col items-end p-4 rounded-lg bg-surface-subtle/40 hover:bg-surface-elevated/60 border border-border-subtle hover:border-accent/40 cursor-pointer text-right transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
-                <span style={{ fontSize: '11px', color: '#71717a', marginBottom: '4px' }}>NEXT →</span>
-                <span style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{nextPage.title}</span>
+                <span className="text-[11px] font-medium text-text-tertiary mb-1">NEXT →</span>
+                <span className="text-sm font-semibold text-white">{nextPage.title}</span>
               </button>
             )}
           </div>
@@ -514,31 +373,15 @@ export default function DocsPage() {
         {/* RIGHT COLUMN: ON THIS PAGE (TOC) */}
         {/* ============================================================ */}
         <aside
-          className="docs-toc"
+          className="docs-toc hidden min-[1081px]:block w-[230px] flex-shrink-0 self-start pt-10 px-4 pb-10 pr-6 sticky top-20 h-[calc(100vh-80px)] overflow-y-auto overscroll-contain"
           data-lenis-prevent="true"
-          style={{
-            width: '230px',
-            flexShrink: 0,
-            padding: '40px 24px 40px 16px',
-            position: 'sticky',
-            top: '80px',
-            height: 'calc(100vh - 80px)',
-            overflowY: 'auto',
-            overscrollBehavior: 'contain',
-          }}
+          aria-label="Table of contents"
         >
-          <div style={{
-            fontSize: '11px',
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-            color: '#71717a',
-            marginBottom: '12px',
-          }}>
+          <div className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary mb-3 select-none pl-3">
             On this page
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <nav aria-label="Article sections" className="relative border-l border-border-subtle/60 pl-0 flex flex-col">
             {article.sections.map((sec) => {
               const isSelected = activeSectionId === sec.id;
               return (
@@ -548,31 +391,21 @@ export default function DocsPage() {
                   onClick={(e) => {
                     e.preventDefault();
                     setActiveSectionId(sec.id);
-                    const el = document.getElementById(sec.id);
-                    if (el) {
-                      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    }
+                    scrollToHeading(sec.id);
+                    window.history.pushState(null, '', `#${sec.id}`);
                   }}
-                  style={{
-                    fontSize: '12px',
-                    lineHeight: 1.5,
-                    color: isSelected ? 'var(--accent, #b026ff)' : '#71717a',
-                    fontWeight: isSelected ? 600 : 400,
-                    textDecoration: 'none',
-                    transition: 'color 0.15s ease',
-                  }}
-                  onMouseEnter={e => {
-                    if (!isSelected) e.currentTarget.style.color = '#d4d4d8';
-                  }}
-                  onMouseLeave={e => {
-                    if (!isSelected) e.currentTarget.style.color = '#71717a';
-                  }}
+                  className={`group relative text-xs leading-normal no-underline py-1.5 px-3 transition-all duration-150 rounded-r-md -ml-[1px] border-l-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+                    isSelected
+                      ? 'border-accent text-accent font-semibold bg-accent/10'
+                      : 'border-transparent text-text-tertiary font-normal hover:text-text-secondary hover:bg-surface-subtle/40 hover:border-border-default'
+                  }`}
+                  aria-current={isSelected ? 'location' : undefined}
                 >
                   {sec.title}
                 </a>
               );
             })}
-          </div>
+          </nav>
         </aside>
       </div>
 
@@ -585,6 +418,19 @@ export default function DocsPage() {
 
       {/* Responsive & Scrollbar Styles */}
       <style>{`
+        html, body {
+          overflow-x: clip !important;
+        }
+        .docs-sidebar,
+        .docs-toc {
+          position: -webkit-sticky !important;
+          position: sticky !important;
+          top: 80px !important;
+          height: calc(100vh - 80px) !important;
+          max-height: calc(100vh - 80px) !important;
+          align-self: flex-start !important;
+          flex-shrink: 0 !important;
+        }
         .docs-sidebar::-webkit-scrollbar,
         .docs-toc::-webkit-scrollbar {
           width: 5px;
@@ -595,28 +441,16 @@ export default function DocsPage() {
         }
         .docs-sidebar::-webkit-scrollbar-thumb,
         .docs-toc::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.12);
+          background: var(--color-border-default);
           border-radius: 4px;
         }
         .docs-sidebar::-webkit-scrollbar-thumb:hover,
         .docs-toc::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.25);
+          background: var(--color-border-strong);
         }
-        @media (max-width: 1080px) {
-          .docs-toc {
-            display: none !important;
-          }
-        }
-        @media (max-width: 768px) {
-          .docs-sidebar {
-            display: none !important;
-          }
-          .docs-mobile-bar {
-            display: flex !important;
-          }
-          main {
-            padding: 24px 16px 60px !important;
-          }
+        .docs-content-body h2,
+        .docs-content-body h3 {
+          scroll-margin-top: 96px;
         }
       `}</style>
 
