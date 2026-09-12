@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Typography, Badge, Panel } from '../ui/DesignSystem';
+import { Typography, Badge, Panel, Button } from '../ui/DesignSystem';
 import { Sidebar, SidebarLink } from '../ui/Sidebar';
 import { Breadcrumbs } from '../ui/Navigation';
 import CommandPalette from './CommandPalette';
 import { useAuthStore } from '../../stores/authStore';
+import { toast } from 'sonner';
 
 interface AppShellProps {
   repository: {
@@ -14,13 +15,25 @@ interface AppShellProps {
     owner: string | null;
     isLocal: boolean;
     confidence: number;
-    scannedFiles: { path: string }[];
+    scannedFiles: { path: string; size?: number; lines?: number }[];
     astMetadata?: any;
+    framework?: string | null;
+    languages?: string[];
+    dependencyGraph?: Record<string, string[]>;
+    confidenceDetails?: {
+      score: number;
+      checklist: string[];
+    };
   } | null;
   activeTab: string;
   setActiveTab: (tab: any) => void;
   loading?: boolean;
   children: React.ReactNode;
+  activeInvestigationEntity?: string | null;
+  onClearInvestigationEntity?: () => void;
+  onNavigateToExplorer?: (filePath: string) => void;
+  onNavigateToGraph?: (filePath?: string) => void;
+  onNavigateToImpact?: (filePath?: string) => void;
 }
 
 export default function AppShell({
@@ -28,7 +41,12 @@ export default function AppShell({
   activeTab,
   setActiveTab,
   loading = false,
-  children
+  children,
+  activeInvestigationEntity = null,
+  onClearInvestigationEntity,
+  onNavigateToExplorer,
+  onNavigateToGraph,
+  onNavigateToImpact,
 }: AppShellProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
@@ -389,17 +407,104 @@ export default function AppShell({
               </svg>
             </button>
 
-            {/* Breadcrumb Path */}
-            <Breadcrumbs 
-              paths={['Archon', repository?.name || 'loading', currentTabLabel]} 
-            />
+            {/* Enhanced Contextual Breadcrumb Path */}
+            <div className="flex items-center gap-1.5 text-[12px] font-mono select-none overflow-hidden max-w-[480px] lg:max-w-none">
+              <span 
+                className="text-[#919095] hover:text-[#e4e1e5] cursor-pointer shrink-0 transition-colors"
+                onClick={() => setActiveTab('summary')}
+              >
+                Archon
+              </span>
+              <span className="text-[#47464a] shrink-0">/</span>
+              <span 
+                className="text-[#919095] hover:text-[#e4e1e5] cursor-pointer truncate shrink-0 transition-colors"
+                onClick={() => setActiveTab('summary')}
+                title={repository?.name}
+              >
+                {repository?.name || 'loading'}
+              </span>
+              <span className="text-[#47464a] shrink-0">/</span>
+              <span className="text-[#fafafa] font-medium shrink-0">
+                {currentTabLabel}
+              </span>
+
+              {/* Active Investigation Entity Badge */}
+              {activeInvestigationEntity && (
+                <>
+                  <span className="text-[#47464a] shrink-0">/</span>
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#18181b] border border-[#3b82f6]/40 text-[#adc6ff] text-[11px] font-mono group shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6] animate-pulse" aria-hidden="true" />
+                    <span className="max-w-[140px] sm:max-w-[200px] md:max-w-[260px] truncate" title={activeInvestigationEntity}>
+                      {activeInvestigationEntity.split('/').pop()}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(activeInvestigationEntity);
+                        toast.success('File path copied to clipboard');
+                      }}
+                      className="text-[#919095] hover:text-white p-0.5 rounded cursor-pointer transition-colors"
+                      title={`Copy full path: ${activeInvestigationEntity}`}
+                      aria-label="Copy entity path"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                    {onClearInvestigationEntity && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClearInvestigationEntity();
+                        }}
+                        className="text-[#919095] hover:text-[#ffb4ab] p-0.5 rounded cursor-pointer transition-colors"
+                        title="Clear active entity"
+                        aria-label="Clear active entity"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {/* Quick Investigation Action if active entity is set */}
+            {activeInvestigationEntity && (
+              <div className="hidden sm:flex items-center gap-1.5">
+                {activeTab !== 'explorer' && onNavigateToExplorer && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateToExplorer(activeInvestigationEntity)}
+                    className="h-7 px-2.5 text-[11px] font-mono rounded bg-[#18181b] hover:bg-[#27272a] text-[#c8c5ca] hover:text-white border border-[#27272a] hover:border-[#3b82f6]/40 transition-colors cursor-pointer flex items-center gap-1.5"
+                    title="Inspect file in Explorer"
+                  >
+                    <span>Code</span>
+                    <span className="text-[#3b82f6]">➔</span>
+                  </button>
+                )}
+                {activeTab !== 'graph' && onNavigateToGraph && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateToGraph(activeInvestigationEntity)}
+                    className="h-7 px-2.5 text-[11px] font-mono rounded bg-[#18181b] hover:bg-[#27272a] text-[#c8c5ca] hover:text-white border border-[#27272a] hover:border-[#3b82f6]/40 transition-colors cursor-pointer flex items-center gap-1.5"
+                    title="View node in Architecture Graph"
+                  >
+                    <span>Graph</span>
+                    <span className="text-[#3b82f6]">➔</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Search Trigger Input */}
             <div 
               onClick={() => setIsCommandPaletteOpen(true)}
-              className="w-[200px] md:w-[260px] bg-[#09090b] border border-[#27272a] rounded-[6px] px-3 py-1 text-[12px] text-[#919095] flex items-center justify-between hover:border-[#39393c] cursor-pointer select-none"
+              className="w-[180px] md:w-[240px] bg-[#09090b] border border-[#27272a] rounded-[6px] px-3 py-1 text-[12px] text-[#919095] flex items-center justify-between hover:border-[#39393c] cursor-pointer select-none"
               role="button"
               tabIndex={0}
               title="Search files and actions (⌘K)"
@@ -410,7 +515,7 @@ export default function AppShell({
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
-                <span>Search files/actions...</span>
+                <span className="truncate">Search files/actions...</span>
               </div>
               <span className="text-[9px] font-mono px-1 py-0 bg-[#1f1f22] border border-[#27272a] rounded-[3px] text-[#919095]">
                 ⌘K
@@ -451,11 +556,11 @@ export default function AppShell({
               }}
               className={`p-1.5 rounded-[4px] cursor-pointer transition-all duration-150 ${
                 rightPanelState !== 'hidden' 
-                  ? 'text-[#3b82f6] bg-[#3b82f6]/10' 
+                  ? 'text-[#3b82f6] bg-[#3b82f6]/10 border border-[#3b82f6]/30' 
                   : 'text-[#919095] hover:text-[#e4e1e5] hover:bg-[#1f1f22]'
               }`}
-              title="Toggle Repository Details"
-              aria-label="Toggle Repository Details"
+              title="Toggle Investigation Inspector (Ctrl+Shift+\)"
+              aria-label="Toggle Investigation Inspector"
             >
               <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2" />
@@ -495,73 +600,174 @@ export default function AppShell({
             />
           )}
 
-          {/* 3. RIGHT COLLAPSIBLE PANEL */}
+          {/* 3. RIGHT COLLAPSIBLE INSPECTOR PANEL */}
           {/* STATE A: EXPANDED STATE */}
-          {!isMobile && rightPanelState === 'expanded' && repository && (
-            <div
-              style={rightSidebarStyle}
-              className="h-full border-l border-[#27272a] bg-[#0e0e11] flex flex-col flex-shrink-0 z-10 overflow-hidden relative"
-            >
-              <div className="p-4 border-b border-[#27272a] flex items-center justify-between">
-                <Typography variant="label-caps">Repository Details</Typography>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Badge variant={repository.confidence >= 80 ? 'success' : 'warning'}>
-                    {repository.confidence}% Health
-                  </Badge>
-                  {/* Compact toggle button */}
-                  <button
-                    onClick={() => setRightPanelState('compact')}
-                    className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer"
-                    title="Collapse to compact rail"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                  {/* Hide panel completely */}
-                  <button
-                    onClick={() => setRightPanelState('hidden')}
-                    className="p-1 rounded hover:bg-[#93000a]/10 text-[#919095] hover:text-[#ffb4ab] cursor-pointer"
-                    title="Hide details panel"
-                  >
-                    ✕
-                  </button>
+          {!isMobile && rightPanelState === 'expanded' && repository && (() => {
+            const activeFileItem = activeInvestigationEntity
+              ? repository.scannedFiles.find(f => f.path === activeInvestigationEntity)
+              : null;
+            const activeFileDeps = activeInvestigationEntity && repository.dependencyGraph
+              ? (repository.dependencyGraph[activeInvestigationEntity] || [])
+              : [];
+            const realChecks = repository.confidenceDetails?.checklist && repository.confidenceDetails.checklist.length > 0
+              ? repository.confidenceDetails.checklist
+              : [
+                  '✓ AST Structure parsed',
+                  '✓ Code dependency graph mapped',
+                  repository.confidence >= 80 ? '✓ Execution flow resolved' : '⚠ Execution flow sparse'
+                ];
+
+            return (
+              <div
+                style={rightSidebarStyle}
+                className="h-full border-l border-[#27272a] bg-[#0e0e11] flex flex-col flex-shrink-0 z-10 overflow-hidden relative"
+              >
+                {/* Header */}
+                <div className="p-4 border-b border-[#27272a] flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-[#3b82f6]" />
+                    <Typography variant="label-caps" className="tracking-wider">
+                      {activeInvestigationEntity ? 'Entity Inspector' : 'Repository Scope'}
+                    </Typography>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Badge variant={repository.confidence >= 80 ? 'success' : 'warning'}>
+                      {repository.confidence}% Health
+                    </Badge>
+                    <button
+                      type="button"
+                      onClick={() => setRightPanelState('compact')}
+                      className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer"
+                      title="Collapse to compact rail"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRightPanelState('hidden')}
+                      className="p-1 rounded hover:bg-[#93000a]/10 text-[#919095] hover:text-[#ffb4ab] cursor-pointer"
+                      title="Hide inspector"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Body Content */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin" data-lenis-prevent>
+                  {/* Contextual Entity Inspection Card */}
+                  {activeInvestigationEntity && (
+                    <Panel className="p-3.5 border border-[#3b82f6]/30 bg-[#131316]" variant="lowest">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-mono uppercase tracking-widest text-[#3b82f6] font-bold">
+                          Active Target
+                        </span>
+                        {onClearInvestigationEntity && (
+                          <button
+                            type="button"
+                            onClick={onClearInvestigationEntity}
+                            className="text-[10px] font-mono text-[#919095] hover:text-white cursor-pointer"
+                          >
+                            Deselect
+                          </button>
+                        )}
+                      </div>
+
+                      <p className="font-mono text-[12px] font-bold text-white break-all mb-2 select-all">
+                        {activeInvestigationEntity}
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-2 my-3 text-[11px] font-mono">
+                        <div className="bg-[#09090b] border border-[#27272a] rounded p-2">
+                          <span className="text-[#919095] block text-[9px] uppercase">Lines</span>
+                          <span className="text-white font-semibold">{activeFileItem?.lines || '—'}</span>
+                        </div>
+                        <div className="bg-[#09090b] border border-[#27272a] rounded p-2">
+                          <span className="text-[#919095] block text-[9px] uppercase">Outbound Deps</span>
+                          <span className="text-white font-semibold">{activeFileDeps.length}</span>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="space-y-1.5 pt-1">
+                        {onNavigateToExplorer && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToExplorer(activeInvestigationEntity)}
+                            className="w-full text-left px-2.5 py-1.5 rounded bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] hover:border-[#3b82f6]/40 text-[11px] font-mono text-[#c8c5ca] hover:text-white transition-colors cursor-pointer flex items-center justify-between"
+                          >
+                            <span>Inspect File in Explorer</span>
+                            <span className="text-[#3b82f6]">➔</span>
+                          </button>
+                        )}
+                        {onNavigateToGraph && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToGraph(activeInvestigationEntity)}
+                            className="w-full text-left px-2.5 py-1.5 rounded bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] hover:border-[#3b82f6]/40 text-[11px] font-mono text-[#c8c5ca] hover:text-white transition-colors cursor-pointer flex items-center justify-between"
+                          >
+                            <span>Focus in Architecture Graph</span>
+                            <span className="text-[#3b82f6]">➔</span>
+                          </button>
+                        )}
+                        {onNavigateToImpact && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToImpact(activeInvestigationEntity)}
+                            className="w-full text-left px-2.5 py-1.5 rounded bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] hover:border-[#3b82f6]/40 text-[11px] font-mono text-[#c8c5ca] hover:text-white transition-colors cursor-pointer flex items-center justify-between"
+                          >
+                            <span>Analyze Blast Radius</span>
+                            <span className="text-[#3b82f6]">➔</span>
+                          </button>
+                        )}
+                      </div>
+                    </Panel>
+                  )}
+
+                  {/* Repository Overview Stats */}
+                  <Panel className="p-3" variant="base">
+                    <Typography variant="label-caps" className="text-[#919095] mb-1">Tracked Scope</Typography>
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-[20px] font-heading font-bold text-[#fafafa]">
+                        {repository.scannedFiles.length}
+                      </span>
+                      <span className="text-[12px] text-[#919095]">files resolved</span>
+                    </div>
+                    {repository.framework && (
+                      <div className="mt-2 pt-2 border-t border-[#27272a] flex items-center justify-between text-[11px] font-mono text-[#919095]">
+                        <span>Framework</span>
+                        <span className="text-[#c8c5ca] font-medium">{repository.framework}</span>
+                      </div>
+                    )}
+                  </Panel>
+
+                  {/* Dynamic Engine Confidence Checklist */}
+                  <Panel className="p-3" variant="base">
+                    <Typography variant="label-caps" className="text-[#919095] mb-2.5">
+                      Engine Confidence Checklist
+                    </Typography>
+                    <div className="space-y-2">
+                      {realChecks.map((check: string, idx: number) => {
+                        const isWarning = check.startsWith('⚠');
+                        return (
+                          <div key={idx} className="flex items-start gap-2 text-[11.5px] leading-snug">
+                            <span className={isWarning ? 'text-[#eab308] shrink-0' : 'text-[#10b981] shrink-0'}>
+                              {isWarning ? '⚠' : '✓'}
+                            </span>
+                            <span className="text-[#c8c5ca]">
+                              {check.replace(/^[✓⚠]\s*/, '')}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Panel>
                 </div>
               </div>
-              
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin" data-lenis-prevent>
-                <Panel className="p-3" variant="base">
-                  <Typography variant="label-caps" className="text-[#919095] mb-1">Total Scope</Typography>
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-[20px] font-heading font-bold text-[#fafafa]">
-                      {repository.scannedFiles.length}
-                    </span>
-                    <span className="text-[12px] text-[#919095]">tracked files</span>
-                  </div>
-                </Panel>
-
-                <Panel className="p-3" variant="base">
-                  <Typography variant="label-caps" className="text-[#919095] mb-2">Engine Confidence Checklist</Typography>
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-2 text-[12px]">
-                      <span className="text-[#10b981]">✓</span>
-                      <span className="text-[#c8c5ca]">AST Structure mapped</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[12px]">
-                      <span className="text-[#10b981]">✓</span>
-                      <span className="text-[#c8c5ca]">Dependency Graph connected</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[12px]">
-                      <span className={repository.confidence >= 80 ? 'text-[#10b981]' : 'text-[#eab308]'}>
-                        {repository.confidence >= 80 ? '✓' : '⚠'}
-                      </span>
-                      <span className="text-[#c8c5ca]">Execution Chains analyzed</span>
-                    </div>
-                  </div>
-                </Panel>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* STATE B: COMPACT STATE */}
           {!isMobile && rightPanelState === 'compact' && repository && (
@@ -569,9 +775,8 @@ export default function AppShell({
               onClick={() => setRightPanelState('expanded')}
               style={rightSidebarStyle}
               className="h-full border-l border-[#27272a] bg-[#0e0e11] flex flex-col items-center py-4 flex-shrink-0 z-10 cursor-pointer hover:bg-[#131316] transition-colors relative"
-              title="Click to expand Repository Details"
+              title="Click to expand Investigation Inspector"
             >
-              {/* Expand Chevron Icon */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -585,28 +790,24 @@ export default function AppShell({
                 </svg>
               </button>
 
-              {/* Repo Folder Icon */}
               <span className="text-[#3b82f6] mb-5 shrink-0">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                 </svg>
               </span>
 
-              {/* Health Indicator color dot */}
               <div className="relative mb-6 shrink-0">
                 <span className={`w-3.5 h-3.5 rounded-full border border-black flex items-center justify-center ${
                   repository.confidence >= 80 ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500 animate-pulse'
                 }`} />
               </div>
 
-              {/* Scanned files vertical layout text */}
               <div className="flex-1 flex items-center justify-center">
                 <span className="text-[10px] font-mono text-[#919095] uppercase tracking-widest origin-center -rotate-90 whitespace-nowrap select-none">
                   {repository.scannedFiles.length} FILES
                 </span>
               </div>
 
-              {/* Dismiss fully button */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -629,7 +830,9 @@ export default function AppShell({
           {isMobile && rightPanelState !== 'hidden' && repository && (
             <div className="fixed inset-y-0 right-0 w-[280px] bg-[#0e0e11] border-l border-[#27272a] shadow-2xl flex flex-col z-50 animate-[slideInRight_0.2s_ease-out]">
               <div className="p-4 border-b border-[#27272a] flex items-center justify-between">
-                <Typography variant="label-caps">Repository Details</Typography>
+                <Typography variant="label-caps">
+                  {activeInvestigationEntity ? 'Entity Inspector' : 'Repository Scope'}
+                </Typography>
                 <button
                   onClick={() => setRightPanelState('hidden')}
                   className="p-1.5 rounded hover:bg-[#93000a]/10 text-[#919095] hover:text-[#ffb4ab] cursor-pointer"
@@ -640,6 +843,27 @@ export default function AppShell({
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {activeInvestigationEntity && (
+                  <Panel className="p-3 border border-[#3b82f6]/40" variant="lowest">
+                    <span className="text-[10px] font-mono uppercase text-[#3b82f6] font-bold block mb-1">Active File</span>
+                    <p className="font-mono text-[12px] text-white break-all mb-3 select-all">
+                      {activeInvestigationEntity}
+                    </p>
+                    {onNavigateToExplorer && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRightPanelState('hidden');
+                          onNavigateToExplorer(activeInvestigationEntity);
+                        }}
+                        className="w-full text-center py-1.5 rounded bg-[#1f1f22] text-[11px] font-mono text-white border border-[#27272a]"
+                      >
+                        Inspect in Explorer
+                      </button>
+                    )}
+                  </Panel>
+                )}
+
                 <div className="flex items-center justify-between bg-[#131316] border border-[#27272a] p-3 rounded-[6px]">
                   <Typography variant="body-sm">Health Score</Typography>
                   <Badge variant={repository.confidence >= 80 ? 'success' : 'warning'}>

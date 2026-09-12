@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import OverviewTab from '../components/dashboard/OverviewTab';
-import ScopeSelector from '../components/dashboard/ScopeSelector';
+import ExplorerTab from '../components/dashboard/ExplorerTab';
 import ChatConsole from '../components/dashboard/ChatConsole';
 import CodeGraph from '../components/dashboard/CodeGraph';
 import ExecutionTracing from '../components/dashboard/ExecutionTracing';
@@ -194,6 +194,39 @@ export default function Dashboard() {
     };
     return map[level] || map.LOW;
   };
+  // Cross-tab navigation dispatchers ensuring investigation continuity
+  const handleNavigateToExplorer = (filePath: string) => {
+    setSelectedExplorerFile(filePath);
+    changeInvestigationTarget(filePath);
+    setActiveTab('explorer');
+  };
+
+  const handleNavigateToGraph = (filePath?: string) => {
+    if (filePath) {
+      changeInvestigationTarget(filePath);
+    }
+    setActiveTab('graph');
+  };
+
+  const handleNavigateToImpact = (filePath?: string) => {
+    if (filePath) {
+      changeInvestigationTarget(filePath);
+    }
+    setActiveTab('impact');
+  };
+
+  const handleNavigateToTrace = (filePath?: string) => {
+    if (filePath) {
+      changeInvestigationTarget(filePath);
+    }
+    setActiveTab('trace');
+  };
+
+  const handleTriggerChat = (prompt: string) => {
+    setAutoTriggerChatPrompt(prompt);
+    setActiveTab('chat');
+  };
+
   if (loading) {
     return (
       <div className="stitch-theme fixed inset-0 flex items-center justify-center bg-[#09090b]">
@@ -209,6 +242,11 @@ export default function Dashboard() {
       repository={repo}
       activeTab={activeTab}
       setActiveTab={setActiveTab}
+      activeInvestigationEntity={investigationTarget}
+      onClearInvestigationEntity={() => changeInvestigationTarget('')}
+      onNavigateToExplorer={handleNavigateToExplorer}
+      onNavigateToGraph={handleNavigateToGraph}
+      onNavigateToImpact={handleNavigateToImpact}
     >
       {/* 1. OVERVIEW TAB */}
       {activeTab === 'summary' && (
@@ -224,12 +262,19 @@ export default function Dashboard() {
             ? ['✓ Dependency graph resolved', '✓ Entry points detected', '✓ Code structure mapped']
             : ['⚠ Partial scan completed'])}
           setActiveTab={setActiveTab}
+          onNavigateToExplorer={handleNavigateToExplorer}
+          onNavigateToGraph={handleNavigateToGraph}
+          onNavigateToImpact={handleNavigateToImpact}
+          onNavigateToTrace={handleNavigateToTrace}
+          onTriggerChat={handleTriggerChat}
+          investigationTarget={investigationTarget}
+          onSelectInvestigationTarget={changeInvestigationTarget}
         />
       )}
 
       {/* 2. EXPLORER (FILES) TAB */}
       {activeTab === 'explorer' && (
-        <ScopeSelector
+        <ExplorerTab
           files={repo.scannedFiles}
           selectedFiles={selectedFiles}
           onToggleFile={handleToggleFile}
@@ -237,8 +282,19 @@ export default function Dashboard() {
           repositoryId={repo.id}
           astMetadata={repo.astMetadata}
           dependencyGraph={repo.dependencyGraph}
-          selectedExplorerFile={selectedExplorerFile}
-          setSelectedExplorerFile={setSelectedExplorerFile}
+          selectedExplorerFile={selectedExplorerFile || investigationTarget}
+          setSelectedExplorerFile={(filePath) => {
+            setSelectedExplorerFile(filePath);
+            if (filePath) changeInvestigationTarget(filePath);
+          }}
+          investigationTarget={investigationTarget}
+          onSelectInvestigationTarget={changeInvestigationTarget}
+          entryPoints={repo.entryPoints}
+          framework={repo.framework}
+          onNavigateToGraph={handleNavigateToGraph}
+          onNavigateToImpact={handleNavigateToImpact}
+          onNavigateToTrace={handleNavigateToTrace}
+          onTriggerChat={handleTriggerChat}
         />
       )}
 
