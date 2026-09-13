@@ -46,13 +46,15 @@ export const OverviewCommandDeck: React.FC<OverviewCommandDeckProps> = ({
 
   const getPrimaryLanguage = () => {
     if (!languages) return 'TypeScript';
-    if (Array.isArray(languages)) return languages[0] || 'TypeScript';
-    if (typeof languages === 'object') {
-      const keys = Object.keys(languages);
-      return keys[0] || 'TypeScript';
-    }
-    return 'TypeScript';
+    // Non-code formats to deprioritize (typically config/data files, not primary programming languages)
+    const lowPriorityLangs = ['json', 'yaml', 'yml', 'toml', 'markdown', 'md', 'xml', 'html', 'css', 'txt', 'ini', 'env', 'dockerfile', 'shell', 'sh', 'bash'];
+    const langList: string[] = Array.isArray(languages) ? languages : Object.keys(languages);
+    if (!langList.length) return 'TypeScript';
+    // Try to find a high-priority programming language first
+    const primaryCode = langList.find(l => !lowPriorityLangs.includes(l.toLowerCase()));
+    return primaryCode || langList[0] || 'TypeScript';
   };
+
 
   const primaryLang = getPrimaryLanguage();
 
