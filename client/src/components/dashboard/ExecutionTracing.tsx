@@ -1,740 +1,1447 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
-import { Typography, Panel, Badge, Button, Loading, Empty, ErrorState } from '../ui/DesignSystem';
+import api from '../../lib/api';
+import { detectArchitecturalRole } from './explorer/explorerUtils';
+import { ArchitecturalRole, FileItem } from './explorer/explorerTypes';
 
-interface FileItem {
-  path: string;
-  size: number;
-  lines: number;
-}
-
-interface ExecutionTracingProps {
+export interface ExecutionTracingProps {
   repositoryId: string;
   scannedFiles: FileItem[];
   dependencyGraph: Record<string, string[]>;
-  astMetadata: Record<string, {
-    imports: string[];
-    exports: string[];
-    classes: any[];
-    functions: any[];
-  }>;
+  astMetadata: Record<
+    string,
+    {
+      imports: string[];
+      exports: string[];
+      classes: any[];
+      functions: any[];
+    }
+  >;
+  investigationTarget?: string | null;
+  onSelectInvestigationTarget?: (filePath: string) => void;
   onNavigateToExplorer: (filePath: string) => void;
+  onNavigateToGraph?: (filePath?: string) => void;
+  onNavigateToImpact?: (filePath?: string) => void;
   onTriggerChatQuery: (query: string) => void;
+  entryPoints?: string[];
+  framework?: string | null;
 }
 
-interface TraceStep {
+export interface TraceStepNode {
   id: string;
-  name: string;
-  type: 'route' | 'middleware' | 'controller' | 'service' | 'repository' | 'database' | 'external_api' | 'response';
   filePath: string;
+  name: string;
+  role: ArchitecturalRole;
+  stageName: string;
+  stageIndex: number;
+  branchIndex?: number;
+  totalBranchesInStage?: number;
+  httpMethod?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'MID' | 'JOB' | 'ENTRY';
   description: string;
-  exports: string[];
+  confidence: 'DIRECT_AST' | 'DEPENDENCY_LINK' | 'INFERRED';
+  confidenceReason: string;
+  inboundCallers: string[];
+  outboundCallees: string[];
   functions: string[];
-  x: number;
-  y: number;
+  exports: string[];
+  imports: string[];
+  classes: string[];
+  lines: number;
+  size: number;
+  isCentralityHotspot?: boolean;
 }
 
-// Visual Themes per Node Type
-const nodeTypeThemes = {
-  route: { color: 'text-[#f43f5e]', border: 'border-[#f43f5e]', bg: 'bg-[#f43f5e]/10', icon: 'login', label: 'Route' },
-  middleware: { color: 'text-[#34d399]', border: 'border-[#34d399]', bg: 'bg-[#34d399]/10', icon: 'shield', label: 'Middleware' },
-  controller: { color: 'text-[#60a5fa]', border: 'border-[#60a5fa]', bg: 'bg-[#60a5fa]/10', icon: 'router', label: 'Controller' },
-  service: { color: 'text-[#eab308]', border: 'border-[#eab308]', bg: 'bg-[#eab308]/10', icon: 'settings_input_component', label: 'Service' },
-  repository: { color: 'text-[#fb923c]', border: 'border-[#fb923c]', bg: 'bg-[#fb923c]/10', icon: 'storage', label: 'Repository' },
-  database: { color: 'text-[#a855f7]', border: 'border-[#a855f7]', bg: 'bg-[#a855f7]/10', icon: 'database', label: 'Database' },
-  external_api: { color: 'text-[#22d3ee]', border: 'border-[#22d3ee]', bg: 'bg-[#22d3ee]/10', icon: 'cloud', label: 'External API' },
-  response: { color: 'text-[#ec4899]', border: 'border-[#ec4899]', bg: 'bg-[#ec4899]/10', icon: 'logout', label: 'Response' }
+interface RepositoryStory {
+  domain?: string;
+  architectureType?: string;
+  executionFlowStory?: string;
+  coreHotspots?: string[];
+}
+
+interface InsightData {
+  centralityHotspots?: Array<{ filePath: string; inDegree: number }>;
+  circularDependencies?: string[][];
+  deadCode?: string[];
+}
+
+const ROLE_THEMES: Record<
+  string,
+  { label: string; text: string; bg: string; border: string; icon: string }
+> = {
+  ROUTE: {
+    label: 'Route / Ingress',
+    text: 'text-[#f43f5e]',
+    bg: 'bg-[#f43f5e]/10',
+    border: 'border-[#f43f5e]/30',
+    icon: 'alt_route'
+  },
+  'ENTRY POINT': {
+    label: 'Entry Point',
+    text: 'text-[#ec4899]',
+    bg: 'bg-[#ec4899]/10',
+    border: 'border-[#ec4899]/30',
+    icon: 'start'
+  },
+  CONTROLLER: {
+    label: 'Controller / Handler',
+    text: 'text-[#3b82f6]',
+    bg: 'bg-[#3b82f6]/10',
+    border: 'border-[#3b82f6]/30',
+    icon: 'settings_input_component'
+  },
+  SERVICE: {
+    label: 'Domain Service',
+    text: 'text-[#f59e0b]',
+    bg: 'bg-[#f59e0b]/10',
+    border: 'border-[#f59e0b]/30',
+    icon: 'hub'
+  },
+  MODEL: {
+    label: 'Data / Entity Model',
+    text: 'text-[#a855f7]',
+    bg: 'bg-[#a855f7]/10',
+    border: 'border-[#a855f7]/30',
+    icon: 'database'
+  },
+  COMPONENT: {
+    label: 'UI / Component',
+    text: 'text-[#06b6d4]',
+    bg: 'bg-[#06b6d4]/10',
+    border: 'border-[#06b6d4]/30',
+    icon: 'widgets'
+  },
+  UTILITY: {
+    label: 'Utility / Helper',
+    text: 'text-[#71717a]',
+    bg: 'bg-[#27272a]/60',
+    border: 'border-[#3f3f46]',
+    icon: 'handyman'
+  },
+  CONFIG: {
+    label: 'Configuration',
+    text: 'text-[#8b5cf6]',
+    bg: 'bg-[#8b5cf6]/10',
+    border: 'border-[#8b5cf6]/30',
+    icon: 'tune'
+  },
+  TEST: {
+    label: 'Test Suite',
+    text: 'text-[#10b981]',
+    bg: 'bg-[#10b981]/10',
+    border: 'border-[#10b981]/30',
+    icon: 'verified'
+  },
+  MODULE: {
+    label: 'Module',
+    text: 'text-[#919095]',
+    bg: 'bg-[#1f1f22]',
+    border: 'border-[#27272a]',
+    icon: 'deployed_code'
+  }
 };
 
 export default function ExecutionTracing({
-  scannedFiles,
+  repositoryId,
+  scannedFiles = [],
   dependencyGraph = {},
   astMetadata = {},
+  investigationTarget,
+  onSelectInvestigationTarget,
   onNavigateToExplorer,
-  onTriggerChatQuery
+  onNavigateToGraph,
+  onNavigateToImpact,
+  onTriggerChatQuery,
+  entryPoints = [],
+  framework
 }: ExecutionTracingProps) {
+  // ─── STATE ─────────────────────────────────────────────────────────────
   const [selectedRoute, setSelectedRoute] = useState<string>('');
+  const [selectedStepId, setSelectedStepId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'routes' | 'middlewares' | 'jobs'>('all');
-  const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
+  const [filterType, setFilterType] = useState<'all' | 'routes' | 'middlewares' | 'services'>('all');
+  const [story, setStory] = useState<RepositoryStory | null>(null);
+  const [insights, setInsights] = useState<InsightData | null>(null);
+  const [loadingBackendStory, setLoadingBackendStory] = useState(false);
+  const [storyExpanded, setStoryExpanded] = useState(false);
 
-  // Zoom / Pan state for center canvas
-  const [zoom, setZoom] = useState(0.9);
-  const [pan, setPan] = useState({ x: 80, y: 40 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStart = useRef({ x: 0, y: 0 });
+  // ─── FETCH BACKEND STORY & INSIGHTS ────────────────────────────────────
+  useEffect(() => {
+    let isMounted = true;
+    const fetchStoryAndInsights = async () => {
+      setLoadingBackendStory(true);
+      try {
+        const [storyRes, insightsRes] = await Promise.allSettled([
+          api.get(`/repos/${repositoryId}/story`),
+          api.get(`/repos/${repositoryId}/insights`)
+        ]);
 
-  // Get all route files in repository
-  const entryPoints = useMemo(() => {
-    return scannedFiles.map(f => {
-      const pathLower = f.path.toLowerCase();
-      let type: 'route' | 'middleware' | 'job' = 'route';
-      let method = 'GET';
+        if (!isMounted) return;
 
-      if (pathLower.includes('middleware') || pathLower.includes('auth') || pathLower.includes('guard')) {
-        type = 'middleware';
-        method = 'MID';
-      } else if (pathLower.includes('job') || pathLower.includes('worker') || pathLower.includes('scheduler')) {
-        type = 'job';
-        method = 'JOB';
-      } else {
-        if (pathLower.includes('create') || pathLower.includes('post') || pathLower.includes('upload')) {
-          method = 'POST';
-        } else if (pathLower.includes('update') || pathLower.includes('put') || pathLower.includes('patch')) {
-          method = 'PUT';
-        } else if (pathLower.includes('delete') || pathLower.includes('remove')) {
-          method = 'DELETE';
+        if (storyRes.status === 'fulfilled' && storyRes.value.data?.data) {
+          setStory(storyRes.value.data.data);
+        }
+        if (insightsRes.status === 'fulfilled' && insightsRes.value.data?.data) {
+          setInsights(insightsRes.value.data.data);
+        }
+      } catch (err) {
+        console.warn('Backend execution story fetch non-fatal:', err);
+      } finally {
+        if (isMounted) setLoadingBackendStory(false);
+      }
+    };
+
+    fetchStoryAndInsights();
+    return () => {
+      isMounted = false;
+    };
+  }, [repositoryId]);
+
+  // Set of centrality hotspots from insights
+  const hotspotSet = useMemo(() => {
+    const set = new Set<string>();
+    if (insights?.centralityHotspots) {
+      insights.centralityHotspots.slice(0, 10).forEach(h => set.add(h.filePath));
+    }
+    return set;
+  }, [insights]);
+
+  // ─── EXTRACT ALL ENTRY POINTS & ROUTES ─────────────────────────────────
+  const allEntryPoints = useMemo(() => {
+    if (!scannedFiles || scannedFiles.length === 0) return [];
+
+    const list: Array<{
+      path: string;
+      name: string;
+      role: ArchitecturalRole;
+      method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'MID' | 'JOB' | 'ENTRY';
+      lines: number;
+      size: number;
+      downstreamCount: number;
+    }> = [];
+
+    const visited = new Set<string>();
+
+    scannedFiles.forEach(f => {
+      const p = f.path.replace(/\\/g, '/');
+      const lower = p.toLowerCase();
+
+      // Check if it qualifies as an execution entry point
+      const isRoute =
+        lower.includes('/routes/') ||
+        lower.includes('/route/') ||
+        lower.includes('.routes.') ||
+        lower.includes('.route.') ||
+        lower.includes('/api/') ||
+        lower.includes('routing');
+
+      const isMiddleware =
+        lower.includes('middleware') ||
+        lower.includes('guard') ||
+        lower.includes('jwt') ||
+        lower.includes('interceptor');
+
+      const isExplicitEntry =
+        Array.isArray(entryPoints) &&
+        entryPoints.some(ep => ep.replace(/\\/g, '/').toLowerCase() === lower);
+
+      const isMainOrApp =
+        lower.endsWith('server.ts') ||
+        lower.endsWith('server.js') ||
+        lower.endsWith('app.ts') ||
+        lower.endsWith('app.js') ||
+        lower.endsWith('main.ts') ||
+        lower.endsWith('main.tsx') ||
+        lower.endsWith('app.tsx') ||
+        lower.endsWith('index.ts') ||
+        lower.endsWith('index.js');
+
+      if (isRoute || isMiddleware || isExplicitEntry || isMainOrApp) {
+        if (!visited.has(p)) {
+          visited.add(p);
+          const ast = astMetadata[p];
+          const role = detectArchitecturalRole(p, ast, entryPoints);
+
+          let method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'MID' | 'JOB' | 'ENTRY' = 'GET';
+
+          if (isMiddleware) {
+            method = 'MID';
+          } else if (isExplicitEntry || isMainOrApp) {
+            method = 'ENTRY';
+          } else {
+            // Infer method from route naming or AST export functions
+            if (lower.includes('post') || lower.includes('create') || lower.includes('upload')) {
+              method = 'POST';
+            } else if (lower.includes('put') || lower.includes('update')) {
+              method = 'PUT';
+            } else if (lower.includes('delete') || lower.includes('remove')) {
+              method = 'DELETE';
+            } else if (lower.includes('patch')) {
+              method = 'PATCH';
+            } else {
+              method = 'GET';
+            }
+          }
+
+          const deps = dependencyGraph[p] || [];
+
+          list.push({
+            path: p,
+            name: p.split('/').pop() || p,
+            role,
+            method,
+            lines: f.lines || 0,
+            size: f.size || 0,
+            downstreamCount: deps.length
+          });
+        }
+      }
+    });
+
+    // Sort: Route files first, then entry points, then middlewares
+    return list.sort((a, b) => {
+      const aWeight = a.role === 'ROUTE' ? 3 : a.role === 'ENTRY POINT' ? 2 : 1;
+      const bWeight = b.role === 'ROUTE' ? 3 : b.role === 'ENTRY POINT' ? 2 : 1;
+      if (aWeight !== bWeight) return bWeight - aWeight;
+      return b.downstreamCount - a.downstreamCount;
+    });
+  }, [scannedFiles, dependencyGraph, astMetadata, entryPoints]);
+
+  // Sync with investigationTarget or initial route
+  useEffect(() => {
+    if (investigationTarget) {
+      const match = allEntryPoints.find(
+        e => e.path.toLowerCase() === investigationTarget.replace(/\\/g, '/').toLowerCase()
+      );
+      if (match) {
+        setSelectedRoute(match.path);
+        return;
+      }
+      // Or check if investigationTarget is imported by any route
+      const callerRoute = allEntryPoints.find(e => {
+        const deps = dependencyGraph[e.path] || [];
+        return deps.some(d => d.replace(/\\/g, '/').toLowerCase() === investigationTarget.replace(/\\/g, '/').toLowerCase());
+      });
+      if (callerRoute) {
+        setSelectedRoute(callerRoute.path);
+        setSelectedStepId(investigationTarget);
+        return;
+      }
+    }
+
+    if (!selectedRoute && allEntryPoints.length > 0) {
+      setSelectedRoute(allEntryPoints[0].path);
+    }
+  }, [investigationTarget, allEntryPoints, selectedRoute, dependencyGraph]);
+
+  // Filter entry points
+  const filteredEntryPoints = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    return allEntryPoints.filter(e => {
+      const matchesSearch = e.path.toLowerCase().includes(q) || e.name.toLowerCase().includes(q);
+      if (!matchesSearch) return false;
+
+      if (filterType === 'routes') return e.role === 'ROUTE';
+      if (filterType === 'middlewares') return e.method === 'MID';
+      if (filterType === 'services') return e.role === 'SERVICE' || e.role === 'CONTROLLER';
+      return true;
+    });
+  }, [allEntryPoints, searchQuery, filterType]);
+
+  // ─── RESOLVE BARREL & RE-EXPORTS INTELLIGENTLY ──────────────────────────
+  // Resolves barrel re-exports like `controllers/index.ts` -> `repo.controller.ts`
+  const resolveConcreteDependencies = useCallback(
+    (sourcePath: string, directDeps: string[]): string[] => {
+      const resolved: string[] = [];
+      const visited = new Set<string>();
+
+      for (const dep of directDeps) {
+        const normDep = dep.replace(/\\/g, '/');
+        const isBarrel = normDep.endsWith('/index.ts') || normDep.endsWith('/index.js') || normDep.endsWith('/index.tsx');
+
+        if (isBarrel && !visited.has(normDep)) {
+          visited.add(normDep);
+          // Look for sibling files in the same directory that exist in scannedFiles
+          const dir = normDep.substring(0, normDep.lastIndexOf('/'));
+          const siblings = scannedFiles
+            .map(f => f.path.replace(/\\/g, '/'))
+            .filter(p => p.startsWith(dir + '/') && p !== normDep);
+
+          if (siblings.length > 0) {
+            // Include both the barrel and the concrete siblings
+            resolved.push(normDep);
+            siblings.forEach(sib => {
+              if (!visited.has(sib)) {
+                visited.add(sib);
+                resolved.push(sib);
+              }
+            });
+            continue;
+          }
+        }
+
+        if (!visited.has(normDep)) {
+          visited.add(normDep);
+          resolved.push(normDep);
         }
       }
 
-      return {
-        path: f.path,
-        name: f.path.split('/').pop() || f.path,
-        type,
-        method
-      };
-    });
-  }, [scannedFiles]);
+      return resolved;
+    },
+    [scannedFiles]
+  );
 
-  // Set initial selected route on load
-  useEffect(() => {
-    const routesOnly = entryPoints.filter(e => e.type === 'route');
-    if (routesOnly.length > 0 && !selectedRoute) {
-      setSelectedRoute(routesOnly[0].path);
-    } else if (entryPoints.length > 0 && !selectedRoute) {
-      setSelectedRoute(entryPoints[0].path);
-    }
-  }, [entryPoints, selectedRoute]);
+  // ─── BUILD REAL EXECUTION TRACE STAGES (GROUNDED EVIDENCE) ──────────────
+  const { traceStages, allTraceSteps } = useMemo(() => {
+    if (!selectedRoute) return { traceStages: [], allTraceSteps: [] };
 
-  // Filter entry points list
-  const filteredEntryPoints = useMemo(() => {
-    const query = searchQuery.toLowerCase();
-    return entryPoints.filter(e => {
-      const matchSearch = e.path.toLowerCase().includes(query) || e.name.toLowerCase().includes(query);
-      if (filterType === 'routes') return matchSearch && e.type === 'route';
-      if (filterType === 'middlewares') return matchSearch && e.type === 'middleware';
-      if (filterType === 'jobs') return matchSearch && e.type === 'job';
-      return matchSearch;
-    });
-  }, [entryPoints, searchQuery, filterType]);
+    const fileMap = new Map<string, FileItem>();
+    scannedFiles.forEach(f => fileMap.set(f.path.replace(/\\/g, '/'), f));
 
-  // Traces the pipeline for the selected route and builds coordinates dynamically
-  const traceSteps = useMemo((): TraceStep[] => {
-    if (!selectedRoute) return [];
+    const stepsById = new Map<string, TraceStepNode>();
+    const visitedFiles = new Set<string>();
 
-    const steps: Omit<TraceStep, 'x' | 'y'>[] = [];
-    const visited = new Set<string>();
+    const makeNode = (
+      filePath: string,
+      stageIndex: number,
+      stageName: string,
+      confidence: 'DIRECT_AST' | 'DEPENDENCY_LINK' | 'INFERRED',
+      confidenceReason: string,
+      inbound: string[],
+      branchIndex?: number,
+      totalBranches?: number
+    ): TraceStepNode => {
+      const norm = filePath.replace(/\\/g, '/');
+      const ast = astMetadata[norm] || { imports: [], exports: [], classes: [], functions: [] };
+      const fItem = fileMap.get(norm);
+      const role = detectArchitecturalRole(norm, ast, entryPoints);
 
-    const createStep = (filePath: string, type: TraceStep['type']): Omit<TraceStep, 'x' | 'y'> => {
-      const ast = astMetadata[filePath] || { exports: [], functions: [], classes: [] };
-      let desc = '';
-      if (type === 'route') desc = 'Handles HTTP requests and parses endpoint arguments.';
-      else if (type === 'middleware') desc = 'Authenticates token claims and validates payload schemas.';
-      else if (type === 'controller') desc = 'Unpacks parameters and handles request flow response maps.';
-      else if (type === 'service') desc = 'Executes logical transactions and triggers domain tasks.';
-      else if (type === 'repository') desc = 'Manages entity queries and abstracts schema layers.';
-      else if (type === 'database') desc = 'Maintains connection pools and queries database schemas.';
-      else if (type === 'external_api') desc = 'Communicates with third-party external API integrations.';
-
-      // Extract exports names
-      const expList = Array.isArray(ast.exports) 
-        ? ast.exports 
-        : (ast.exports ? Object.keys(ast.exports) : []);
-
-      // Extract functions names
-      const fnList = Array.isArray(ast.functions)
-        ? ast.functions.map(f => typeof f === 'string' ? f : f?.name || '')
+      const fns = Array.isArray(ast.functions)
+        ? ast.functions.map(f => (typeof f === 'string' ? f : f?.name || '')).filter(Boolean)
+        : [];
+      const exps = Array.isArray(ast.exports)
+        ? ast.exports.filter(Boolean)
+        : ast.exports
+        ? Object.keys(ast.exports)
+        : [];
+      const imps = Array.isArray(ast.imports) ? ast.imports.filter(Boolean) : [];
+      const cls = Array.isArray(ast.classes)
+        ? ast.classes.map(c => (typeof c === 'string' ? c : c?.name || '')).filter(Boolean)
         : [];
 
+      // Determine human description grounded in evidence
+      let desc = '';
+      if (role === 'ROUTE') {
+        desc = `Handles ingress HTTP requests, mounts endpoint route bindings, and dispatches to handler.`;
+      } else if (role === 'CONTROLLER') {
+        desc = `Unpacks request arguments, applies input schema validations, and orchestrates domain operations.`;
+      } else if (role === 'SERVICE') {
+        desc = `Executes core domain logic, manages transactional boundaries, and coordinates state.`;
+      } else if (role === 'MODEL') {
+        desc = `Defines persistent schema entities and executes database queries / mutations.`;
+      } else if (role === 'CONFIG') {
+        desc = `Supplies runtime environment parameters, database pool handles, or client clients.`;
+      } else if (role === 'COMPONENT') {
+        desc = `Renders UI structure, responds to user interactions, and dispatches application actions.`;
+      } else {
+        desc = `Modular unit participating in the downstream execution pipeline.`;
+      }
+
       return {
-        id: filePath,
-        name: filePath.split('/').pop() || filePath,
-        type,
-        filePath,
+        id: norm,
+        filePath: norm,
+        name: norm.split('/').pop() || norm,
+        role,
+        stageName,
+        stageIndex,
+        branchIndex,
+        totalBranchesInStage: totalBranches,
         description: desc,
-        exports: expList.filter(Boolean),
-        functions: fnList.filter(Boolean)
+        confidence,
+        confidenceReason,
+        inboundCallers: inbound,
+        outboundCallees: [],
+        functions: fns,
+        exports: exps,
+        imports: imps,
+        classes: cls,
+        lines: fItem?.lines || 0,
+        size: fItem?.size || 0,
+        isCentralityHotspot: hotspotSet.has(norm)
       };
     };
 
-    // 1. Ingress route file
-    steps.push(createStep(selectedRoute, 'route'));
-    visited.add(selectedRoute);
+    const stages: Array<{
+      stageIndex: number;
+      stageName: string;
+      role: ArchitecturalRole;
+      steps: TraceStepNode[];
+      isBranching: boolean;
+    }> = [];
 
-    const routeDeps = dependencyGraph[selectedRoute] || [];
-
-    // 2. Middlewares
-    const middlewares = routeDeps.filter(dep => 
-      !visited.has(dep) && 
-      (dep.toLowerCase().includes('middleware') || dep.toLowerCase().includes('auth') || dep.toLowerCase().includes('guard') || dep.toLowerCase().includes('jwt'))
+    // ── STAGE 0: INGRESS / ROUTE ENTRY ──
+    const rootNorm = selectedRoute.replace(/\\/g, '/');
+    visitedFiles.add(rootNorm);
+    const rootNode = makeNode(
+      rootNorm,
+      0,
+      'Ingress Entry',
+      'DIRECT_AST',
+      'Entry point identified from repository routing architecture',
+      []
     );
-    middlewares.forEach(mid => {
-      steps.push(createStep(mid, 'middleware'));
-      visited.add(mid);
+    stepsById.set(rootNorm, rootNode);
+
+    stages.push({
+      stageIndex: 0,
+      stageName: 'Ingress Entry',
+      role: rootNode.role,
+      steps: [rootNode],
+      isBranching: false
     });
 
-    const midDeps = middlewares.flatMap(mid => dependencyGraph[mid] || []);
-    const allCurrentDeps = [...routeDeps, ...midDeps];
+    // Trace downstream from root
+    let currentInbound = [rootNorm];
+    const rawDirectDeps = dependencyGraph[rootNorm] || [];
+    const directDeps = resolveConcreteDependencies(rootNorm, rawDirectDeps);
 
-    // 3. Controllers
-    const controllers = allCurrentDeps.filter(dep => 
-      !visited.has(dep) && 
-      (dep.toLowerCase().includes('controller') || dep.toLowerCase().includes('/controllers/'))
-    );
-    controllers.forEach(ctrl => {
-      steps.push(createStep(ctrl, 'controller'));
-      visited.add(ctrl);
+    // Filter out visited
+    const unvisitedDirect = directDeps.filter(d => !visitedFiles.has(d.replace(/\\/g, '/')));
+
+    // Classify direct downstream dependencies:
+    // 1. Middlewares & Guards
+    const middlewares = unvisitedDirect.filter(d => {
+      const lower = d.toLowerCase();
+      return (
+        lower.includes('middleware') ||
+        lower.includes('auth') ||
+        lower.includes('guard') ||
+        lower.includes('jwt') ||
+        lower.includes('cors') ||
+        lower.includes('validation')
+      );
     });
 
-    const ctrlDeps = controllers.flatMap(ctrl => dependencyGraph[ctrl] || []);
-    const allSvcDeps = [...allCurrentDeps, ...ctrlDeps];
-
-    // 4. Services
-    const services = allSvcDeps.filter(dep => 
-      !visited.has(dep) && 
-      (dep.toLowerCase().includes('service') || dep.toLowerCase().includes('/services/'))
-    );
-    services.forEach(svc => {
-      steps.push(createStep(svc, 'service'));
-      visited.add(svc);
+    // 2. Controllers / Action Handlers
+    const controllers = unvisitedDirect.filter(d => {
+      const lower = d.toLowerCase();
+      return (
+        !middlewares.includes(d) &&
+        (lower.includes('controller') ||
+          lower.includes('/controllers/') ||
+          lower.includes('handler') ||
+          (astMetadata[d]?.classes &&
+            astMetadata[d].classes.some((c: any) => c?.name?.toLowerCase()?.endsWith('controller'))))
+      );
     });
 
-    const svcDeps = services.flatMap(svc => dependencyGraph[svc] || []);
-    const allDbDeps = [...allSvcDeps, ...svcDeps];
-
-    // 5. Repositories
-    const repos = allDbDeps.filter(dep => 
-      !visited.has(dep) && 
-      (dep.toLowerCase().includes('repository') || dep.toLowerCase().includes('repo') || dep.toLowerCase().includes('model'))
-    );
-    repos.forEach(repo => {
-      steps.push(createStep(repo, 'repository'));
-      visited.add(repo);
+    // 3. Other direct domain modules if no explicit controller (e.g. services or components)
+    const directServices = unvisitedDirect.filter(d => {
+      const lower = d.toLowerCase();
+      return (
+        !middlewares.includes(d) &&
+        !controllers.includes(d) &&
+        (lower.includes('service') || lower.includes('/services/'))
+      );
     });
 
-    // 6. Database / ORM configs
-    const dbs = allDbDeps.filter(dep => 
-      !visited.has(dep) && 
-      (dep.toLowerCase().includes('db') || dep.toLowerCase().includes('prisma') || dep.toLowerCase().includes('schema') || dep.toLowerCase().includes('postgres'))
-    );
-    dbs.forEach(db => {
-      steps.push(createStep(db, 'database'));
-      visited.add(db);
-    });
+    let stageCounter = 1;
 
-    // 7. External Integrations
-    const apis = allDbDeps.filter(dep => 
-      !visited.has(dep) && 
-      (dep.toLowerCase().includes('api') || dep.toLowerCase().includes('proxy') || dep.toLowerCase().includes('client') || dep.toLowerCase().includes('resend') || dep.toLowerCase().includes('stripe') || dep.toLowerCase().includes('slack'))
-    );
-    apis.forEach(api => {
-      steps.push(createStep(api, 'external_api'));
-      visited.add(api);
-    });
+    // ── STAGE 1: MIDDLEWARE & INTERCEPTORS (If present) ──
+    if (middlewares.length > 0) {
+      const midNodes: TraceStepNode[] = [];
+      middlewares.forEach((m, idx) => {
+        const mNorm = m.replace(/\\/g, '/');
+        visitedFiles.add(mNorm);
+        const node = makeNode(
+          mNorm,
+          stageCounter,
+          'Middleware & Guard',
+          'DIRECT_AST',
+          `Directly imported by route ${rootNode.name} as request interceptor`,
+          currentInbound,
+          idx,
+          middlewares.length
+        );
+        stepsById.set(mNorm, node);
+        rootNode.outboundCallees.push(mNorm);
+        midNodes.push(node);
+      });
 
-    // 8. Exit HTTP Response node
-    if (controllers.length > 0 || steps.length > 1) {
-      steps.push({
-        id: 'response-exit',
-        name: 'HTTP Response',
-        type: 'response',
-        filePath: '',
-        description: 'Finalizes execution and returns response headers & status payload.',
-        exports: [],
-        functions: []
+      stages.push({
+        stageIndex: stageCounter,
+        stageName: 'Middleware & Security',
+        role: 'CONFIG',
+        steps: midNodes,
+        isBranching: midNodes.length > 1
+      });
+
+      stageCounter++;
+      currentInbound = middlewares.map(m => m.replace(/\\/g, '/'));
+    }
+
+    // ── STAGE 2: CONTROLLER / HANDLER (If present) ──
+    const activeControllers = controllers.length > 0 ? controllers : [];
+    if (activeControllers.length > 0) {
+      const ctrlNodes: TraceStepNode[] = [];
+      activeControllers.forEach((c, idx) => {
+        const cNorm = c.replace(/\\/g, '/');
+        visitedFiles.add(cNorm);
+        const node = makeNode(
+          cNorm,
+          stageCounter,
+          'Controller / Handler',
+          'DIRECT_AST',
+          `Direct handler dispatched to process incoming route parameters`,
+          currentInbound,
+          idx,
+          activeControllers.length
+        );
+        stepsById.set(cNorm, node);
+        // Link upstream callers
+        currentInbound.forEach(inp => {
+          const p = stepsById.get(inp);
+          if (p && !p.outboundCallees.includes(cNorm)) p.outboundCallees.push(cNorm);
+        });
+        ctrlNodes.push(node);
+      });
+
+      stages.push({
+        stageIndex: stageCounter,
+        stageName: 'Controller & Orchestration',
+        role: 'CONTROLLER',
+        steps: ctrlNodes,
+        isBranching: ctrlNodes.length > 1
+      });
+
+      stageCounter++;
+      currentInbound = activeControllers.map(c => c.replace(/\\/g, '/'));
+    }
+
+    // ── STAGE 3: DOMAIN SERVICES (Downstream from Controllers or Direct) ──
+    const serviceCandidates: string[] = [...directServices];
+    // Gather all dependencies from controllers
+    for (const ctrlPath of activeControllers) {
+      const ctrlDeps = resolveConcreteDependencies(ctrlPath, dependencyGraph[ctrlPath] || []);
+      ctrlDeps.forEach(dep => {
+        const lower = dep.toLowerCase();
+        if (
+          !visitedFiles.has(dep.replace(/\\/g, '/')) &&
+          (lower.includes('service') || lower.includes('/services/'))
+        ) {
+          if (!serviceCandidates.includes(dep)) serviceCandidates.push(dep);
+        }
       });
     }
 
-    // Map X & Y coordinates (Vertical flow layout)
-    return steps.map((step, idx) => {
-      // Linear layout with dynamic spacing
-      return {
-        ...step,
-        x: 300,
-        y: 60 + idx * 110
-      } as TraceStep;
-    });
-  }, [selectedRoute, dependencyGraph, astMetadata]);
+    if (serviceCandidates.length > 0) {
+      const svcNodes: TraceStepNode[] = [];
+      serviceCandidates.forEach((s, idx) => {
+        const sNorm = s.replace(/\\/g, '/');
+        visitedFiles.add(sNorm);
+        const node = makeNode(
+          sNorm,
+          stageCounter,
+          'Domain Service',
+          'DIRECT_AST',
+          `Invoked to execute core domain business operations and business rules`,
+          currentInbound,
+          idx,
+          serviceCandidates.length
+        );
+        stepsById.set(sNorm, node);
+        currentInbound.forEach(inp => {
+          const p = stepsById.get(inp);
+          if (p && !p.outboundCallees.includes(sNorm)) p.outboundCallees.push(sNorm);
+        });
+        svcNodes.push(node);
+      });
 
-  const activeStep = traceSteps[activeStepIndex];
+      stages.push({
+        stageIndex: stageCounter,
+        stageName: 'Domain Logic & Services',
+        role: 'SERVICE',
+        steps: svcNodes,
+        isBranching: svcNodes.length > 1
+      });
 
-  // Helper to center the graph view on a specific node coordinate
-  const centerOnNode = (nodeX: number, nodeY: number) => {
-    setPan({
-      x: 300 - nodeX * zoom,
-      y: 200 - nodeY * zoom
-    });
-  };
-
-  const handleTimelineSelect = (idx: number) => {
-    setActiveStepIndex(idx);
-    const step = traceSteps[idx];
-    if (step) {
-      centerOnNode(step.x, step.y);
+      stageCounter++;
+      currentInbound = serviceCandidates.map(s => s.replace(/\\/g, '/'));
     }
-  };
 
-  // Zoom / Pan actions
-  const handleZoom = (factor: number) => {
-    setZoom(prev => {
-      const z = prev * factor;
-      return z < 0.2 ? 0.2 : z > 3 ? 3 : z;
-    });
-  };
+    // ── STAGE 4: DATA / MODEL / DATABASE (Downstream from Services or Controllers) ──
+    const modelCandidates: string[] = [];
+    for (const upstream of currentInbound) {
+      const upstreamDeps = resolveConcreteDependencies(upstream, dependencyGraph[upstream] || []);
+      upstreamDeps.forEach(dep => {
+        const lower = dep.toLowerCase();
+        const normDep = dep.replace(/\\/g, '/');
+        if (
+          !visitedFiles.has(normDep) &&
+          (lower.includes('model') ||
+            lower.includes('/models/') ||
+            lower.includes('schema') ||
+            lower.includes('database') ||
+            lower.includes('prisma') ||
+            lower.includes('repository') ||
+            lower.includes('/repo/') ||
+            lower.endsWith('.prisma'))
+        ) {
+          if (!modelCandidates.includes(normDep)) modelCandidates.push(normDep);
+        }
+      });
+    }
 
-  const handleResetZoom = () => {
-    setZoom(0.9);
-    setPan({ x: 80, y: 40 });
-  };
+    if (modelCandidates.length > 0) {
+      const modelNodes: TraceStepNode[] = [];
+      modelCandidates.forEach((m, idx) => {
+        visitedFiles.add(m);
+        const node = makeNode(
+          m,
+          stageCounter,
+          'Data & Persistence',
+          'DEPENDENCY_LINK',
+          `State persistence layer handling schema queries, relations, and entity storage`,
+          currentInbound,
+          idx,
+          modelCandidates.length
+        );
+        stepsById.set(m, node);
+        currentInbound.forEach(inp => {
+          const p = stepsById.get(inp);
+          if (p && !p.outboundCallees.includes(m)) p.outboundCallees.push(m);
+        });
+        modelNodes.push(node);
+      });
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-    dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-  };
+      stages.push({
+        stageIndex: stageCounter,
+        stageName: 'Data & Persistence',
+        role: 'MODEL',
+        steps: modelNodes,
+        isBranching: modelNodes.length > 1
+      });
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    setPan({
-      x: e.clientX - dragStart.current.x,
-      y: e.clientY - dragStart.current.y
-    });
-  };
+      stageCounter++;
+      currentInbound = modelCandidates;
+    }
 
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
+    // ── FRONTEND / COMPONENT TREE SUPPORT (If application is React/Vue/Frontend) ──
+    // If no backend layers were found, trace direct UI component tree hierarchy
+    if (stages.length === 1 && unvisitedDirect.length > 0) {
+      const compSteps: TraceStepNode[] = [];
+      unvisitedDirect.slice(0, 8).forEach((dep, idx) => {
+        const norm = dep.replace(/\\/g, '/');
+        visitedFiles.add(norm);
+        const node = makeNode(
+          norm,
+          1,
+          'Component Hierarchy',
+          'DIRECT_AST',
+          `Direct downstream component/module initialized from application entry point`,
+          [rootNorm],
+          idx,
+          Math.min(unvisitedDirect.length, 8)
+        );
+        stepsById.set(norm, node);
+        rootNode.outboundCallees.push(norm);
+        compSteps.push(node);
+      });
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.05 : 0.95;
-    handleZoom(factor);
-  };
+      stages.push({
+        stageIndex: 1,
+        stageName: 'Component Hierarchy & Direct Imports',
+        role: 'COMPONENT',
+        steps: compSteps,
+        isBranching: compSteps.length > 1
+      });
+    }
 
-  // Export Trace report
-  const handleExport = (format: 'md' | 'json') => {
-    if (traceSteps.length === 0) return;
-    let dataStr = '';
-    let mimeType = 'text/plain';
-    let filename = `execution_trace_${selectedRoute.split('/').pop()}`;
+    const flatSteps = Array.from(stepsById.values());
+    return { traceStages: stages, allTraceSteps: flatSteps };
+  }, [selectedRoute, scannedFiles, dependencyGraph, astMetadata, entryPoints, hotspotSet, resolveConcreteDependencies]);
 
-    if (format === 'json') {
-      dataStr = JSON.stringify(traceSteps, null, 2);
-      mimeType = 'application/json';
-      filename += '.json';
+  // Set active selected step
+  useEffect(() => {
+    if (allTraceSteps.length > 0) {
+      if (selectedStepId && allTraceSteps.some(s => s.id === selectedStepId)) {
+        // Keep current selected
+        return;
+      }
+      setSelectedStepId(allTraceSteps[0].id);
     } else {
-      dataStr = `# EXECUTION FLOW PATH REPORT
-
-**Entry Endpoint Route:** \`${selectedRoute}\`
-**Call Chain Length:** ${traceSteps.length} nodes
-**Maximum Trace Depth:** ${traceSteps.filter(s => s.type !== 'response').length} levels
-
-## Execution Pipeline Stages
-${traceSteps.map((s, i) => `${i + 1}. **[${s.type.toUpperCase()}]** \`${s.name}\`${s.filePath ? ` (\`${s.filePath}\`)` : ''}`).join('\n')}
-
----
-*Generated by Archon Engineering Intelligence*`;
-      mimeType = 'text/markdown';
-      filename += '.md';
+      setSelectedStepId('');
     }
+  }, [allTraceSteps, selectedStepId]);
 
-    const blob = new Blob([dataStr], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    toast.success(`Exported execution trace as ${format.toUpperCase()}`);
+  // Selected step entity
+  const activeStep = useMemo(() => {
+    return allTraceSteps.find(s => s.id === selectedStepId) || allTraceSteps[0] || null;
+  }, [allTraceSteps, selectedStepId]);
+
+  // Handle step selection with investigation target preservation
+  const handleSelectStep = (step: TraceStepNode) => {
+    setSelectedStepId(step.id);
+    if (onSelectInvestigationTarget) {
+      onSelectInvestigationTarget(step.filePath);
+    }
+  };
+
+  // Keyboard navigation through steps
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!allTraceSteps || allTraceSteps.length === 0) return;
+    const currentIndex = allTraceSteps.findIndex(s => s.id === selectedStepId);
+    if (e.key === 'ArrowDown' || e.key === 'j') {
+      e.preventDefault();
+      const nextIndex = Math.min(currentIndex + 1, allTraceSteps.length - 1);
+      handleSelectStep(allTraceSteps[nextIndex]);
+    } else if (e.key === 'ArrowUp' || e.key === 'k') {
+      e.preventDefault();
+      const prevIndex = Math.max(currentIndex - 1, 0);
+      handleSelectStep(allTraceSteps[prevIndex]);
+    }
   };
 
   // Construct context query prompts
-  const getAIQuery = (actionType: 'explain' | 'optimize' | 'bottleneck') => {
-    const chainStr = traceSteps
-      .map((s, i) => `${i + 1}. [${s.type.toUpperCase()}] ${s.name} (${s.filePath || 'HTTP Egress'})`)
+  const getAIQuery = (actionType: 'explain' | 'optimize' | 'trace') => {
+    if (!activeStep) return '';
+
+    const flowSummary = allTraceSteps
+      .map((s, i) => `${i + 1}. [${s.role}] ${s.name} (${s.filePath})`)
       .join('\n');
 
     if (actionType === 'optimize') {
-      return `Recommend optimization options for this execution path:\n${chainStr}\n\nCan you find redundant allocations or clean up logic?`;
+      return `Analyze potential performance bottlenecks, redundant allocations, and latency risks in this execution path:\n\n${flowSummary}\n\nFocus specifically on step: ${activeStep.name} (${activeStep.filePath}).`;
     }
-    if (actionType === 'bottleneck') {
-      return `Identify database, file access, or network API bottleneck points in this execution flow:\n${chainStr}\n\nWhere are we most vulnerable to latency spikes?`;
+    if (actionType === 'trace') {
+      return `Deep-dive execution trace: Explain how data and arguments flow into ${activeStep.name} and how it coordinates downstream calls:\n\nFull path:\n${flowSummary}`;
     }
-    return `Explain the request execution flow and how variables pass between layers:\n${chainStr}\n\nProvide a concise analysis.`;
+    return `Explain what happens when this execution path runs in the codebase:\n\n${flowSummary}\n\nHighlight the role of ${activeStep.name} and how it handles errors or response payloads.`;
   };
 
   return (
-    <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-160px)] relative overflow-hidden">
-      
-      {/* LEFT PANEL: ENTRY POINT EXPLORER */}
-      <div className="w-full lg:w-80 bg-[#0e0e11] border border-[#27272a] rounded-[8px] flex flex-col h-full overflow-hidden flex-shrink-0">
-        <div className="p-3 border-b border-[#27272a] flex items-center justify-between shrink-0 select-none">
-          <span className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">Entry Points</span>
+    <div
+      className="w-full min-h-screen text-[#fafafa] flex flex-col space-y-6 pb-20 focus:outline-none"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      role="region"
+      aria-label="Execution Flow Tracing Workbench"
+    >
+      {/* ──────────────────────────────────────────────────────────────────────── */}
+      {/* 1. TOP CONTEXT & SCOPE BAR                                               */}
+      {/* ──────────────────────────────────────────────────────────────────────── */}
+      <div className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-5 shadow-sm space-y-4">
+        {/* Header Title & Execution Domain */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#27272a]/60 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-[6px] bg-[#3b82f6]/10 border border-[#3b82f6]/25 flex items-center justify-center text-[#3b82f6] shrink-0">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0V12a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 12V5.25" />
+              </svg>
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h1 className="text-[16px] font-bold tracking-tight text-white font-sans">
+                  Execution Flow Tracing
+                </h1>
+                <span className="px-2 py-0.5 rounded-[4px] bg-[#131316] border border-[#27272a] text-[10px] font-mono text-[#919095] uppercase">
+                  Investigation Surface
+                </span>
+                {framework && (
+                  <span className="px-2 py-0.5 rounded-[4px] bg-[#3b82f6]/10 border border-[#3b82f6]/20 text-[10px] font-mono text-[#60a5fa]">
+                    {framework}
+                  </span>
+                )}
+              </div>
+              <p className="text-[12px] text-[#919095] mt-0.5">
+                Inspect how requests propagate from entry points through controllers, domain services, and data boundaries.
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Metrics */}
+          <div className="flex items-center gap-3 text-[11px] font-mono flex-wrap">
+            <div className="bg-[#131316] border border-[#27272a] px-3 py-1.5 rounded-[4px] flex items-center gap-2">
+              <span className="text-[#919095]">Discovered Routes:</span>
+              <span className="text-white font-semibold">{allEntryPoints.length}</span>
+            </div>
+            <div className="bg-[#131316] border border-[#27272a] px-3 py-1.5 rounded-[4px] flex items-center gap-2">
+              <span className="text-[#919095]">Trace Depth:</span>
+              <span className="text-[#60a5fa] font-semibold">{traceStages.length} stages</span>
+            </div>
+            <div className="bg-[#131316] border border-[#27272a] px-3 py-1.5 rounded-[4px] flex items-center gap-2">
+              <span className="text-[#919095]">Traced Nodes:</span>
+              <span className="text-emerald-400 font-semibold">{allTraceSteps.length}</span>
+            </div>
+          </div>
         </div>
 
-        {/* Filters */}
-        <div className="p-2 border-b border-[#27272a]/70 flex gap-1 bg-[#131316]/50 shrink-0">
-          {(['all', 'routes', 'middlewares', 'jobs'] as const).map(type => (
-            <button
-              key={type}
-              onClick={() => setFilterType(type)}
-              className={`flex-1 py-1 rounded text-[10px] font-mono uppercase tracking-tight cursor-pointer transition-colors ${
-                filterType === type
-                  ? 'bg-[#1f1f22] text-[#fafafa] font-semibold'
-                  : 'text-[#919095] hover:text-[#fafafa]'
-              }`}
-            >
-              {type}
-            </button>
-          ))}
-        </div>
+        {/* Backend Execution Flow Story (Source of Truth) */}
+        {story?.executionFlowStory && (
+          <div className="bg-[#131316]/70 border border-[#27272a] rounded-[6px] p-3 text-[12px]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-[#a855f7] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                </svg>
+                <span className="font-mono text-[11px] font-bold text-[#c8c5ca] uppercase tracking-wide">
+                  Architectural Execution Domain:
+                </span>
+                <span className="text-white font-medium">
+                  {story.architectureType || story.domain || 'Layered Architecture'}
+                </span>
+              </div>
+              <button
+                onClick={() => setStoryExpanded(!storyExpanded)}
+                className="text-[11px] font-mono text-[#60a5fa] hover:text-[#93c5fd] cursor-pointer flex items-center gap-1"
+              >
+                {storyExpanded ? 'Collapse Narrative' : 'Expand Execution Narrative'}
+                <svg className={`w-3.5 h-3.5 transition-transform ${storyExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+            </div>
+            {storyExpanded && (
+              <div className="mt-2 pt-2 border-t border-[#27272a]/60 text-[#c8c5ca] font-mono text-[11px] whitespace-pre-line leading-relaxed">
+                {story.executionFlowStory}
+              </div>
+            )}
+          </div>
+        )}
 
-        {/* Search */}
-        <div className="p-2 border-b border-[#27272a]/70 shrink-0">
-          <div className="relative">
-            <svg className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[#919095]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        {/* Entry Point / Route Selector Bar */}
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 pt-1">
+          {/* Filter Pills */}
+          <div className="flex items-center gap-1.5 bg-[#131316] p-1 rounded-[6px] border border-[#27272a]">
+            {(
+              [
+                { id: 'all', label: 'All Entry Points' },
+                { id: 'routes', label: 'Routes & Endpoints' },
+                { id: 'middlewares', label: 'Middlewares' },
+                { id: 'services', label: 'Services & Handlers' }
+              ] as const
+            ).map(f => (
+              <button
+                key={f.id}
+                onClick={() => setFilterType(f.id)}
+                className={`px-2.5 py-1 rounded-[4px] text-[11px] font-mono cursor-pointer transition-colors ${
+                  filterType === f.id
+                    ? 'bg-[#1f1f22] text-white font-semibold shadow-sm'
+                    : 'text-[#919095] hover:text-white'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Search Input */}
+          <div className="relative flex-1 max-w-md">
+            <svg className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#919095]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
             </svg>
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-[#09090b] border border-[#27272a] rounded-[4px] pl-8 pr-3 py-1.5 text-[12px] font-mono text-[#fafafa] placeholder-[#919095] focus:outline-none focus:border-[#3b82f6]"
-              placeholder="Search entry points..."
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search route path, controller or service..."
+              className="w-full bg-[#09090b] border border-[#27272a] rounded-[6px] pl-9 pr-8 py-1.5 text-[12px] font-mono text-white placeholder-[#919095] focus:outline-none focus:border-[#3b82f6] transition-colors"
             />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#919095] hover:text-white"
+                title="Clear search"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* List */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin" data-lenis-prevent>
-          {filteredEntryPoints.map(e => (
-            <div
-              key={e.path}
-              onClick={() => {
-                setSelectedRoute(e.path);
-                setActiveStepIndex(0);
-              }}
-              className={`p-2 rounded-[4px] cursor-pointer transition-colors select-none flex items-center gap-2 font-mono text-[12px] ${
-                selectedRoute === e.path
-                  ? 'bg-[#1f1f22] text-[#fafafa] border-l-2 border-[#3b82f6]'
-                  : 'hover:bg-[#1f1f22]/50 text-[#c8c5ca] hover:text-[#fafafa]'
-              }`}
-            >
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-[3px] uppercase ${
-                e.method === 'POST' ? 'bg-[#93000a]/30 text-[#ffb4ab]' :
-                e.method === 'GET' ? 'bg-[#002e6a]/30 text-[#adc6ff]' :
-                e.method === 'PUT' ? 'bg-amber-500/20 text-amber-300' :
-                e.method === 'DELETE' ? 'bg-red-500/20 text-red-300' :
-                'bg-[#1f1f22] text-[#919095]'
-              }`}>
-                {e.method}
-              </span>
-              <div className="flex flex-col truncate flex-1">
-                <span className="font-semibold truncate">{e.name}</span>
-                <span className="text-[9.5px] text-[#919095] truncate">{e.path}</span>
-              </div>
+        {/* Horizontal Entry Route Selector Carousel / Chips */}
+        {filteredEntryPoints.length > 0 ? (
+          <div className="pt-2 border-t border-[#27272a]/50">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-[#919095] block mb-2">
+              Select Ingress Trace ({filteredEntryPoints.length})
+            </span>
+            <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin">
+              {filteredEntryPoints.map(ep => {
+                const isSelected = selectedRoute === ep.path;
+                return (
+                  <button
+                    key={ep.path}
+                    onClick={() => {
+                      setSelectedRoute(ep.path);
+                      if (onSelectInvestigationTarget) onSelectInvestigationTarget(ep.path);
+                    }}
+                    className={`flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-[6px] border text-left cursor-pointer transition-all ${
+                      isSelected
+                        ? 'bg-[#1f1f22] border-[#3b82f6] shadow-[0_0_12px_rgba(59,130,246,0.15)] text-white'
+                        : 'bg-[#131316] border-[#27272a] text-[#c8c5ca] hover:border-[#3f3f46] hover:text-white'
+                    }`}
+                  >
+                    <span
+                      className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-[3px] uppercase ${
+                        ep.method === 'POST'
+                          ? 'bg-rose-500/20 text-rose-300'
+                          : ep.method === 'GET'
+                          ? 'bg-blue-500/20 text-blue-300'
+                          : ep.method === 'PUT'
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : ep.method === 'DELETE'
+                          ? 'bg-red-500/20 text-red-300'
+                          : 'bg-[#27272a] text-[#919095]'
+                      }`}
+                    >
+                      {ep.method}
+                    </span>
+                    <div className="flex flex-col max-w-[200px] truncate">
+                      <span className="text-[11.5px] font-mono font-semibold truncate">{ep.name}</span>
+                      <span className="text-[9px] font-mono text-[#919095] truncate">{ep.path}</span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div className="p-4 text-center text-[#919095] text-[12px] font-mono">
+            No entry points matched "{searchQuery}". Try a different filter or search term.
+          </div>
+        )}
       </div>
 
-      {/* CENTER PANEL: INTERACTIVE CANVAS */}
-      <div className="flex-1 bg-[#131316] border border-[#27272a] rounded-[8px] flex flex-col h-full overflow-hidden relative">
-        
-        {/* Canvas Controls */}
-        <div className="absolute top-3 left-3 z-10 flex gap-1.5 bg-[#0e0e11]/80 p-1 rounded-[6px] border border-[#27272a] backdrop-blur-sm">
-          <button onClick={() => handleZoom(1.15)} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Zoom In" aria-label="Zoom In">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
-          </button>
-          <button onClick={() => handleZoom(0.85)} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Zoom Out" aria-label="Zoom Out">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" /></svg>
-          </button>
-          <button onClick={handleResetZoom} className="p-1 rounded hover:bg-[#1f1f22] text-[#919095] hover:text-[#fafafa] cursor-pointer" title="Reset view" aria-label="Reset view">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89M9 11l3-3m-3 3l-3-3" /></svg>
-          </button>
-        </div>
-
-        {/* Vector SVG Canvas */}
-        <div
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onWheel={handleWheel}
-          className={`flex-1 w-full h-full relative outline-none select-none overflow-hidden ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-          style={{ backgroundImage: 'radial-gradient(#27272a 1px, transparent 1px)', backgroundSize: '20px 20px', backgroundPosition: `${pan.x}px ${pan.y}px` }}
-        >
-          {traceSteps.length === 0 ? (
-            <div className="absolute inset-0 flex items-center justify-center p-8">
-              <Empty
-                title="Select an Entry Point"
-                description="Select an entry point from the list to visualize the request execution flow path."
-              />
+      {/* ──────────────────────────────────────────────────────────────────────── */}
+      {/* 2. PRIMARY WORKBENCH: WATERFALL TRACE & SELECTED STEP EVIDENCE            */}
+      {/* ──────────────────────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* LEFT / CENTER: THE PRIMARY WATERFALL TRACE VISUALIZATION (8 Cols) */}
+        <div className="lg:col-span-7 xl:col-span-8 flex flex-col space-y-6">
+          {traceStages.length === 0 ? (
+            <div className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-12 text-center space-y-3">
+              <svg className="w-10 h-10 text-[#919095] mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+              </svg>
+              <h3 className="text-[14px] font-bold text-white font-sans">No Execution Trace Available</h3>
+              <p className="text-[12px] text-[#919095] max-w-md mx-auto">
+                No route execution path could be resolved for the current selection. Pick a different entry point or file
+                from the selector above.
+              </p>
             </div>
           ) : (
-            <svg className="w-full h-full drop-shadow-2xl">
-              <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-                
-                {/* Connecting lines (Animated dash curves) */}
-                <g fill="none">
-                  {traceSteps.map((step, idx) => {
-                    if (idx === traceSteps.length - 1) return null;
-                    const nextStep = traceSteps[idx + 1];
+            <div className="space-y-6">
+              {traceStages.map((stage, sIdx) => {
+                const isLastStage = sIdx === traceStages.length - 1;
+                const stageTheme = ROLE_THEMES[stage.role] || ROLE_THEMES.MODULE;
 
-                    // Curved connection paths
-                    const dy = nextStep.y - step.y;
-                    const controlY1 = step.y + dy * 0.4;
-                    const controlY2 = step.y + dy * 0.6;
-                    const pathString = `M ${step.x} ${step.y} C ${step.x} ${controlY1}, ${nextStep.x} ${controlY2}, ${nextStep.x} ${nextStep.y}`;
+                return (
+                  <div key={stage.stageIndex} className="relative flex flex-col space-y-3">
+                    {/* Stage Header Banner */}
+                    <div className="flex items-center justify-between bg-[#0e0e11] border border-[#27272a] px-4 py-2 rounded-[6px]">
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-[10px] font-mono font-bold text-[#919095] uppercase">
+                          Stage 0{stage.stageIndex + 1}
+                        </span>
+                        <div className="h-3 w-[1px] bg-[#27272a]" />
+                        <span className={`text-[11px] font-mono font-bold uppercase ${stageTheme.text}`}>
+                          {stage.stageName}
+                        </span>
+                      </div>
+                      {stage.isBranching && (
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-[4px] border border-amber-500/20">
+                          <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 14.25v2.25m3-4.5v4.5m3-6.75v6.75m3-9v9M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
+                          </svg>
+                          <span>{stage.steps.length} Parallel Branch Paths</span>
+                        </div>
+                      )}
+                    </div>
 
-                    const isHighlight = activeStepIndex === idx || activeStepIndex === idx + 1;
-
-                    return (
-                      <path
-                        key={idx}
-                        d={pathString}
-                        className={`transition-colors duration-200 ${isHighlight ? 'stroke-[#60a5fa]' : 'stroke-[#27272a]'}`}
-                        strokeWidth={isHighlight ? 2 : 1.5}
-                        strokeDasharray={isHighlight ? '4,4' : undefined}
-                      />
-                    );
-                  })}
-                </g>
-
-                {/* Nodes */}
-                {traceSteps.map((step, idx) => {
-                  const theme = nodeTypeThemes[step.type];
-                  const isActive = activeStepIndex === idx;
-
-                  return (
-                    <g
-                      key={step.id}
-                      onClick={() => handleTimelineSelect(idx)}
-                      className="cursor-pointer group"
+                    {/* Stage Steps (With Branching Support) */}
+                    <div
+                      className={`grid gap-3.5 ${
+                        stage.steps.length > 1
+                          ? stage.steps.length === 2
+                            ? 'grid-cols-1 md:grid-cols-2'
+                            : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
+                          : 'grid-cols-1'
+                      }`}
                     >
-                      {/* Node Shape */}
-                      <rect
-                        x={step.x - 70}
-                        y={step.y - 22}
-                        width={140}
-                        height={44}
-                        rx={6}
-                        className={`transition-all duration-200 ${
-                          isActive
-                            ? 'fill-[#1f1f22] stroke-[#60a5fa] stroke-2 shadow-[0_0_12px_rgba(96,165,251,0.25)]'
-                            : 'fill-[#0e0e11] stroke-[#27272a] hover:stroke-[#919095]'
-                        }`}
-                      />
-                      
-                      {/* Dot Indicator */}
-                      <circle
-                        cx={step.x - 52}
-                        cy={step.y}
-                        r={4}
-                        className={theme.color.replace('text', 'fill')}
-                      />
+                      {stage.steps.map((step, bIdx) => {
+                        const isSelected = activeStep?.id === step.id;
+                        const theme = ROLE_THEMES[step.role] || ROLE_THEMES.MODULE;
 
-                      {/* Icon */}
-                      <g transform={`translate(${step.x - 42}, ${step.y - 10})`}>
-                        <text
-                          className={`material-symbols-outlined text-[16px] select-none ${theme.color}`}
-                          style={{ fontVariationSettings: "'FILL' 0, 'wght' 400" }}
-                        >
-                          {theme.icon}
-                        </text>
-                      </g>
+                        return (
+                          <div
+                            key={step.id}
+                            onClick={() => handleSelectStep(step)}
+                            className={`relative group rounded-[8px] p-4 cursor-pointer transition-all border text-left ${
+                              isSelected
+                                ? 'bg-[#18181b] border-[#3b82f6] shadow-[0_0_20px_rgba(59,130,246,0.18)] ring-1 ring-[#3b82f6]/50'
+                                : 'bg-[#0e0e11] border-[#27272a] hover:border-[#3f3f46] hover:bg-[#131316]'
+                            }`}
+                          >
+                            {/* Branch Marker if multiple */}
+                            {stage.isBranching && (
+                              <div className="flex items-center gap-1 text-[9.5px] font-mono text-[#919095] mb-2 border-b border-[#27272a]/50 pb-1">
+                                <span className="text-[#60a5fa] font-bold">Branch #{bIdx + 1}</span>
+                                <span>of {stage.steps.length}</span>
+                              </div>
+                            )}
 
-                      {/* Type Label */}
-                      <text
-                        x={step.x - 22}
-                        y={step.y - 4}
-                        className="fill-[#919095] font-mono text-[8px] uppercase select-none font-bold"
-                      >
-                        {theme.label}
-                      </text>
+                            {/* Role Badge + Confidence */}
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <span
+                                className={`px-2 py-0.5 rounded-[4px] text-[9.5px] font-mono font-bold uppercase border ${theme.bg} ${theme.text} ${theme.border}`}
+                              >
+                                {theme.label}
+                              </span>
 
-                      {/* Name */}
-                      <text
-                        x={step.x - 22}
-                        y={step.y + 10}
-                        className="fill-white font-mono text-[10px] select-none font-medium truncate max-w-[80px]"
-                      >
-                        {step.name.length > 15 ? `${step.name.slice(0, 12)}...` : step.name}
-                      </text>
-                    </g>
-                  );
-                })}
-              </g>
-            </svg>
-          )}
-        </div>
-      </div>
+                              {step.isCentralityHotspot && (
+                                <span className="flex items-center gap-1 text-[9px] font-mono text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/20">
+                                  <span>🔥 Hotspot</span>
+                                </span>
+                              )}
+                            </div>
 
-      {/* RIGHT PANEL: DETAILS & TIMELINE */}
-      <div className="w-full lg:w-80 bg-[#0e0e11] border border-[#27272a] rounded-[8px] flex flex-col h-full overflow-hidden flex-shrink-0">
-        <div className="p-3 border-b border-[#27272a] flex items-center justify-between shrink-0 select-none">
-          <span className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">Details &amp; Timeline</span>
-          {traceSteps.length > 0 && (
-            <div className="flex gap-1.5">
-              <button
-                onClick={() => handleExport('md')}
-                className="p-1 text-[#919095] hover:text-[#fafafa] hover:bg-[#1f1f22] rounded-[4px] cursor-pointer"
-                title="Export as Markdown"
-                aria-label="Export as Markdown"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </button>
-              <button
-                onClick={() => handleExport('json')}
-                className="p-1 text-[#919095] hover:text-[#fafafa] hover:bg-[#1f1f22] rounded-[4px] cursor-pointer"
-                title="Export as JSON"
-                aria-label="Export as JSON"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-              </button>
-            </div>
-          )}
-        </div>
+                            {/* Symbol Name & File Path */}
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[13px] font-mono font-bold text-white group-hover:text-[#60a5fa] transition-colors truncate">
+                                  {step.name}
+                                </span>
+                              </div>
+                              <div className="text-[10px] font-mono text-[#919095] truncate" title={step.filePath}>
+                                {step.filePath}
+                              </div>
+                            </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-5 scrollbar-thin" data-lenis-prevent>
-          {traceSteps.length > 0 ? (
-            <div className="space-y-5 animate-[fadeIn_0.15s_ease-out]">
-              
-              {/* Call Chain stats */}
-              <div className="grid grid-cols-2 gap-2 bg-[#131316] border border-[#27272a] p-3 rounded-[6px]">
-                <div>
-                  <span className="text-[9px] font-mono font-bold text-[#919095] uppercase">Trace Length</span>
-                  <span className="text-[18px] font-bold text-[#fafafa] block mt-0.5">{traceSteps.length} nodes</span>
-                </div>
-                <div>
-                  <span className="text-[9px] font-mono font-bold text-[#919095] uppercase">Flow Depth</span>
-                  <span className="text-[18px] font-bold text-[#60a5fa] block mt-0.5">{traceSteps.filter(s => s.type !== 'response').length} layers</span>
-                </div>
-              </div>
+                            {/* Causal Description snippet */}
+                            <p className="text-[11.5px] text-[#c8c5ca] mt-2.5 line-clamp-2 leading-relaxed font-sans">
+                              {step.description}
+                            </p>
 
-              {/* Selected Node details */}
-              {activeStep && (
-                <div className="bg-[#131316] border border-[#27272a] p-4 rounded-[6px] space-y-3">
-                  <div className="flex items-center justify-between border-b border-[#27272a]/50 pb-2">
-                    <span className="text-[10px] font-mono font-bold text-[#fafafa] uppercase">Active Stage details</span>
-                    <Badge variant={activeStep.type === 'route' ? 'info' : 'neutral'} className="uppercase text-[9px] font-mono">
-                      {activeStep.type}
-                    </Badge>
+                            {/* Grounded Evidence Metadata Pills */}
+                            <div className="flex flex-wrap items-center gap-2 mt-3 pt-2.5 border-t border-[#27272a]/60 text-[10px] font-mono text-[#919095]">
+                              {step.functions.length > 0 && (
+                                <span className="flex items-center gap-1 bg-[#131316] px-2 py-0.5 rounded border border-[#27272a]">
+                                  <svg className="w-3 h-3 text-[#3b82f6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.25 9.75L16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
+                                  </svg>
+                                  {step.functions.length} fns
+                                </span>
+                              )}
+                              {step.exports.length > 0 && (
+                                <span className="flex items-center gap-1 bg-[#131316] px-2 py-0.5 rounded border border-[#27272a]">
+                                  <svg className="w-3 h-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                  </svg>
+                                  {step.exports.length} exports
+                                </span>
+                              )}
+                              {step.lines > 0 && (
+                                <span className="flex items-center gap-1 bg-[#131316] px-2 py-0.5 rounded border border-[#27272a]">
+                                  {step.lines} lines
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Active Selector Indicator */}
+                            {isSelected && (
+                              <div className="absolute -left-[3px] top-1/2 -translate-y-1/2 w-[5px] h-8 bg-[#3b82f6] rounded-r shadow-[0_0_8px_#3b82f6]" />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Visual Connector Spine / Arrow to Next Stage */}
+                    {!isLastStage && (
+                      <div className="flex flex-col items-center justify-center my-1 select-none">
+                        <div className="w-[2px] h-3 bg-gradient-to-b from-[#3b82f6]/40 to-[#3b82f6]/20" />
+                        <div className="w-5 h-5 rounded-full bg-[#131316] border border-[#3b82f6]/50 flex items-center justify-center text-[#3b82f6] shadow-sm">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" />
+                          </svg>
+                        </div>
+                        <div className="w-[2px] h-3 bg-gradient-to-b from-[#3b82f6]/20 to-[#27272a]" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Final Egress Boundary Marker */}
+              <div className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-[6px] bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
                   </div>
                   <div>
-                    {activeStep.filePath ? (
-                      <span
-                        onClick={() => onNavigateToExplorer(activeStep.filePath)}
-                        className="text-[12px] font-mono text-[#60a5fa] hover:underline cursor-pointer block truncate font-semibold"
-                        title="Click to view file"
-                      >
-                        {activeStep.name}
-                      </span>
-                    ) : (
-                      <span className="text-[12px] font-mono text-white block truncate font-semibold">
-                        {activeStep.name}
-                      </span>
-                    )}
-                    {activeStep.filePath && (
-                      <span className="text-[9.5px] font-mono text-[#919095] mt-1 block truncate">
-                        {activeStep.filePath}
-                      </span>
-                    )}
+                    <span className="text-[12px] font-mono font-bold text-white block">Execution Pipeline Exit</span>
+                    <span className="text-[10px] font-mono text-[#919095]">
+                      Response finalized &amp; returned through protocol egress boundary.
+                    </span>
                   </div>
-                  <p className="text-[11.5px] text-[#919095] leading-relaxed">
-                    {activeStep.description}
-                  </p>
+                </div>
+                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">
+                  HTTP 200 OK / Complete
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
 
-                  {/* Exports / Functions */}
-                  {activeStep.functions.length > 0 && (
-                    <div className="space-y-1.5 pt-2 border-t border-[#27272a]/50">
-                      <span className="text-[9.5px] font-mono font-bold text-[#919095] uppercase block">Functions Traced ({activeStep.functions.length})</span>
-                      <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-1" data-lenis-prevent>
-                        {activeStep.functions.map(fn => (
-                          <span key={fn} className="bg-[#1f1f22] text-[#c8c5ca] border border-[#27272a] rounded px-1.5 py-0.5 text-[9px] font-mono">
-                            {fn}
-                          </span>
-                        ))}
-                      </div>
+        {/* RIGHT / SIDEBAR: DEEP EVIDENCE & STEP INSPECTOR (4 Cols) */}
+        <div className="lg:col-span-5 xl:col-span-4 sticky top-6">
+          {activeStep ? (
+            <div className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] overflow-hidden shadow-lg flex flex-col space-y-5 p-5">
+              {/* Header: Stage and Role */}
+              <div className="border-b border-[#27272a] pb-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono font-bold text-[#919095] uppercase tracking-wider">
+                    Stage 0{activeStep.stageIndex + 1} &bull; {activeStep.stageName}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-[4px] text-[9.5px] font-mono font-bold uppercase border ${
+                      ROLE_THEMES[activeStep.role]?.bg
+                    } ${ROLE_THEMES[activeStep.role]?.text} ${ROLE_THEMES[activeStep.role]?.border}`}
+                  >
+                    {activeStep.role}
+                  </span>
+                </div>
+
+                <h2 className="text-[15px] font-mono font-bold text-white truncate" title={activeStep.name}>
+                  {activeStep.name}
+                </h2>
+                <div className="text-[10px] font-mono text-[#919095] truncate" title={activeStep.filePath}>
+                  {activeStep.filePath}
+                </div>
+
+                {/* File size & lines */}
+                <div className="flex items-center gap-3 pt-1 text-[10px] font-mono text-[#c8c5ca]">
+                  <span>{activeStep.lines} lines</span>
+                  <span>&bull;</span>
+                  <span>{(activeStep.size / 1024).toFixed(1)} KB</span>
+                  <span>&bull;</span>
+                  <span className="text-emerald-400">Grounding: {activeStep.confidence}</span>
+                </div>
+              </div>
+
+              {/* LEVEL 1: Quick Understanding - Why is this in the trace? */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#919095] flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5 text-[#60a5fa]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                  </svg>
+                  Execution Causal Provenance
+                </span>
+                <div className="bg-[#131316] border border-[#27272a] rounded-[6px] p-3 text-[11.5px] text-[#c8c5ca] leading-relaxed">
+                  {activeStep.confidenceReason}
+                </div>
+              </div>
+
+              {/* LEVEL 2: Step Investigation - Inbound & Outbound links */}
+              <div className="space-y-3">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#919095] block">
+                  Execution Links
+                </span>
+
+                {/* Inbound Callers */}
+                <div>
+                  <span className="text-[9.5px] font-mono text-[#919095] block mb-1">
+                    ↳ Called by Upstream ({activeStep.inboundCallers.length})
+                  </span>
+                  {activeStep.inboundCallers.length > 0 ? (
+                    <div className="space-y-1">
+                      {activeStep.inboundCallers.map(caller => (
+                        <div
+                          key={caller}
+                          onClick={() => {
+                            const target = allTraceSteps.find(s => s.id === caller);
+                            if (target) handleSelectStep(target);
+                          }}
+                          className="text-[10.5px] font-mono text-[#60a5fa] hover:underline cursor-pointer bg-[#131316] px-2.5 py-1 rounded border border-[#27272a] truncate"
+                          title="Click to jump to caller"
+                        >
+                          {caller.split('/').pop() || caller}
+                        </div>
+                      ))}
                     </div>
+                  ) : (
+                    <span className="text-[10px] font-mono text-[#919095] italic">Direct entry root</span>
                   )}
                 </div>
-              )}
 
-              {/* Numbered Stages Timeline */}
-              <div className="space-y-3">
-                <span className="text-[9px] font-mono font-bold text-[#fafafa] uppercase block">Execution Timeline</span>
-                <div className="space-y-2 relative border-l border-[#27272a] ml-2 pl-3">
-                  {traceSteps.map((step, idx) => {
-                    const isActive = activeStepIndex === idx;
-                    const theme = nodeTypeThemes[step.type];
-
-                    return (
-                      <div
-                        key={step.id}
-                        onClick={() => handleTimelineSelect(idx)}
-                        className={`p-2 rounded cursor-pointer transition-colors relative flex items-center justify-between border ${
-                          isActive
-                            ? 'bg-[#1f1f22]/70 border-[#60a5fa]/40 text-[#fafafa]'
-                            : 'bg-transparent border-transparent hover:bg-[#1f1f22]/30 text-[#c8c5ca]'
-                        }`}
-                      >
-                        <div className="absolute -left-[17px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border bg-[#0e0e11] flex items-center justify-center border-[#27272a]">
-                          <span className={`w-1 h-1 rounded-full ${isActive ? 'bg-[#60a5fa]' : 'bg-[#919095]'}`} />
+                {/* Outbound Callees */}
+                <div>
+                  <span className="text-[9.5px] font-mono text-[#919095] block mb-1">
+                    ↳ Dispatches Downstream ({activeStep.outboundCallees.length})
+                  </span>
+                  {activeStep.outboundCallees.length > 0 ? (
+                    <div className="space-y-1">
+                      {activeStep.outboundCallees.map(callee => (
+                        <div
+                          key={callee}
+                          onClick={() => {
+                            const target = allTraceSteps.find(s => s.id === callee);
+                            if (target) handleSelectStep(target);
+                          }}
+                          className="text-[10.5px] font-mono text-[#60a5fa] hover:underline cursor-pointer bg-[#131316] px-2.5 py-1 rounded border border-[#27272a] truncate"
+                          title="Click to jump to callee"
+                        >
+                          {callee.split('/').pop() || callee}
                         </div>
-                        <div className="flex items-center gap-2 truncate">
-                          <span className="text-[10px] font-mono text-[#919095]">{idx + 1}</span>
-                          <span className="text-[11.5px] font-mono truncate font-semibold">
-                            {step.name}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-[10px] font-mono text-[#919095] italic">No further downstream calls</span>
+                  )}
                 </div>
               </div>
 
-              {/* AI Actions */}
-              <div className="flex flex-col gap-2 pt-3 border-t border-[#27272a]/50">
-                <Button
-                  variant="primary"
-                  onClick={() => onTriggerChatQuery(getAIQuery('explain'))}
-                  className="w-full text-[12px] font-mono uppercase py-2 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  Explain Execution
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => onTriggerChatQuery(getAIQuery('bottleneck'))}
-                  className="w-full text-[12px] font-mono uppercase py-2 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  Find Bottlenecks
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => onTriggerChatQuery(getAIQuery('optimize'))}
-                  className="w-full text-[12px] font-mono uppercase py-2 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  Suggest Optimization
-                </Button>
+              {/* LEVEL 3: Deep AST Grounded Evidence */}
+              <div className="space-y-3 pt-2 border-t border-[#27272a]/60">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#919095] block">
+                  AST Grounded Evidence
+                </span>
+
+                {/* Functions */}
+                {activeStep.functions.length > 0 && (
+                  <div>
+                    <span className="text-[9.5px] font-mono text-[#919095] block mb-1">
+                      Functions Declared ({activeStep.functions.length})
+                    </span>
+                    <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto pr-1 scrollbar-thin">
+                      {activeStep.functions.map(fn => (
+                        <span
+                          key={fn}
+                          className="px-2 py-0.5 rounded-[4px] bg-[#131316] text-[#c8c5ca] border border-[#27272a] text-[9.5px] font-mono"
+                        >
+                          {fn}()
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Exports */}
+                {activeStep.exports.length > 0 && (
+                  <div>
+                    <span className="text-[9.5px] font-mono text-[#919095] block mb-1">
+                      Exported Symbols ({activeStep.exports.length})
+                    </span>
+                    <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-1 scrollbar-thin">
+                      {activeStep.exports.map(exp => (
+                        <span
+                          key={exp}
+                          className="px-2 py-0.5 rounded-[4px] bg-[#131316] text-[#c8c5ca] border border-[#27272a] text-[9.5px] font-mono"
+                        >
+                          {exp}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Classes */}
+                {activeStep.classes.length > 0 && (
+                  <div>
+                    <span className="text-[9.5px] font-mono text-[#919095] block mb-1">
+                      Classes ({activeStep.classes.length})
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {activeStep.classes.map(cls => (
+                        <span
+                          key={cls}
+                          className="px-2 py-0.5 rounded-[4px] bg-[#131316] text-[#c8c5ca] border border-[#27272a] text-[9.5px] font-mono"
+                        >
+                          class {cls}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
+              {/* Cross-Workspace Action Buttons */}
+              <div className="space-y-2 pt-4 border-t border-[#27272a]">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#919095] block mb-1">
+                  Investigation Actions
+                </span>
+
+                <button
+                  onClick={() => onNavigateToExplorer(activeStep.filePath)}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-[6px] bg-[#1f1f22] hover:bg-[#27272a] text-white border border-[#27272a] text-[11px] font-mono cursor-pointer transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-[#60a5fa]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                    </svg>
+                    Inspect in Explorer
+                  </span>
+                  <svg className="w-3.5 h-3.5 text-[#919095]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                  </svg>
+                </button>
+
+                {onNavigateToGraph && (
+                  <button
+                    onClick={() => onNavigateToGraph(activeStep.filePath)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-[6px] bg-[#131316] hover:bg-[#1f1f22] text-[#c8c5ca] hover:text-white border border-[#27272a] text-[11px] font-mono cursor-pointer transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-[#a855f7]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0V12a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 12V5.25" />
+                      </svg>
+                      View in Architecture Graph
+                    </span>
+                    <svg className="w-3.5 h-3.5 text-[#919095]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                    </svg>
+                  </button>
+                )}
+
+                {onNavigateToImpact && (
+                  <button
+                    onClick={() => onNavigateToImpact(activeStep.filePath)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-[6px] bg-[#131316] hover:bg-[#1f1f22] text-[#c8c5ca] hover:text-white border border-[#27272a] text-[11px] font-mono cursor-pointer transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                      </svg>
+                      Analyze Blast Radius Impact
+                    </span>
+                    <svg className="w-3.5 h-3.5 text-[#919095]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                    </svg>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => onTriggerChatQuery(getAIQuery('explain'))}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-[6px] bg-[#3b82f6] hover:bg-[#2563eb] text-white text-[11px] font-mono font-semibold cursor-pointer transition-colors mt-2 shadow-sm"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                  </svg>
+                  Ask Archon AI About Step
+                </button>
+              </div>
             </div>
           ) : (
-            <div className="h-full flex items-center justify-center text-[#919095] text-[11px] font-mono p-4 text-center">
-              Select an entry point route to visualize traces
+            <div className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-6 text-center text-[#919095] text-[12px] font-mono">
+              Click any execution step in the trace to inspect its causal evidence, AST functions, and callers.
             </div>
           )}
         </div>
       </div>
-
     </div>
   );
 }
