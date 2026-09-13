@@ -409,19 +409,24 @@ export default function AppShell({
 
             {/* Enhanced Contextual Breadcrumb Path */}
             <div className="flex items-center gap-1.5 text-[12px] font-mono select-none overflow-hidden max-w-[480px] lg:max-w-none">
-              <span 
-                className="text-[#919095] hover:text-[#e4e1e5] cursor-pointer shrink-0 transition-colors"
-                onClick={() => setActiveTab('summary')}
-              >
-                Archon
-              </span>
-              <span className="text-[#47464a] shrink-0">/</span>
+              {repository?.owner ? (
+                <>
+                  <span 
+                    className="text-[#919095] hover:text-[#e4e1e5] cursor-pointer shrink-0 transition-colors truncate max-w-[120px]"
+                    onClick={() => setActiveTab('summary')}
+                    title={repository.owner}
+                  >
+                    {repository.owner}
+                  </span>
+                  <span className="text-[#47464a] shrink-0">/</span>
+                </>
+              ) : null}
               <span 
                 className="text-[#919095] hover:text-[#e4e1e5] cursor-pointer truncate shrink-0 transition-colors"
                 onClick={() => setActiveTab('summary')}
                 title={repository?.name}
               >
-                {repository?.name || 'loading'}
+                {repository?.name || 'Workspace'}
               </span>
               <span className="text-[#47464a] shrink-0">/</span>
               <span className="text-[#fafafa] font-medium shrink-0">
@@ -578,7 +583,10 @@ export default function AppShell({
 
         {/* MAIN BODY SCROLL AREA */}
         <div className="flex-1 flex overflow-hidden min-w-0 max-h-[calc(100vh-48px)]">
-          <main className="flex-1 overflow-y-auto p-6" data-lenis-prevent>
+          <main 
+            className={`flex-1 ${activeTab === 'chat' ? 'overflow-hidden flex flex-col p-0' : 'overflow-y-auto p-6'}`} 
+            data-lenis-prevent
+          >
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -586,6 +594,7 @@ export default function AppShell({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.15 }}
+                className={activeTab === 'chat' ? 'h-full flex flex-col flex-1 overflow-hidden' : undefined}
               >
                 {children}
               </motion.div>
@@ -601,8 +610,8 @@ export default function AppShell({
           )}
 
           {/* 3. RIGHT COLLAPSIBLE INSPECTOR PANEL */}
-          {/* STATE A: EXPANDED STATE */}
-          {!isMobile && rightPanelState === 'expanded' && repository && (() => {
+          {/* STATE A: EXPANDED STATE — hidden on AI Assistant tab for full-width conversation */}
+          {!isMobile && rightPanelState === 'expanded' && repository && activeTab !== 'chat' && (() => {
             const activeFileItem = activeInvestigationEntity
               ? repository.scannedFiles.find(f => f.path === activeInvestigationEntity)
               : null;
@@ -770,7 +779,7 @@ export default function AppShell({
           })()}
 
           {/* STATE B: COMPACT STATE */}
-          {!isMobile && rightPanelState === 'compact' && repository && (
+          {!isMobile && rightPanelState === 'compact' && repository && activeTab !== 'chat' && (
             <div
               onClick={() => setRightPanelState('expanded')}
               style={rightSidebarStyle}
