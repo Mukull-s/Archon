@@ -1,16 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import OverviewTab from '../components/dashboard/OverviewTab';
-import ExplorerTab from '../components/dashboard/ExplorerTab';
-import ChatConsole from '../components/dashboard/ChatConsole';
-import CodeGraph from '../components/dashboard/CodeGraph';
-import ExecutionTracing from '../components/dashboard/ExecutionTracing';
-import ImpactAnalysis from '../components/dashboard/ImpactAnalysis';
 import api from '../lib/api';
 import { toast } from 'sonner';
 import AppShell from '../components/dashboard/AppShell';
 import { Loading, Typography, Panel, Button } from '../components/ui/DesignSystem';
+
+// Lazy-loaded tab components — each loads its chunk only when first visited
+const OverviewTab = lazy(() => import('../components/dashboard/OverviewTab'));
+const ExplorerTab = lazy(() => import('../components/dashboard/ExplorerTab'));
+const ChatConsole = lazy(() => import('../components/dashboard/ChatConsole'));
+const CodeGraph = lazy(() => import('../components/dashboard/CodeGraph'));
+const ExecutionTracing = lazy(() => import('../components/dashboard/ExecutionTracing'));
+const ImpactAnalysis = lazy(() => import('../components/dashboard/ImpactAnalysis'));
 
 interface FileItem {
   path: string;
@@ -237,6 +239,13 @@ export default function Dashboard() {
 
   if (!repo) return null;
 
+  // Minimal fallback shown while a lazy chunk loads (<200ms typically)
+  const TabFallback = () => (
+    <div className="flex items-center justify-center h-full">
+      <Loading message="Loading..." type="spinner" />
+    </div>
+  );
+
   return (
     <AppShell
       repository={repo}
@@ -250,116 +259,136 @@ export default function Dashboard() {
     >
       {/* 1. OVERVIEW TAB */}
       {activeTab === 'summary' && (
-        <OverviewTab
-          repositoryId={repo.id}
-          framework={repo.framework}
-          languages={repo.languages}
-          entryPoints={repo.entryPoints}
-          fileCount={repo.fileCount}
-          totalSize={repo.totalSize}
-          confidence={repo.confidenceDetails?.score ?? repo.confidence}
-          checklist={repo.confidenceDetails?.checklist ?? (repo.confidence >= 80
-            ? ['✓ Dependency graph resolved', '✓ Entry points detected', '✓ Code structure mapped']
-            : ['⚠ Partial scan completed'])}
-          setActiveTab={setActiveTab}
-          onNavigateToExplorer={handleNavigateToExplorer}
-          onNavigateToGraph={handleNavigateToGraph}
-          onNavigateToImpact={handleNavigateToImpact}
-          onNavigateToTrace={handleNavigateToTrace}
-          onTriggerChat={handleTriggerChat}
-          investigationTarget={investigationTarget}
-          onSelectInvestigationTarget={changeInvestigationTarget}
-        />
+        <Suspense fallback={<TabFallback />}>
+          <OverviewTab
+            repositoryId={repo.id}
+            framework={repo.framework}
+            languages={repo.languages}
+            entryPoints={repo.entryPoints}
+            fileCount={repo.fileCount}
+            totalSize={repo.totalSize}
+            confidence={repo.confidenceDetails?.score ?? repo.confidence}
+            checklist={repo.confidenceDetails?.checklist ?? (repo.confidence >= 80
+              ? ['✓ Dependency graph resolved', '✓ Entry points detected', '✓ Code structure mapped']
+              : ['⚠ Partial scan completed'])}
+            setActiveTab={setActiveTab}
+            onNavigateToExplorer={handleNavigateToExplorer}
+            onNavigateToGraph={handleNavigateToGraph}
+            onNavigateToImpact={handleNavigateToImpact}
+            onNavigateToTrace={handleNavigateToTrace}
+            onTriggerChat={handleTriggerChat}
+            investigationTarget={investigationTarget}
+            onSelectInvestigationTarget={changeInvestigationTarget}
+          />
+        </Suspense>
       )}
 
       {/* 2. EXPLORER (FILES) TAB */}
       {activeTab === 'explorer' && (
-        <ExplorerTab
-          files={repo.scannedFiles}
-          selectedFiles={selectedFiles}
-          onToggleFile={handleToggleFile}
-          onToggleFolder={handleToggleFolder}
-          repositoryId={repo.id}
-          astMetadata={repo.astMetadata}
-          dependencyGraph={repo.dependencyGraph}
-          selectedExplorerFile={selectedExplorerFile || investigationTarget}
-          setSelectedExplorerFile={(filePath) => {
-            setSelectedExplorerFile(filePath);
-            if (filePath) changeInvestigationTarget(filePath);
-          }}
-          investigationTarget={investigationTarget}
-          onSelectInvestigationTarget={changeInvestigationTarget}
-          entryPoints={repo.entryPoints}
-          framework={repo.framework}
-          onNavigateToGraph={handleNavigateToGraph}
-          onNavigateToImpact={handleNavigateToImpact}
-          onNavigateToTrace={handleNavigateToTrace}
-          onTriggerChat={handleTriggerChat}
-        />
+        <Suspense fallback={<TabFallback />}>
+          <ExplorerTab
+            files={repo.scannedFiles}
+            selectedFiles={selectedFiles}
+            onToggleFile={handleToggleFile}
+            onToggleFolder={handleToggleFolder}
+            repositoryId={repo.id}
+            astMetadata={repo.astMetadata}
+            dependencyGraph={repo.dependencyGraph}
+            selectedExplorerFile={selectedExplorerFile || investigationTarget}
+            setSelectedExplorerFile={(filePath) => {
+              setSelectedExplorerFile(filePath);
+              if (filePath) changeInvestigationTarget(filePath);
+            }}
+            investigationTarget={investigationTarget}
+            onSelectInvestigationTarget={changeInvestigationTarget}
+            entryPoints={repo.entryPoints}
+            framework={repo.framework}
+            onNavigateToGraph={handleNavigateToGraph}
+            onNavigateToImpact={handleNavigateToImpact}
+            onNavigateToTrace={handleNavigateToTrace}
+            onTriggerChat={handleTriggerChat}
+          />
+        </Suspense>
       )}
 
       {/* 3. ARCHITECTURE TAB */}
       {activeTab === 'graph' && (
-        <CodeGraph
-          repositoryId={repo.id}
-          scannedFiles={repo.scannedFiles}
-          dependencyGraph={repo.dependencyGraph}
-          astMetadata={repo.astMetadata}
-          investigationTarget={investigationTarget}
-          setInvestigationTarget={changeInvestigationTarget}
-        />
+        <Suspense fallback={<TabFallback />}>
+          <CodeGraph
+            repositoryId={repo.id}
+            scannedFiles={repo.scannedFiles}
+            dependencyGraph={repo.dependencyGraph}
+            astMetadata={repo.astMetadata}
+            investigationTarget={investigationTarget}
+            setInvestigationTarget={changeInvestigationTarget}
+          />
+        </Suspense>
       )}
 
       {/* 4. EXECUTION FLOW TAB */}
       {activeTab === 'trace' && (
-        <ExecutionTracing
-          repositoryId={repo.id}
-          scannedFiles={repo.scannedFiles}
-          dependencyGraph={repo.dependencyGraph}
-          astMetadata={repo.astMetadata}
-          onNavigateToExplorer={(filePath: string) => {
-            setSelectedExplorerFile(filePath);
-            setActiveTab('explorer');
-          }}
-          onTriggerChatQuery={(query: string) => {
-            setAutoTriggerChatPrompt(query);
-            setActiveTab('chat');
-          }}
-        />
+        <Suspense fallback={<TabFallback />}>
+          <ExecutionTracing
+            repositoryId={repo.id}
+            scannedFiles={repo.scannedFiles}
+            dependencyGraph={repo.dependencyGraph}
+            astMetadata={repo.astMetadata}
+            investigationTarget={investigationTarget}
+            onSelectInvestigationTarget={changeInvestigationTarget}
+            onNavigateToExplorer={handleNavigateToExplorer}
+            onNavigateToGraph={handleNavigateToGraph}
+            onNavigateToImpact={handleNavigateToImpact}
+            onTriggerChatQuery={handleTriggerChat}
+            entryPoints={repo.entryPoints}
+            framework={repo.framework}
+          />
+        </Suspense>
       )}
 
       {/* 5. IMPACT ANALYSIS TAB */}
       {activeTab === 'impact' && (
-        <ImpactAnalysis
-          repositoryId={repo.id}
-          files={repo.scannedFiles}
-          dependencyGraph={repo.dependencyGraph}
-          astMetadata={repo.astMetadata}
-          onNavigateToExplorer={(filePath: string) => {
-            setSelectedExplorerFile(filePath);
-            setActiveTab('explorer');
-          }}
-          onTriggerChatQuery={(query: string) => {
-            setAutoTriggerChatPrompt(query);
-            setActiveTab('chat');
-          }}
-        />
+        <Suspense fallback={<TabFallback />}>
+          <ImpactAnalysis
+            repositoryId={repo.id}
+            files={repo.scannedFiles}
+            dependencyGraph={repo.dependencyGraph}
+            astMetadata={repo.astMetadata}
+            investigationTarget={investigationTarget}
+            onSelectInvestigationTarget={changeInvestigationTarget}
+            onNavigateToExplorer={handleNavigateToExplorer}
+            onNavigateToGraph={handleNavigateToGraph}
+            onNavigateToTrace={handleNavigateToTrace}
+            onTriggerChatQuery={handleTriggerChat}
+            entryPoints={repo.entryPoints}
+            framework={repo.framework}
+          />
+        </Suspense>
       )}
 
       {/* 6. AI ASSISTANT TAB */}
       {activeTab === 'chat' && (
-        <ChatConsole
-          repositoryId={repo.id}
-          selectedFiles={selectedFiles}
-          onToggleFile={handleToggleFile}
-          isIndexed={repo.isIndexed}
-          onNavigateToFile={(filePath: string) => {
-            setSelectedExplorerFile(filePath);
-            setActiveTab('explorer');
-          }}
-          autoTriggerChatPrompt={autoTriggerChatPrompt}
-          onClearAutoPrompt={() => setAutoTriggerChatPrompt(null)}
-        />
+        <Suspense fallback={<TabFallback />}>
+          <ChatConsole
+            repositoryId={repo.id}
+            selectedFiles={selectedFiles}
+            onToggleFile={handleToggleFile}
+            isIndexed={repo.isIndexed}
+            onNavigateToFile={(filePath: string) => {
+              setSelectedExplorerFile(filePath);
+              setActiveTab('explorer');
+            }}
+            autoTriggerChatPrompt={autoTriggerChatPrompt}
+            onClearAutoPrompt={() => setAutoTriggerChatPrompt(null)}
+            investigationTarget={investigationTarget}
+            onSelectInvestigationTarget={changeInvestigationTarget}
+            onNavigateToExplorer={handleNavigateToExplorer}
+            onNavigateToGraph={handleNavigateToGraph}
+            onNavigateToImpact={handleNavigateToImpact}
+            onNavigateToTrace={handleNavigateToTrace}
+            scannedFiles={repo.scannedFiles}
+            framework={repo.framework}
+          />
+        </Suspense>
       )}
 
       {/* 7. SETTINGS TAB */}
