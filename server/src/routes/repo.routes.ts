@@ -22,6 +22,18 @@ const heavyLimiter = rateLimit({
   legacyHeaders: false
 });
 
+// Rate limiter for interactive impact analysis (max 120 requests per 15 minutes)
+const impactLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  message: {
+    success: false,
+    error: { message: 'Too many impact simulations. Please try again shortly.' }
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 /**
  * Repository routes — Ingestion & engineering analysis.
  */
@@ -39,10 +51,10 @@ router.post('/:id/unarchive', requireAuth, repoController.unarchiveRepo);
 router.post('/:id/summary', requireAuth, heavyLimiter, repoController.generateRepoSummaryEndpoint);
 
 // Analysis endpoints
-router.post('/:id/impact', requireAuth, heavyLimiter, repoController.analyzeImpact);
+router.post('/:id/impact', requireAuth, impactLimiter, repoController.analyzeImpact);
 router.post('/:id/index', requireAuth, heavyLimiter, repoController.buildVectorIndex);
-router.post('/:id/chat', requireAuth, heavyLimiter, repoController.chatWithRepo);
-router.post('/:id/chat/stream', requireAuth, heavyLimiter, repoController.chatWithRepoStream);
+router.post('/:id/chat', requireAuth, impactLimiter, repoController.chatWithRepo);
+router.post('/:id/chat/stream', requireAuth, impactLimiter, repoController.chatWithRepoStream);
 router.get('/:id/chat/history', requireAuth, repoController.getChatHistory);
 router.get('/:id/insights', requireAuth, repoController.getRepoInsights);
 router.get('/:id/story', requireAuth, repoController.getRepoStory);

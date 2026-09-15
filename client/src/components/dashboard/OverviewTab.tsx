@@ -1,9 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import api from '../../lib/api';
-import { Panel, Typography, Button, Loading, ErrorState } from '../ui/DesignSystem';
+import { Loading, ErrorState } from '../ui/DesignSystem';
 import { toast } from 'sonner';
+import { OverviewCommandDeck } from './overview/OverviewCommandDeck';
+import { OverviewBriefing } from './overview/OverviewBriefing';
+import { OverviewFindings } from './overview/OverviewFindings';
+import { OverviewTopology } from './overview/OverviewTopology';
+import { OverviewConfidence } from './overview/OverviewConfidence';
+import { OverviewOnboarding } from './overview/OverviewOnboarding';
 
-interface OverviewTabProps {
+export interface OverviewTabProps {
   repositoryId: string;
   framework: string | null;
   languages: string[];
@@ -13,6 +19,13 @@ interface OverviewTabProps {
   confidence: number;
   checklist: string[];
   setActiveTab: (tab: 'summary' | 'explorer' | 'graph' | 'trace' | 'impact' | 'chat' | 'settings') => void;
+  onNavigateToExplorer?: (filePath: string) => void;
+  onNavigateToGraph?: (filePath?: string) => void;
+  onNavigateToImpact?: (filePath?: string) => void;
+  onNavigateToTrace?: (filePath?: string) => void;
+  onTriggerChat?: (prompt: string) => void;
+  investigationTarget?: string;
+  onSelectInvestigationTarget?: (target: string) => void;
 }
 
 export default function OverviewTab({
@@ -25,6 +38,13 @@ export default function OverviewTab({
   confidence,
   checklist,
   setActiveTab,
+  onNavigateToExplorer,
+  onNavigateToGraph,
+  onNavigateToImpact,
+  onNavigateToTrace,
+  onTriggerChat,
+  investigationTarget,
+  onSelectInvestigationTarget,
 }: OverviewTabProps) {
   const [story, setStory] = useState<any>(null);
   const [onboarding, setOnboarding] = useState<any>(null);
@@ -33,13 +53,11 @@ export default function OverviewTab({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
-  const [checkedOnboarding, setCheckedOnboarding] = useState<Record<number, boolean>>({
-    0: true,
-  });
 
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [showManualButton, setShowManualButton] = useState(false);
 
+  // Polling for AI summary if completed and summary missing
   useEffect(() => {
     if (!repoDetails || repoDetails.aiSummary || repoDetails.indexingStatus !== 'completed') return;
 
@@ -57,7 +75,7 @@ export default function OverviewTab({
             if (!prev) return prev;
             return {
               ...prev,
-              aiSummary: repository.aiSummary
+              aiSummary: repository.aiSummary,
             };
           });
           clearInterval(interval);
@@ -81,57 +99,50 @@ export default function OverviewTab({
       if (data.data) {
         setRepoDetails((prev: any) => ({
           ...prev,
-          aiSummary: data.data
+          aiSummary: data.data,
         }));
         toast.success('AI Repository Summary generated successfully!');
       }
     } catch (err: any) {
-      toast.error(err.message || 'Failed to generate summary.');
+      toast.error(err.response?.data?.error?.message || err.message || 'Failed to generate summary.');
     } finally {
       setSummaryLoading(false);
     }
   };
 
-  // Individual loading/error states so partial data still renders
-  const [storyLoading, setStoryLoading] = useState(true);
-  const [onboardingLoading, setOnboardingLoading] = useState(true);
-  const [insightsLoading, setInsightsLoading] = useState(true);
-  const [detailsLoading, setDetailsLoading] = useState(true);
-
   // Guard against React StrictMode double-mount and stale closures
   const fetchIdRef = useRef(0);
 
   useEffect(() => {
-    // Increment fetch generation — any in-flight request from a prior generation is ignored
     const fetchId = ++fetchIdRef.current;
     const controller = new AbortController();
     const { signal } = controller;
 
-    // Per-request 20 s timeout (lower than Axios default 30 s so we fail fast)
     const withTimeout = <T,>(promise: Promise<T>, ms = 20_000): Promise<T> => {
       let timer: ReturnType<typeof setTimeout>;
       return new Promise<T>((resolve, reject) => {
         timer = setTimeout(() => reject(new Error(`Request timed out after ${ms / 1000}s`)), ms);
         promise.then(
-          (v) => { clearTimeout(timer); resolve(v); },
-          (e) => { clearTimeout(timer); reject(e); },
+          (v) => {
+            clearTimeout(timer);
+            resolve(v);
+          },
+          (e) => {
+            clearTimeout(timer);
+            reject(e);
+          }
         );
       });
     };
 
     setLoading(true);
     setError(null);
-    setStoryLoading(true);
-    setOnboardingLoading(true);
-    setInsightsLoading(true);
-    setDetailsLoading(true);
 
     let storySucceeded = false;
     let onboardingSucceeded = false;
     let insightsSucceeded = false;
     let detailsSucceeded = false;
 
-    // Each request is independent — a timeout on one does NOT cancel the others
     const fetchStory = withTimeout(api.get(`/repos/${repositoryId}/story`, { signal }))
       .then((res) => {
         if (fetchIdRef.current === fetchId) {
@@ -139,8 +150,9 @@ export default function OverviewTab({
           storySucceeded = true;
         }
       })
-      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] story:', err.message); })
-      .finally(() => { if (fetchIdRef.current === fetchId) setStoryLoading(false); });
+      .catch((err) => {
+        if (!signal.aborted) console.warn('[OverviewTab] story:', err.message);
+      });
 
     const fetchOnboarding = withTimeout(api.get(`/repos/${repositoryId}/onboarding`, { signal }))
       .then((res) => {
@@ -149,8 +161,9 @@ export default function OverviewTab({
           onboardingSucceeded = true;
         }
       })
-      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] onboarding:', err.message); })
-      .finally(() => { if (fetchIdRef.current === fetchId) setOnboardingLoading(false); });
+      .catch((err) => {
+        if (!signal.aborted) console.warn('[OverviewTab] onboarding:', err.message);
+      });
 
     const fetchInsights = withTimeout(api.get(`/repos/${repositoryId}/insights`, { signal }))
       .then((res) => {
@@ -159,8 +172,9 @@ export default function OverviewTab({
           insightsSucceeded = true;
         }
       })
-      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] insights:', err.message); })
-      .finally(() => { if (fetchIdRef.current === fetchId) setInsightsLoading(false); });
+      .catch((err) => {
+        if (!signal.aborted) console.warn('[OverviewTab] insights:', err.message);
+      });
 
     const fetchDetails = withTimeout(api.get(`/repos/${repositoryId}`, { signal }))
       .then((res) => {
@@ -175,14 +189,13 @@ export default function OverviewTab({
         });
         detailsSucceeded = true;
       })
-      .catch((err) => { if (!signal.aborted) console.warn('[OverviewTab] details:', err.message); })
-      .finally(() => { if (fetchIdRef.current === fetchId) setDetailsLoading(false); });
+      .catch((err) => {
+        if (!signal.aborted) console.warn('[OverviewTab] details:', err.message);
+      });
 
-    // Global loading flag clears when all four settle
     Promise.allSettled([fetchStory, fetchOnboarding, fetchInsights, fetchDetails]).then(() => {
       if (fetchIdRef.current === fetchId) {
         setLoading(false);
-        // Only show the top-level error banner if every single request failed
         const allFailed = !storySucceeded && !onboardingSucceeded && !insightsSucceeded && !detailsSucceeded;
         if (allFailed) {
           const msg = 'Failed to load codebase overview. Please retry.';
@@ -197,26 +210,10 @@ export default function OverviewTab({
     };
   }, [repositoryId, retryCount]);
 
-  const formatSize = (bytes: number) => {
-    if (!bytes) return '0 B';
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  };
-
-  const handleToggleOnboarding = (idx: number) => {
-    setCheckedOnboarding(prev => ({
-      ...prev,
-      [idx]: !prev[idx]
-    }));
-  };
-
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loading message="Assembling repository overview..." type="skeleton" />
+      <div className="flex items-center justify-center py-24">
+        <Loading message="Assembling architectural briefing..." type="skeleton" />
       </div>
     );
   }
@@ -225,578 +222,123 @@ export default function OverviewTab({
     return (
       <div className="flex items-center justify-center py-20">
         <ErrorState
-          title="Repository Analysis Failed"
+          title="Repository Analysis Unavailable"
           description={error}
-          onRetry={() => setRetryCount(prev => prev + 1)}
+          onRetry={() => setRetryCount((prev) => prev + 1)}
         />
       </div>
     );
   }
 
-  // Calculate dynamic Test Coverage derived from active files & missing tests
-  const totalRelevantFiles = fileCount || 1;
-  const missingTestsCount = insights?.missingTests?.length ?? 0;
-  const testCoveragePct = Math.max(
-    35,
-    Math.round(100 - (missingTestsCount / Math.max(1, totalRelevantFiles * 0.4)) * 100)
-  );
-
-  // Maintainability Index & Tech Debt estimation
-  const circularCount = insights?.circularDependencies?.length ?? 0;
-  const deadCount = insights?.deadCode?.length ?? 0;
-  const driftCount = insights?.architecturalDrift?.length ?? 0;
-
-  let maintainabilityGrade = 'A+';
-  let techDebtLevel = 'Low';
-
-  if (circularCount > 3 || driftCount > 5) {
-    maintainabilityGrade = 'C';
-    techDebtLevel = 'High';
-  } else if (circularCount > 0 || driftCount > 1 || deadCount > 5) {
-    maintainabilityGrade = 'B';
-    techDebtLevel = 'Medium';
-  }
-
-  // Resolve onboarding checkbox items dynamically
-  const onboardingSteps: { title: string; desc: string }[] = [];
-  if (onboarding) {
-    if (onboarding.prerequisites && onboarding.prerequisites.length > 0) {
-      onboardingSteps.push({
-        title: "Review Prerequisites",
-        desc: onboarding.prerequisites.join(", ")
-      });
-    }
-    if (onboarding.setupCommands && onboarding.setupCommands.length > 0) {
-      onboardingSteps.push({
-        title: "Initialize Local Dev Env",
-        desc: `Run '${onboarding.setupCommands.join(" && ")}'`
-      });
-    }
-    if (entryPoints && entryPoints.length > 0) {
-      onboardingSteps.push({
-        title: "Trace Primary Entrypoints",
-        desc: `Inspect ${entryPoints.slice(0, 2).join(", ")}`
-      });
-    }
-    if (onboarding.runCommands && onboarding.runCommands.length > 0) {
-      onboardingSteps.push({
-        title: "Execute Application Run Scripts",
-        desc: onboarding.runCommands[0]
-      });
-    }
-  }
-  // Fallbacks if onboarding is empty
-  if (onboardingSteps.length === 0) {
-    onboardingSteps.push(
-      { title: "Review /docs/architecture.md", desc: "Understand the High-Level Design (HLD)" },
-      { title: "Initialize Local Dev Env", desc: "Run 'npm run archon:setup'" },
-      { title: "Trace Auth Flow", desc: "Debug middleware.ts in Explorer" },
-      { title: "Submit first 'Dry-Run'", desc: "Use the Impact tool to verify changes" }
-    );
-  }
+  // Derive findings stats from real backend data
+  const architecturalDrift = insights?.architecturalDrift || [];
+  const circularDependencies = insights?.circularDependencies || [];
+  const centralityHotspots = insights?.centralityHotspots || [];
+  const missingTests = insights?.missingTests || [];
+  const deadCode = insights?.deadCode || [];
 
   // Parse dependency graph stats
   const depGraph = repoDetails?.dependencyGraph || {};
-  const nodesList = Object.keys(depGraph);
-  const calculatedEdgesCount = Object.values(depGraph).reduce((acc: number, val: any) => acc + (val?.length || 0), 0);
-  const calculatedNodesCount = repoDetails?.fileCount || nodesList.length;
+  const calculatedEdgesCount = Object.values(depGraph).reduce(
+    (acc: number, val: any) => acc + (Array.isArray(val) ? val.length : 0),
+    0
+  );
+  const calculatedNodesCount = repoDetails?.fileCount || Object.keys(depGraph).length || fileCount;
 
-  const renderMiniGraph = () => {
-    if (!depGraph || Object.keys(depGraph).length === 0) {
-      return (
-        <div className="absolute inset-0 flex items-center justify-center text-on-surface-variant/40 font-code-base text-[11px]">
-          No active dependencies resolved
-        </div>
-      );
+  // Real confidence and checklist from backend
+  const resolvedConfidence = repoDetails?.confidenceDetails?.score ?? confidence;
+  const resolvedChecklist = repoDetails?.confidenceDetails?.checklist ?? checklist;
+
+  const scrollToFindings = () => {
+    const el = document.getElementById('overview-findings');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
     }
-    
-    // Choose up to 25 nodes to display to keep the visualizer clean and high density
-    const keys = Object.keys(depGraph).slice(0, 25);
-    const nodeCoords = keys.map((key, index) => {
-      const angle = (index / keys.length) * 2 * Math.PI;
-      const radius = 60 + (index % 3) * 20; // spiral radius variation
-      const x = 200 + Math.cos(angle) * radius;
-      const y = 120 + Math.sin(angle) * radius;
-      return { id: key, x, y };
-    });
-
-    const lines: any[] = [];
-    nodeCoords.forEach((node) => {
-      const targets = depGraph[node.id] || [];
-      targets.forEach((target: string) => {
-        const targetNode = nodeCoords.find(n => n.id === target);
-        if (targetNode) {
-          lines.push({
-            x1: node.x,
-            y1: node.y,
-            x2: targetNode.x,
-            y2: targetNode.y,
-            key: `${node.id}-${target}`
-          });
-        }
-      });
-    });
-
-    return (
-      <svg className="w-full h-full" style={{ background: '#131316' }}>
-        {/* Draw edges */}
-        {lines.map((line, idx) => (
-          <line
-            key={line.key || idx}
-            x1={line.x1}
-            y1={line.y1}
-            x2={line.x2}
-            y2={line.y2}
-            stroke="#47464a"
-            strokeWidth="0.5"
-            strokeOpacity="0.4"
-          />
-        ))}
-        {/* Draw nodes */}
-        {nodeCoords.map((node) => {
-          const isEntry = entryPoints.includes(node.id);
-          return (
-            <g key={node.id}>
-              <circle
-                cx={node.x}
-                cy={node.y}
-                r={isEntry ? 5 : 3.5}
-                fill={isEntry ? '#adc6ff' : '#1f1f22'}
-                stroke={isEntry ? '#0566d9' : '#919095'}
-                strokeWidth={isEntry ? 1.5 : 1}
-              />
-            </g>
-          );
-        })}
-      </svg>
-    );
   };
-
-  const getPrimaryLanguage = () => {
-    const langs = repoDetails?.languages || languages;
-    if (!langs) return 'TypeScript';
-    if (Array.isArray(langs)) {
-      return langs[0] || 'TypeScript';
-    }
-    if (typeof langs === 'object') {
-      const keys = Object.keys(langs);
-      return keys[0] || 'TypeScript';
-    }
-    return 'TypeScript';
-  };
-
-  const primaryLang = getPrimaryLanguage();
 
   return (
-    <div className="space-y-6">
-      {/* ── Repository Identity & Header Section ── */}
-      <section className="col-span-12 mb-8 flex items-end justify-between border-b border-outline-variant pb-6">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <span className="bg-secondary-container/20 text-secondary text-[11px] font-label-caps px-2 py-0.5 rounded border border-secondary/30">
-              {repoDetails?.isLocal ? 'LOCAL' : 'PUBLIC'}
-            </span>
-            <span className="text-on-surface-variant font-code-base text-code-base">
-              {repoDetails?.owner ? `${repoDetails.owner} / ` : ''}{repoDetails?.name || 'workspace'}
-            </span>
-          </div>
-          <h2 className="font-display text-display tracking-tight text-on-surface">System Overview</h2>
-          <div className="flex items-center gap-4 mt-3 text-on-surface-variant font-body-sm">
-            <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#3178c6]"></span>
-              <span>{primaryLang}</span>
-            </div>
-            {framework && (
-              <div className="flex items-center gap-1.5">
-                <span>{framework}</span>
-              </div>
-            )}
-          </div>
-        </div>
-        <button 
-          onClick={() => setActiveTab('explorer')}
-          className="bg-[#3b82f6] text-white px-6 py-2.5 font-medium rounded flex items-center gap-2 hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/10 cursor-pointer"
-        >
-          <svg className="w-4 h-4 fill-current shrink-0" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-          Start Exploring
-        </button>
-      </section>
+    <div className="max-w-[1400px] mx-auto pb-16 space-y-2">
+      {/* ────────────────────────────────────────────────────────── */}
+      {/* LEVEL 1: REPOSITORY IDENTITY & ARCHITECTURAL CONDITION    */}
+      {/* ────────────────────────────────────────────────────────── */}
+      <OverviewCommandDeck
+        name={repoDetails?.name || 'Workspace'}
+        owner={repoDetails?.owner}
+        isLocal={repoDetails?.isLocal}
+        framework={repoDetails?.framework || framework}
+        languages={repoDetails?.languages || languages}
+        fileCount={calculatedNodesCount}
+        totalSize={repoDetails?.totalSize || totalSize}
+        confidence={resolvedConfidence}
+        entryPointsCount={entryPoints.length}
+        driftCount={architecturalDrift.length}
+        circularCount={circularDependencies.length}
+        hotspotsCount={centralityHotspots.length}
+        onNavigateToExplorer={() => onNavigateToExplorer?.(entryPoints[0] || '')}
+        onNavigateToGraph={() => onNavigateToGraph?.()}
+        onScrollToFindings={scrollToFindings}
+      />
 
-      {/* ── Repository Summary Section ── */}
-      {repoDetails && (
-        repoDetails.aiSummary ? (
-          <Panel className="p-6 border border-[#27272a]" variant="lowest">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center border-b border-[#27272a]/60 pb-4 mb-5 gap-3">
-              <div>
-                <h3 className="text-[12px] font-mono font-bold text-white tracking-wider uppercase">
-                  Repository Summary
-                </h3>
-                <p className="text-[11px] font-mono text-[#919095] mt-0.5">
-                  AI-generated technical overview & business context
-                </p>
-              </div>
-              
-              {/* Complexity Badge */}
-              <div className="flex items-center gap-2 select-none">
-                <span className="text-[10px] font-mono text-[#919095]">COMPLEXITY:</span>
-                <span className={`text-[10.5px] font-mono font-bold px-2.5 py-0.5 rounded border ${
-                  repoDetails.aiSummary.complexity === 'Low'
-                    ? 'bg-emerald-950/20 border-emerald-900/40 text-emerald-400'
-                    : repoDetails.aiSummary.complexity === 'Medium'
-                    ? 'bg-amber-950/20 border-amber-900/40 text-amber-400'
-                    : 'bg-red-950/20 border-red-900/40 text-red-400'
-                }`}>
-                  {(repoDetails.aiSummary.complexity || 'Medium').toUpperCase()}
-                </span>
-              </div>
-            </div>
+      {/* ────────────────────────────────────────────────────────── */}
+      {/* LEVEL 1: AI TECHNICAL BRIEFING (Subordinate synthesis)     */}
+      {/* ────────────────────────────────────────────────────────── */}
+      <OverviewBriefing
+        summaryData={repoDetails?.aiSummary}
+        indexingStatus={repoDetails?.indexingStatus}
+        summaryLoading={summaryLoading}
+        showManualButton={showManualButton}
+        onGenerateSummary={handleGenerateSummary}
+        onExploreModule={(module) => onNavigateToExplorer?.(module)}
+        onTriggerChat={onTriggerChat}
+      />
 
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-6 select-text">
-              {/* Left part: Overview (What is it, purpose, target users) */}
-              <div className="md:col-span-7 space-y-5">
-                <div>
-                  <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
-                    What is this repository?
-                  </h4>
-                  <p className="text-[13.5px] leading-relaxed text-[#c8c5ca] font-sans">
-                    {repoDetails.aiSummary.summary}
-                  </p>
-                </div>
+      {/* ────────────────────────────────────────────────────────── */}
+      {/* LEVEL 2: ARCHITECTURAL HEALTH & CRITICAL FINDINGS          */}
+      {/* ────────────────────────────────────────────────────────── */}
+      <OverviewFindings
+        architecturalDrift={architecturalDrift}
+        circularDependencies={circularDependencies}
+        centralityHotspots={centralityHotspots}
+        missingTests={missingTests}
+        deadCode={deadCode}
+        onNavigateToExplorer={onNavigateToExplorer}
+        onNavigateToGraph={onNavigateToGraph}
+        onNavigateToImpact={onNavigateToImpact}
+        onTriggerChat={onTriggerChat}
+      />
 
-                <div>
-                  <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
-                    Main Purpose
-                  </h4>
-                  <p className="text-[13px] leading-relaxed text-white font-mono bg-[#131316] border border-[#27272a] p-3 rounded-[6px]">
-                    {repoDetails.aiSummary.purpose}
-                  </p>
-                </div>
+      {/* ────────────────────────────────────────────────────────── */}
+      {/* LEVEL 2: ARCHITECTURE TOPOLOGY & REQUEST LIFECYCLE        */}
+      {/* ────────────────────────────────────────────────────────── */}
+      <OverviewTopology
+        architectureType={story?.architectureType || repoDetails?.framework ? `${repoDetails?.framework} Architecture` : undefined}
+        executionFlowStory={story?.executionFlowStory}
+        entryPoints={entryPoints}
+        dependencyGraph={depGraph}
+        calculatedNodesCount={calculatedNodesCount}
+        calculatedEdgesCount={calculatedEdgesCount}
+        onNavigateToGraph={() => onNavigateToGraph?.()}
+        onNavigateToExplorer={onNavigateToExplorer}
+      />
 
-                {Array.isArray(repoDetails.aiSummary.targetUsers) && repoDetails.aiSummary.targetUsers.length > 0 && (
-                  <div>
-                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
-                      Target Users
-                    </h4>
-                    <div className="flex flex-wrap gap-1.5 select-none">
-                      {repoDetails.aiSummary.targetUsers.map((u: string, idx: number) => (
-                        <span key={idx} className="bg-[#1f1f22] border border-[#27272a] text-[#c8c5ca] text-[11px] font-mono px-2 py-0.5 rounded">
-                          {u}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+      {/* ────────────────────────────────────────────────────────── */}
+      {/* LEVEL 3: ANALYSIS CONFIDENCE & DETERMINISTIC EVIDENCE      */}
+      {/* ────────────────────────────────────────────────────────── */}
+      <OverviewConfidence
+        confidence={resolvedConfidence}
+        checklist={resolvedChecklist}
+      />
 
-              {/* Right part: Features, modules, tech stack */}
-              <div className="md:col-span-5 space-y-5 border-t md:border-t-0 md:border-l border-[#27272a]/60 pt-5 md:pt-0 md:pl-6">
-                {Array.isArray(repoDetails.aiSummary.keyFeatures) && repoDetails.aiSummary.keyFeatures.length > 0 && (
-                  <div>
-                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
-                      Key Features
-                    </h4>
-                    <ul className="list-disc pl-4 space-y-1 text-[12.5px] text-[#c8c5ca]">
-                      {repoDetails.aiSummary.keyFeatures.map((f: string, idx: number) => (
-                        <li key={idx}>{f}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {Array.isArray(repoDetails.aiSummary.coreModules) && repoDetails.aiSummary.coreModules.length > 0 && (
-                  <div>
-                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
-                      Core Modules
-                    </h4>
-                    <div className="flex flex-wrap gap-1.5 select-none">
-                      {repoDetails.aiSummary.coreModules.map((m: string, idx: number) => (
-                        <span key={idx} className="bg-[#3b82f6]/5 border border-[#3b82f6]/15 text-[#60a5fa] text-[10.5px] font-mono px-2 py-0.5 rounded">
-                          {m}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {Array.isArray(repoDetails.aiSummary.techStack) && repoDetails.aiSummary.techStack.length > 0 && (
-                  <div>
-                    <h4 className="text-[11px] font-mono font-bold text-[#919095] uppercase tracking-wider mb-2">
-                      Tech Stack
-                    </h4>
-                    <div className="flex flex-wrap gap-1.5 select-none">
-                      {repoDetails.aiSummary.techStack.map((t: string, idx: number) => (
-                        <span key={idx} className="bg-[#1a1a1e] border border-[#27272a] text-white text-[10.5px] font-mono px-2 py-0.5 rounded">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </Panel>
-        ) : (
-          showManualButton ? (
-            <Panel className="p-6 border border-dashed border-[#27272a] text-center animate-fade-in" variant="lowest">
-              <h3 className="text-[12px] font-mono font-bold text-[#919095] tracking-wider uppercase mb-1">
-                AI-Powered Repository Summary
-              </h3>
-              <p className="text-[13px] text-[#919095] max-w-md mx-auto mb-4 leading-relaxed">
-                Generate a structured business and technical overview of this codebase to understand its domain, purpose, and stack within 30 seconds.
-              </p>
-              <button
-                onClick={handleGenerateSummary}
-                disabled={summaryLoading}
-                className="bg-[#3b82f6]/10 hover:bg-[#3b82f6]/20 border border-[#3b82f6]/30 text-[#60a5fa] hover:text-white px-5 py-2 font-mono text-[12px] font-bold rounded transition-all cursor-pointer disabled:opacity-50"
-              >
-                {summaryLoading ? 'GENERATING SUMMARY...' : 'GENERATE AI SUMMARY'}
-              </button>
-            </Panel>
-          ) : (
-            <Panel className="p-6 border border-dashed border-[#27272a]/60 text-center bg-[#09090b]/40" variant="lowest">
-              <div className="flex flex-col items-center justify-center py-4 select-none">
-                <div className="w-5.5 h-5.5 border-2 border-[#3b82f6]/20 border-t-[#3b82f6] rounded-full animate-spin mb-3"></div>
-                <h3 className="text-[12px] font-mono font-bold text-[#e4e4e7] tracking-wider uppercase mb-1 animate-pulse">
-                  Generating AI Codebase Summary...
-                </h3>
-                <p className="text-[11.5px] font-mono text-[#71717a] max-w-sm mx-auto leading-relaxed mt-1">
-                  Analyzing architecture, entry points, and module interfaces in the background. Should render shortly.
-                </p>
-              </div>
-            </Panel>
-          )
-        )
-      )}
-
-      {/* ── Main Canvas Grid ── */}
-      <div className="grid grid-cols-12 gap-6">
-        
-        {/* LEFT COLUMN: Narrative, Entry Points, & Visualizer */}
-        <div className="col-span-12 lg:col-span-8 space-y-6">
-          
-          {/* Section 1: Repository Story */}
-          {story && (
-            <Panel className="p-6 relative overflow-hidden group" variant="lowest">
-              <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-4">REPOSITORY STORY</h3>
-              <div className="space-y-4 max-w-2xl">
-                <p className="text-[13px] leading-relaxed text-[#fafafa]">
-                  This repository implements a <strong>{story.architectureType}</strong> paradigm. It contains {calculatedNodesCount} source files with active dependency bounds spanning multiple integration modules.
-                </p>
-                <p className="text-[13px] leading-relaxed text-[#c8c5ca]">
-                  {story.domain}. The structural narrative follows automated system execution paradigms resolved directly from AST imports and dependency centralities.
-                </p>
-              </div>
-            </Panel>
-          )}
-
-          {/* Section 2: Entry Points Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Primary Controllers */}
-            <Panel className="p-6" variant="lowest">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">PRIMARY CONTROLLERS</h3>
-                <span className="text-[#919095] font-mono text-[11px]">{entryPoints.length} Active</span>
-              </div>
-              <ul className="space-y-3">
-                {entryPoints.slice(0, 5).map((file) => (
-                  <li key={file} className="flex items-center justify-between group cursor-pointer" onClick={() => setActiveTab('explorer')}>
-                    <div className="flex items-center gap-3">
-                      <svg className="w-4 h-4 text-[#919095] group-hover:text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                        <rect x="4" y="4" width="6" height="6" rx="1" />
-                        <rect x="14" y="14" width="6" height="6" rx="1" />
-                        <path d="M10 7h2a2 2 0 012 2v5m-4-7V5a2 2 0 00-2-2H4M14 17h2a2 2 0 002-2v-2" />
-                      </svg>
-                      <span className="font-mono text-[12px] text-[#c8c5ca] group-hover:text-[#fafafa] group-hover:underline truncate max-w-[200px]">{file.split('/').pop()}</span>
-                    </div>
-                    <svg className="w-4 h-4 text-current opacity-0 group-hover:opacity-100 transition-opacity shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </li>
-                ))}
-                {entryPoints.length === 0 && (
-                  <li className="text-[#919095] text-[11px] italic">No active entry controllers detected.</li>
-                )}
-              </ul>
-            </Panel>
-
-            {/* Core Services */}
-            <Panel className="p-6" variant="lowest">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">CORE SERVICES</h3>
-                <span className="text-[#919095] font-mono text-[11px]">{story?.coreHotspots?.length || 0} Registered</span>
-              </div>
-              <ul className="space-y-3">
-                {(story?.coreHotspots || []).slice(0, 5).map((file: string) => (
-                  <li key={file} className="flex items-center justify-between group cursor-pointer" onClick={() => setActiveTab('explorer')}>
-                    <div className="flex items-center gap-3">
-                      <svg className="w-4 h-4 text-[#919095] group-hover:text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span className="font-mono text-[12px] text-[#c8c5ca] group-hover:text-[#fafafa] group-hover:underline truncate max-w-[200px]">{file.split('/').pop()}</span>
-                    </div>
-                    <svg className="w-4 h-4 text-current opacity-0 group-hover:opacity-100 transition-opacity shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </li>
-                ))}
-                {(!story?.coreHotspots || story.coreHotspots.length === 0) && (
-                  <li className="text-[#919095] text-[11px] italic">No core services resolved.</li>
-                )}
-              </ul>
-            </Panel>
-          </div>
-
-          {/* Section 3: Technical Visualizer Space */}
-          <div className="h-64 border border-[#27272a] relative bg-[#131316] overflow-hidden rounded-[8px]">
-            <div className="absolute inset-0">
-              {renderMiniGraph()}
-            </div>
-            <div className="absolute bottom-4 left-4 z-10">
-              <p className="text-[9px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-1">REAL-TIME DEPENDENCY MAPPING</p>
-              <div className="flex gap-2">
-                <div className="px-2 py-0.5 bg-[#131316]/80 border border-[#27272a] rounded text-[10px] font-mono text-[#c8c5ca]">
-                  Nodes: {calculatedNodesCount}
-                </div>
-                <div className="px-2 py-0.5 bg-[#131316]/80 border border-[#27272a] rounded text-[10px] font-mono text-[#c8c5ca]">
-                  Edges: {calculatedEdgesCount}
-                </div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        {/* RIGHT COLUMN: Stats & Onboarding Checklist */}
-        <div className="col-span-12 lg:col-span-4 space-y-6">
-          
-          {/* Card 1: Complexity & Health */}
-          <Panel className="p-6" variant="lowest">
-            <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-6">COMPLEXITY & HEALTH</h3>
-            <div className="space-y-6">
-              {/* Cyclomatic Complexity */}
-              <div>
-                <div className="flex justify-between items-end mb-2">
-                  <span className="text-[12px] text-[#c8c5ca]">Cyclomatic Complexity</span>
-                  <span className="font-mono text-[14px] font-bold text-[#fafafa]">
-                    14.2 <span className="text-xs text-red-400">↑2%</span>
-                  </span>
-                </div>
-                <div className="h-1 bg-[#1f1f22] rounded-full overflow-hidden">
-                  <div className="h-full bg-[#facc15] w-[65%]" />
-                </div>
-              </div>
-
-              {/* Test Coverage */}
-              <div>
-                <div className="flex justify-between items-end mb-2">
-                  <span className="text-[12px] text-[#c8c5ca]">Test Coverage</span>
-                  <span className="font-mono text-[14px] font-bold text-[#fafafa]">
-                    {testCoveragePct}%
-                  </span>
-                </div>
-                <div className="h-1 bg-[#1f1f22] rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-500" style={{ width: `${testCoveragePct}%` }} />
-                </div>
-              </div>
-
-              {/* Build Success Rate */}
-              <div>
-                <div className="flex justify-between items-end mb-2">
-                  <span className="text-[12px] text-[#c8c5ca]">Build Success Rate</span>
-                  <span className="font-mono text-[14px] font-bold text-[#fafafa]">
-                    {confidence}%
-                  </span>
-                </div>
-                <div className="h-1 bg-[#1f1f22] rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-500" style={{ width: `${confidence}%` }} />
-                </div>
-              </div>
-
-              {/* Footer Row */}
-              <div className="pt-4 border-t border-[#27272a] grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-[9px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-1">MAINTAINABILITY</p>
-                  <p className="font-mono text-[13px] font-semibold text-[#fafafa]">{maintainabilityGrade}</p>
-                </div>
-                <div>
-                  <p className="text-[9px] font-mono font-bold text-[#919095] tracking-widest uppercase mb-1">TECH DEBT</p>
-                  <p className="font-mono text-[13px] font-semibold text-[#fafafa]">{techDebtLevel}</p>
-                </div>
-              </div>
-            </div>
-          </Panel>
-
-          {/* Card 2: Engineering Onboarding */}
-          <Panel className="p-6" variant="lowest">
-            <div className="flex items-center gap-2 mb-6">
-              <svg className="w-4 h-4 text-[#3b82f6] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 14l9-5-9-5-9 5 9 5z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
-              </svg>
-              <h3 className="text-[10px] font-mono font-bold text-[#919095] tracking-widest uppercase">ENGINEERING ONBOARDING</h3>
-            </div>
-            
-            <div className="space-y-4">
-              {onboardingSteps.map((step, idx) => {
-                const isChecked = !!checkedOnboarding[idx];
-                return (
-                  <label key={idx} className="flex items-start gap-3 group cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => handleToggleOnboarding(idx)}
-                      className="mt-1 w-4 h-4 bg-[#09090b] border border-[#27272a] text-[#3b82f6] focus:ring-0 rounded-sm cursor-pointer shrink-0"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[12.5px] font-medium text-[#c8c5ca] group-hover:text-[#fafafa] transition-colors">{step.title}</p>
-                      <p className="text-[11px] text-[#919095] mt-0.5">{step.desc}</p>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-            
-            <button 
-              onClick={() => setActiveTab('chat')}
-              className="w-full mt-6 border border-[#27272a] hover:border-[#3b82f6]/40 py-2 rounded text-[10px] font-mono font-bold tracking-wider text-[#fafafa] hover:bg-[#1f1f22] transition-colors cursor-pointer"
-            >
-              VIEW FULL LEARNING PATH
-            </button>
-          </Panel>
-
-          {/* Card 3: System Meta */}
-          {repoDetails && (
-            <Panel className="p-4 font-mono text-[11px] text-[#919095] space-y-2" variant="lowest">
-              <div className="flex justify-between">
-                <span>Repository Type</span>
-                <span className="text-[#fafafa]">{repoDetails.isLocal ? 'Local Directory' : 'Remote GitHub'}</span>
-              </div>
-              {!!repoDetails.totalSize && (
-                <div className="flex justify-between">
-                  <span>Total Size</span>
-                  <span className="text-[#fafafa]">{formatSize(repoDetails.totalSize)}</span>
-                </div>
-              )}
-              {calculatedNodesCount > 0 && (
-                <div className="flex justify-between">
-                  <span>File Count</span>
-                  <span className="text-[#fafafa]">{calculatedNodesCount} files</span>
-                </div>
-              )}
-              {repoDetails.isIndexed !== undefined && (
-                <div className="flex justify-between">
-                  <span>Scanned Status</span>
-                  <span className="text-[#fafafa]">{repoDetails.isIndexed ? 'Fully Indexed' : 'Partially Scanned'}</span>
-                </div>
-              )}
-            </Panel>
-          )}
-
-        </div>
-
-      </div>
+      {/* ────────────────────────────────────────────────────────── */}
+      {/* LEVEL 3: DEVELOPER ONBOARDING RUNBOOK                     */}
+      {/* ────────────────────────────────────────────────────────── */}
+      <OverviewOnboarding
+        onboarding={onboarding}
+        entryPoints={entryPoints}
+        coreHotspots={story?.coreHotspots || []}
+        onNavigateToExplorer={onNavigateToExplorer}
+        onTriggerChat={onTriggerChat}
+      />
     </div>
   );
 }
