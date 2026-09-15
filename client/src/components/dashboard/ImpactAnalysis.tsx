@@ -80,7 +80,8 @@ function computeLocalBlastRadius(targetFile: string, dependencyGraph: Record<str
   const normalizedTarget = targetFile.replace(/\\/g, '/');
   let inDegree = 0;
   for (const [file, imports] of Object.entries(dependencyGraph)) {
-    if (file === normalizedTarget) continue;
+    const normFile = file.replace(/\\/g, '/');
+    if (normFile === normalizedTarget) continue;
     if (Array.isArray(imports) && imports.some(imp => imp.replace(/\\/g, '/') === normalizedTarget)) {
       inDegree++;
     }
@@ -95,8 +96,10 @@ function computeLocalBlastRadius(targetFile: string, dependencyGraph: Record<str
     maxDepth = Math.max(maxDepth, depth);
 
     for (const [file, imports] of Object.entries(dependencyGraph)) {
+      const normFile = file.replace(/\\/g, '/');
+      if (normFile === current) continue;
       if (Array.isArray(imports) && imports.some(imp => imp.replace(/\\/g, '/') === current)) {
-        dfs(file.replace(/\\/g, '/'), depth + 1);
+        dfs(normFile, depth + 1);
       }
     }
   }
@@ -176,6 +179,19 @@ export default function ImpactAnalysis({
 
   // 2. Inspected node state for detail drawer / sidebar
   const [inspectedFile, setInspectedFile] = useState<string | null>(null);
+  const inspectorRef = useRef<HTMLDivElement>(null);
+  const [isInspectorPulsing, setIsInspectorPulsing] = useState(false);
+
+  // Helper to focus, inspect, and smoothly highlight any node in the inspector
+  const handleInspectNode = useCallback((filePath: string) => {
+    setInspectedFile(filePath);
+    setIsInspectorPulsing(true);
+    setTimeout(() => setIsInspectorPulsing(false), 1500);
+
+    if (inspectorRef.current) {
+      inspectorRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, []);
 
   // 3. Search & filter in target switcher
   const [targetSearchQuery, setTargetSearchQuery] = useState('');
@@ -958,22 +974,26 @@ ${
                   </div>
 
                   <button
-                    onClick={() => setInspectedFile(selectedFile)}
-                    className="self-start sm:self-center px-3 py-1.5 bg-[#1e1e22] hover:bg-[#27272a] border border-[#34343a] text-xs font-mono text-zinc-300 hover:text-white rounded-lg transition-colors cursor-pointer shrink-0"
+                    onClick={() => {
+                      handleInspectNode(selectedFile);
+                      toast.success('Inspecting Origin Target in inspector', { duration: 1500 });
+                    }}
+                    className="self-start sm:self-center px-3.5 py-1.5 bg-[#1e1e22] hover:bg-[#27272a] border border-[#34343a] hover:border-purple-500/50 text-xs font-mono text-zinc-300 hover:text-white rounded-lg transition-all cursor-pointer shrink-0 flex items-center gap-1.5 active:scale-95 shadow-sm"
                   >
-                    Inspect Origin Details →
+                    <span>Inspect Origin Details</span>
+                    <span className="text-purple-400">→</span>
                   </button>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-[#27272a] flex flex-wrap items-center gap-4 text-xs font-mono text-zinc-400">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5" title="Number of files this module imports to function (dependencies this file relies on)">
                     <span className="text-zinc-500">Imports Outbound:</span>
                     <span className="text-zinc-200 font-semibold">
                       {dependencyGraph?.[selectedFile.replace(/\\/g, '/')]?.length || 0} files
                     </span>
                   </div>
                   <div className="text-zinc-600">•</div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5" title="Number of downstream files that directly import this file (direct blast radius)">
                     <span className="text-zinc-500">Direct Inbound Dependents:</span>
                     <span className="text-purple-300 font-semibold">{directDependents.length} files</span>
                   </div>
@@ -1035,7 +1055,7 @@ ${
                       return (
                         <div
                           key={dep}
-                          onClick={() => setInspectedFile(dep)}
+                          onClick={() => handleInspectNode(dep)}
                           className={`p-3 rounded-lg border transition-all cursor-pointer flex flex-col justify-between group ${
                             isInspected
                               ? 'bg-blue-950/30 border-blue-500/70 shadow-[0_0_15px_rgba(59,130,246,0.15)]'
@@ -1119,7 +1139,7 @@ ${
                       return (
                         <div
                           key={ind}
-                          onClick={() => setInspectedFile(ind)}
+                          onClick={() => handleInspectNode(ind)}
                           className={`p-3 rounded-lg border transition-all cursor-pointer flex flex-col justify-between group ${
                             isInspected
                               ? 'bg-amber-950/30 border-amber-500/70 shadow-[0_0_15px_rgba(245,158,11,0.15)]'
@@ -1189,7 +1209,7 @@ ${
                       return (
                         <div
                           key={route}
-                          onClick={() => setInspectedFile(route)}
+                          onClick={() => handleInspectNode(route)}
                           className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center justify-between text-xs font-mono group ${
                             isInspected
                               ? 'bg-cyan-950/30 border-cyan-500/70'
@@ -1232,14 +1252,26 @@ ${
             </div>
 
             {/* RIGHT 4 COLS: STICKY NODE INVESTIGATION INSPECTOR */}
-            <div className="lg:col-span-4 sticky top-24 space-y-5">
-              <div className="bg-[#131316] border border-[#27272a] rounded-xl p-5 shadow-2xl relative overflow-hidden">
+            <div className="lg:col-span-4 sticky top-24 space-y-5" ref={inspectorRef}>
+              <div className={`bg-[#131316] border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-500 ${
+                isInspectorPulsing
+                  ? 'border-purple-500 ring-2 ring-purple-500/60 shadow-[0_0_25px_rgba(168,85,247,0.25)]'
+                  : 'border-[#27272a]'
+              }`}>
                 <div className="flex items-center justify-between pb-3 border-b border-[#27272a]">
-                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400">
-                    Affected Node Inspector
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400">
+                      Affected Node Inspector
+                    </span>
+                    {inspectedFile === selectedFile && (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-purple-950/70 text-purple-300 border border-purple-800/50 font-semibold">
+                        ORIGIN TARGET
+                      </span>
+                    )}
+                  </div>
                   {inspectedFile && (
-                    <span className="text-[10px] font-mono text-zinc-500">
+                    <span className="text-[10px] font-mono text-purple-400 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
                       Active Investigation
                     </span>
                   )}
