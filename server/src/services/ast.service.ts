@@ -9,10 +9,60 @@ export interface ASTMetadata {
 }
 
 /**
- * Parses a TS/JS file content using the TypeScript compiler API.
+ * Parses source file content (TypeScript, JavaScript, Python).
  * Extracts imports, exports, functions, and classes.
  */
 export function parseSourceFile(filePath: string, fileContent: string): ASTMetadata {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+
+  // Handle Python files via robust regex pattern matching
+  if (normalizedPath.endsWith('.py')) {
+    const pyImports: string[] = [];
+    const pyExports: string[] = [];
+    const pyFunctions: string[] = [];
+    const pyClasses: string[] = [];
+
+    const lines = fileContent.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('#') || !trimmed) continue;
+
+      // Match: from .foo import bar, from foo.bar import baz, from ..utils import helper
+      const fromMatch = trimmed.match(/^from\s+([.\w]+)\s+import\s+/);
+      if (fromMatch) {
+        pyImports.push(fromMatch[1]);
+      } else {
+        // Match: import foo, import foo.bar
+        const importMatch = trimmed.match(/^import\s+([.\w]+)/);
+        if (importMatch) {
+          pyImports.push(importMatch[1]);
+        }
+      }
+
+      // Match function declarations: def my_func(
+      const funcMatch = trimmed.match(/^def\s+([a-zA-Z_]\w*)\s*\(/);
+      if (funcMatch) {
+        pyFunctions.push(funcMatch[1]);
+        pyExports.push(funcMatch[1]);
+      }
+
+      // Match class declarations: class MyClass: or class MyClass(Base):
+      const classMatch = trimmed.match(/^class\s+([a-zA-Z_]\w*)\s*[:\(]/);
+      if (classMatch) {
+        pyClasses.push(classMatch[1]);
+        pyExports.push(classMatch[1]);
+      }
+    }
+
+    return {
+      imports: Array.from(new Set(pyImports)),
+      exports: Array.from(new Set(pyExports)),
+      functions: Array.from(new Set(pyFunctions)),
+      classes: Array.from(new Set(pyClasses)),
+    };
+  }
+
+  // Handle TypeScript & JavaScript files
   let sourceFile: ts.SourceFile;
   try {
     sourceFile = ts.createSourceFile(filePath, fileContent, ts.ScriptTarget.Latest, true);
@@ -27,13 +77,28 @@ export function parseSourceFile(filePath: string, fileContent: string): ASTMetad
   const classes: string[] = [];
 
   function visit(node: ts.Node) {
-    // 1. Extract Imports
+    // 1. Extract Imports (Static imports)
     if (ts.isImportDeclaration(node)) {
       if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
         imports.push(node.moduleSpecifier.text);
       }
-    } else if (ts.isCallExpression(node)) {
-      // Capture CommonJS require statements
+    }
+    // 2. Extract Re-Exports & Barrel Module Specifiers:
+    // export * from './foo' or export { bar } from './foo' or export * as x from './foo'
+    else if (ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        imports.push(node.moduleSpecifier.text);
+      }
+      if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+        node.exportClause.elements.forEach(el => {
+          exports.push(el.name.text);
+        });
+      } else if (node.exportClause && ts.isNamespaceExport(node.exportClause)) {
+        exports.push(node.exportClause.name.text);
+      }
+    }
+    // 3. Dynamic import() and CommonJS require()
+    else if (ts.isCallExpression(node)) {
       if (
         ts.isIdentifier(node.expression) &&
         node.expression.text === 'require' &&
@@ -41,17 +106,33 @@ export function parseSourceFile(filePath: string, fileContent: string): ASTMetad
         ts.isStringLiteral(node.arguments[0])
       ) {
         imports.push((node.arguments[0] as ts.StringLiteral).text);
+      } else if (
+        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        node.arguments.length >= 1 &&
+        ts.isStringLiteral(node.arguments[0])
+      ) {
+        imports.push((node.arguments[0] as ts.StringLiteral).text);
       }
     }
-
-    // 2. Extract Exports
-    if (ts.isExportDeclaration(node)) {
-      if (node.exportClause && ts.isNamedExports(node.exportClause)) {
-        node.exportClause.elements.forEach(el => {
-          exports.push(el.name.text);
-        });
+    // 4. import x = require('...')
+    else if (ts.isImportEqualsDeclaration(node)) {
+      if (
+        ts.isExternalModuleReference(node.moduleReference) &&
+        ts.isStringLiteral(node.moduleReference.expression)
+      ) {
+        imports.push(node.moduleReference.expression.text);
       }
-    } else if (ts.canHaveModifiers(node) && ts.getModifiers(node)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+    }
+    // 5. Default Export assignments
+    else if (ts.isExportAssignment(node)) {
+      if (ts.isIdentifier(node.expression)) {
+        exports.push(node.expression.text);
+      } else {
+        exports.push('default');
+      }
+    }
+    // 6. Named export statements
+    else if (ts.canHaveModifiers(node) && ts.getModifiers(node)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
       if (ts.isFunctionDeclaration(node) && node.name) {
         exports.push(node.name.text);
       } else if (ts.isClassDeclaration(node) && node.name) {
@@ -65,7 +146,7 @@ export function parseSourceFile(filePath: string, fileContent: string): ASTMetad
       }
     }
 
-    // 3. Extract Functions
+    // 7. Extract Functions
     if (ts.isFunctionDeclaration(node) && node.name) {
       functions.push(node.name.text);
     } else if (ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
@@ -74,7 +155,7 @@ export function parseSourceFile(filePath: string, fileContent: string): ASTMetad
       }
     }
 
-    // 4. Extract Classes & Methods
+    // 8. Extract Classes & Methods
     if (ts.isClassDeclaration(node) && node.name) {
       classes.push(node.name.text);
       node.members.forEach(member => {
@@ -99,7 +180,7 @@ export function parseSourceFile(filePath: string, fileContent: string): ASTMetad
 
 /**
  * Resolves imports in scanned files to build a normalized file-to-file dependency graph.
- * Handles relative imports, tsconfig alias path imports (@/*), and direct/src root imports.
+ * Handles relative imports, tsconfig alias path imports (@/*), monorepo sub-apps, and Python imports.
  */
 export function resolveDependencies(workspaceFiles: string[], astMap: Record<string, ASTMetadata>): Record<string, string[]> {
   const dependencyGraph: Record<string, string[]> = {};
@@ -112,21 +193,49 @@ export function resolveDependencies(workspaceFiles: string[], astMap: Record<str
     for (const rawImport of metadata.imports) {
       const candidates: string[] = [];
 
-      if (rawImport.startsWith('.') || rawImport.startsWith('..')) {
-        const importDir = path.dirname(normalizedFilePath);
+      // Python import resolution
+      if (normalizedFilePath.endsWith('.py')) {
+        const importDir = path.posix.dirname(normalizedFilePath);
+        if (rawImport.startsWith('.')) {
+          // Relative python import (e.g. .models or ..utils)
+          const relPath = rawImport.replace(/^\.+/, m => '../'.repeat(m.length - 1)).replace(/\./g, '/');
+          candidates.push(path.posix.normalize(path.posix.join(importDir, relPath)));
+        } else {
+          // Absolute / package python import (e.g. app.models -> app/models)
+          const slashPath = rawImport.replace(/\./g, '/');
+          candidates.push(slashPath);
+          candidates.push(path.posix.join(importDir, slashPath));
+        }
+      }
+      // JS / TS relative imports
+      else if (rawImport.startsWith('.') || rawImport.startsWith('..')) {
+        const importDir = path.posix.dirname(normalizedFilePath);
         const absoluteImportPath = path.posix.normalize(path.posix.join(importDir, rawImport));
         candidates.push(absoluteImportPath);
-      } else if (rawImport.startsWith('@/')) {
-        const absoluteImportPath = rawImport.replace(/^@\//, 'src/');
-        candidates.push(absoluteImportPath);
-      } else {
-        // Try direct matching (e.g. "src/controllers/auth")
+      }
+      // TS alias imports (@/...)
+      else if (rawImport.startsWith('@/')) {
+        const subPath = rawImport.replace(/^@\//, 'src/');
+        candidates.push(subPath);
+        // If file is inside a monorepo sub-package (e.g. client/src/... or frontend/src/...)
+        const parts = normalizedFilePath.split('/');
+        if (parts.length > 1) {
+          candidates.push(path.posix.join(parts[0], subPath));
+          candidates.push(path.posix.join(parts[0], rawImport.replace(/^@\//, '')));
+        }
+      }
+      // Direct matching / bare path imports (e.g. "src/controllers/auth" or "server/src/...")
+      else {
         candidates.push(rawImport);
-        // Try prefixing with src/
         candidates.push(`src/${rawImport}`);
+        const parts = normalizedFilePath.split('/');
+        if (parts.length > 1) {
+          candidates.push(path.posix.join(parts[0], rawImport));
+          candidates.push(path.posix.join(parts[0], `src/${rawImport}`));
+        }
       }
 
-      // Add common extension extensions to try
+      // Add common file extensions and index resolution
       const extendedCandidates: string[] = [];
       for (const cand of candidates) {
         extendedCandidates.push(
@@ -135,20 +244,22 @@ export function resolveDependencies(workspaceFiles: string[], astMap: Record<str
           `${cand}.tsx`,
           `${cand}.js`,
           `${cand}.jsx`,
+          `${cand}.mjs`,
+          `${cand}.cjs`,
+          `${cand}.py`,
           path.posix.join(cand, 'index.ts'),
           path.posix.join(cand, 'index.tsx'),
           path.posix.join(cand, 'index.js'),
-          path.posix.join(cand, 'index.jsx')
+          path.posix.join(cand, 'index.jsx'),
+          path.posix.join(cand, '__init__.py')
         );
       }
 
       const normalizedExtended = extendedCandidates.map(c => c.replace(/\\/g, '/'));
 
-      let matched = false;
       for (const candidate of normalizedExtended) {
         if (fileSet.has(candidate)) {
           resolvedDeps.push(candidate);
-          matched = true;
           break;
         }
       }
@@ -207,7 +318,9 @@ export function computeImpactRisk(
   // 1. Calculate in-degree centrality (how many files import this file DIRECTLY)
   let inDegree = 0;
   for (const [file, imports] of Object.entries(dependencyGraph)) {
-    if (imports.includes(normalizedTarget)) {
+    const normFile = file.replace(/\\/g, '/');
+    if (normFile === normalizedTarget) continue;
+    if (Array.isArray(imports) && imports.some(imp => imp.replace(/\\/g, '/') === normalizedTarget)) {
       inDegree++;
     }
   }
@@ -223,8 +336,10 @@ export function computeImpactRisk(
 
     // Find all files that import the current file
     for (const [file, imports] of Object.entries(dependencyGraph)) {
-      if (imports.includes(current)) {
-        dfs(file, depth + 1);
+      const normFile = file.replace(/\\/g, '/');
+      if (normFile === current) continue;
+      if (Array.isArray(imports) && imports.some(imp => imp.replace(/\\/g, '/') === current)) {
+        dfs(normFile, depth + 1);
       }
     }
   }

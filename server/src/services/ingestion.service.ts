@@ -251,8 +251,8 @@ class IngestionService {
                 content: content
               });
               
-              // Run AST Parsing for JavaScript/TypeScript files
-              if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
+              // Run AST Parsing for JavaScript, TypeScript, and Python files
+              if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py'].includes(ext)) {
                 const ast = astService.parseSourceFile(relativePath, content);
                 astMetadata[relativePath] = ast;
               }
