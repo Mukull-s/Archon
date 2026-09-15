@@ -501,8 +501,9 @@ export async function analyzeImpact(req: Request, res: Response, next: NextFunct
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Verify entitlement for advanced deep impact analysis
-    await entitlementService.canUseAdvancedAnalysis(userId);
+    // Retrieve user entitlement to check plan tier for advanced AI reasoning
+    const userLimits = await entitlementService.getUserUsageAndLimits(userId);
+    const isPro = userLimits.plan === 'pro';
 
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
@@ -552,24 +553,28 @@ export async function analyzeImpact(req: Request, res: Response, next: NextFunct
       }
     }
 
-    // Generate high-level impact summary explanation via LLM
+    // Generate high-level impact summary explanation
     let summary = 'This file has no dependent files. Changing it is safe and will not impact other parts of the codebase.';
     if (affectedFiles.length > 0) {
-      try {
-        const prompt = `Explain in 1 or 2 simple, friendly sentences the structural impact of modifying the file [${normalizedTarget}]. 
+      if (isPro) {
+        try {
+          const prompt = `Explain in 1 or 2 simple, friendly sentences the structural impact of modifying the file [${normalizedTarget}]. 
 It is directly or indirectly imported by these files:
 ${affectedFiles.map(f => `- [${f}]`).join('\n')}
 
 Explain WHY modifying this file propagates to these dependencies. Keep it short, high-level, and easy for a beginner to understand.`;
-        
-        const aiSummary = await llmService.chat({
-          prompt,
-          contextChunks: [],
-          model: 'qwen/qwen3-coder:free'
-        });
-        summary = aiSummary.text;
-      } catch (err) {
-        summary = `Modifying this file will propagate changes to ${affectedFiles.length} dependent files across your project.`;
+          
+          const aiSummary = await llmService.chat({
+            prompt,
+            contextChunks: [],
+            model: 'qwen/qwen3-coder:free'
+          });
+          summary = aiSummary.text;
+        } catch (err) {
+          summary = `Modifying this file will propagate changes to ${affectedFiles.length} dependent files across your project.`;
+        }
+      } else {
+        summary = `Modifying this file will propagate changes to ${affectedFiles.length} dependent files across your project. Upgrade to Pro for AI-powered architectural reasoning.`;
       }
     }
 
