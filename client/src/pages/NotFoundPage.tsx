@@ -1,8 +1,10 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Footer from '../components/sections/Footer';
 
 export default function NotFoundPage() {
+  const navigate = useNavigate();
+
   return (
     <div style={{ minHeight: '100vh', background: '#09090b', color: '#e4e1e5', display: 'flex', flexDirection: 'column' }}>
       <Navbar />
@@ -42,10 +44,28 @@ export default function NotFoundPage() {
         </p>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="btn-primary"
+            style={{
+              padding: '9px 20px',
+              fontSize: '13px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            <span>Go Back</span>
+          </button>
           <Link
             to="/"
-            className="btn-primary"
-            style={{ padding: '9px 22px', fontSize: '13px', textDecoration: 'none' }}
+            className="btn-ghost"
+            style={{ padding: '9px 20px', fontSize: '13px', textDecoration: 'none' }}
           >
             Return Home
           </Link>
