@@ -7,16 +7,50 @@ import { useAuthStore } from '../stores/authStore';
 import api from '../lib/api';
 import { Button, Badge, FormField, Input, Toggle } from '../components/ui/DesignSystem';
 
+const PREFERENCES_STORAGE_KEY = 'archon_workspace_preferences';
+
+interface WorkspacePreferences {
+  defaultBranch: string;
+  autoReindexOnPush: boolean;
+  telemetryEnabled: boolean;
+}
+
+const DEFAULT_PREFERENCES: WorkspacePreferences = {
+  defaultBranch: 'main',
+  autoReindexOnPush: true,
+  telemetryEnabled: true,
+};
+
 export default function SettingsPage() {
   const { user, fetchUser } = useAuthStore();
   const [activeTab, setActiveTab] = useState<'general' | 'preferences' | 'security'>('general');
   const [name, setName] = useState(user?.name || '');
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // Preferences state
-  const [defaultBranch, setDefaultBranch] = useState('main');
-  const [autoReindexOnPush, setAutoReindexOnPush] = useState(true);
-  const [telemetryEnabled, setTelemetryEnabled] = useState(true);
+  // Preferences state with persistent storage hydration
+  const [defaultBranch, setDefaultBranch] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(PREFERENCES_STORAGE_KEY);
+      if (saved) return JSON.parse(saved).defaultBranch || 'main';
+    } catch {}
+    return DEFAULT_PREFERENCES.defaultBranch;
+  });
+
+  const [autoReindexOnPush, setAutoReindexOnPush] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(PREFERENCES_STORAGE_KEY);
+      if (saved) return JSON.parse(saved).autoReindexOnPush ?? true;
+    } catch {}
+    return DEFAULT_PREFERENCES.autoReindexOnPush;
+  });
+
+  const [telemetryEnabled, setTelemetryEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(PREFERENCES_STORAGE_KEY);
+      if (saved) return JSON.parse(saved).telemetryEnabled ?? true;
+    } catch {}
+    return DEFAULT_PREFERENCES.telemetryEnabled;
+  });
 
   // Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -47,6 +81,30 @@ export default function SettingsPage() {
     } finally {
       setSavingProfile(false);
     }
+  };
+
+  const handleSavePreferences = () => {
+    const prefs: WorkspacePreferences = {
+      defaultBranch: defaultBranch.trim() || 'main',
+      autoReindexOnPush,
+      telemetryEnabled,
+    };
+    try {
+      localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(prefs));
+      toast.success('Workspace preferences saved.');
+    } catch {
+      toast.error('Failed to save preferences locally.');
+    }
+  };
+
+  const handleResetPreferences = () => {
+    setDefaultBranch(DEFAULT_PREFERENCES.defaultBranch);
+    setAutoReindexOnPush(DEFAULT_PREFERENCES.autoReindexOnPush);
+    setTelemetryEnabled(DEFAULT_PREFERENCES.telemetryEnabled);
+    try {
+      localStorage.removeItem(PREFERENCES_STORAGE_KEY);
+      toast.info('Preferences reset to default values.');
+    } catch {}
   };
 
   const handlePasswordChange = async (e: React.FormEvent) => {
@@ -98,75 +156,78 @@ export default function SettingsPage() {
         </div>
 
         {/* Plan Entitlements Banner (pointing to Profile) */}
-        <div
-          className={`border rounded-xl p-4 sm:px-5 flex items-center justify-between flex-wrap gap-3 mb-8 ${
-            isArchitect
-              ? 'bg-gradient-to-br from-[#b026ff]/10 to-[#6366f1]/[0.06] border-[#b026ff]/25'
-              : 'bg-surface-base/60 border-border-subtle'
-          }`}
-        >
+        <div className="mb-8 p-4 sm:p-5 rounded-xl bg-surface-base/60 border border-border-subtle flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
-            <div
-              className={`w-8 h-8 rounded-lg flex items-center justify-center text-[15px] font-bold ${
-                isArchitect
-                  ? 'bg-[#b026ff]/15 border border-[#b026ff]/30 text-[#d946ef]'
-                  : 'bg-white/[0.05] border border-border-subtle text-text-muted'
-              }`}
-            >
-              ✦
+            <div className="w-9 h-9 rounded-lg bg-surface-elevated flex items-center justify-center border border-border-subtle shrink-0">
+              <span className="text-[15px]">⚡</span>
             </div>
             <div>
-              <div className="text-[13px] font-semibold text-text-primary">
-                Active Plan:{' '}
-                <span className={isArchitect ? 'text-[#c084fc]' : 'text-text-muted'}>
-                  {isArchitect ? 'Architect Tier' : 'Explorer Tier'}
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-semibold text-text-primary">
+                  {isArchitect ? 'Archon Architect Workspace' : 'Explorer Plan (Free)'}
                 </span>
+                <Badge variant={isArchitect ? 'accent' : 'neutral'} size="sm">
+                  {isArchitect ? 'PRO' : 'FREE'}
+                </Badge>
               </div>
-              <div className="text-[12px] text-text-muted">
-                View real-time codebase quotas, indexing meters, and plan entitlements in your Profile Command Center.
-              </div>
+              <p className="text-[12px] text-text-muted m-0 mt-0.5">
+                {isArchitect
+                  ? 'Active subscription with 10 codebase slots and full AST reasoning enabled.'
+                  : 'Free tier with 1 active codebase slot. Upgrade to unlock multi-repo tracking.'}
+              </p>
             </div>
           </div>
           <Link
             to="/profile"
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-border-subtle text-text-primary text-[12px] font-semibold no-underline transition-colors"
+            className="px-3.5 py-1.5 rounded-lg bg-surface-elevated hover:bg-surface-elevated/80 border border-border-subtle text-text-primary text-[12px] font-semibold no-underline transition-all"
           >
-            Manage Plan & Quotas →
+            Manage Entitlements →
           </Link>
         </div>
 
-        {/* Navigation Tabs */}
-        <div role="tablist" className="flex gap-1 border-b border-border-subtle mb-7 overflow-x-auto scrollbar-none">
-          {([
-            { id: 'general', label: 'Account Profile' },
-            { id: 'preferences', label: 'Workspace Defaults' },
-            { id: 'security', label: 'Security & Auth' },
-          ] as const).map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => setActiveTab(tab.id)}
-                className={`bg-transparent border-none border-b-2 py-2.5 px-4.5 text-[13px] font-semibold cursor-pointer transition-all -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-t-sm whitespace-nowrap ${
-                  isActive
-                    ? 'border-b-accent text-text-primary'
-                    : 'border-b-transparent text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
+        {/* Settings Tabs */}
+        <div className="flex gap-2 border-b border-border-subtle/80 mb-7">
+          <button
+            type="button"
+            onClick={() => setActiveTab('general')}
+            className={`pb-3 px-1 text-[13px] font-semibold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'general'
+                ? 'border-accent text-white'
+                : 'border-transparent text-text-muted hover:text-text-primary'
+            }`}
+          >
+            General Profile
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('preferences')}
+            className={`pb-3 px-1 text-[13px] font-semibold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'preferences'
+                ? 'border-accent text-white'
+                : 'border-transparent text-text-muted hover:text-text-primary'
+            }`}
+          >
+            Workspace Preferences
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('security')}
+            className={`pb-3 px-1 text-[13px] font-semibold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'security'
+                ? 'border-accent text-white'
+                : 'border-transparent text-text-muted hover:text-text-primary'
+            }`}
+          >
+            Security & Auth
+          </button>
         </div>
 
         {/* Tab Content */}
-        <div className="max-w-[640px]">
+        <div>
           {activeTab === 'general' && (
             <form
               onSubmit={handleSaveProfile}
-              className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-5"
+              className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4.5 max-w-[640px]"
             >
               <div>
                 <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
@@ -215,7 +276,7 @@ export default function SettingsPage() {
           )}
 
           {activeTab === 'preferences' && (
-            <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-6">
+            <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-6 max-w-[640px]">
               <div>
                 <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
                   Workspace Automation & Indexing
@@ -256,14 +317,22 @@ export default function SettingsPage() {
                 />
               </div>
 
-              <div>
+              <div className="flex items-center gap-3 pt-1">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="md"
+                  onClick={handleSavePreferences}
+                >
+                  Save Preferences
+                </Button>
                 <Button
                   type="button"
                   variant="secondary"
                   size="md"
-                  onClick={() => toast.success('Workspace preferences saved.')}
+                  onClick={handleResetPreferences}
                 >
-                  Save Preferences
+                  Reset Defaults
                 </Button>
               </div>
             </div>
