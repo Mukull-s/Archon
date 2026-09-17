@@ -1143,42 +1143,77 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       where: { id: id as string, userId: userId as string },
       select: {
         id: true, name: true, fileCount: true, totalSize: true, framework: true,
-        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true
+        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true,
+        astMetadata: true
       }
     });
     if (!repo) {
       throw new AppError('Repository not found.', 404);
     }
 
-    const plan = plannerService.planQuery(message);
-    console.log(`Planner selected query intent: ${plan.intent}`);
-    plan.steps.forEach(step => console.log(`  -> Planning step: ${step}`));
+    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
+      ? JSON.parse(repo.dependencyGraph)
+      : repo.dependencyGraph) as Record<string, string[]> || {};
+
+    const scannedFiles = (typeof repo.scannedFiles === 'string'
+      ? JSON.parse(repo.scannedFiles)
+      : repo.scannedFiles) as Array<{ path: string }> || [];
+
+    const astMetadata = (typeof repo.astMetadata === 'string'
+      ? JSON.parse(repo.astMetadata)
+      : repo.astMetadata) as Record<string, any> || {};
+
+    const plan = plannerService.planQuery(message, {
+      scannedFiles,
+      dependencyGraph,
+      astMetadata
+    });
+    console.log(`[ARCHON AI] Selected query intent: ${plan.intent}`);
+    plan.steps.forEach(step => console.log(`  -> [ARCHON AI] Step: ${step}`));
+    if (plan.dependencyAnalysis) {
+      console.log(`[ENTITY] Resolved: Source=${plan.dependencyAnalysis.sourceFile || 'none'}, Target=${plan.dependencyAnalysis.targetFile || 'none'}`);
+      console.log(`[GRAPH] Verified Relationship: ${plan.dependencyAnalysis.relationship} (Hops: ${plan.dependencyAnalysis.hops ?? 'N/A'})`);
+      if (plan.dependencyAnalysis.evidence && plan.dependencyAnalysis.evidence.length > 0) {
+        plan.dependencyAnalysis.evidence.forEach(ev => {
+          console.log(`[EVIDENCE] ${ev.filePath}:${ev.line} -> ${ev.statement}`);
+        });
+      }
+    }
 
     let similarChunks: any[] = [];
-    if (plan.useVector) {
-      const queryVector = await vectorService.getEmbedding(message);
-      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
-    } else {
-      similarChunks = await prisma.codeChunk.findMany({
-        where: {
-          repositoryId: id as string,
-          filePath: {
-            contains: 'package.json'
-          }
-        },
-        take: plan.limit
-      });
+    if (plan.intent === 'DEPENDENCY' && plan.dependencyAnalysis) {
+      const targetFilePaths: string[] = [];
+      if (plan.dependencyAnalysis.sourceFile) targetFilePaths.push(plan.dependencyAnalysis.sourceFile);
+      if (plan.dependencyAnalysis.targetFile) targetFilePaths.push(plan.dependencyAnalysis.targetFile);
+      if (plan.dependencyAnalysis.path && plan.dependencyAnalysis.path.length > 0) {
+        targetFilePaths.push(...plan.dependencyAnalysis.path);
+      }
+      const uniqueFilePaths = Array.from(new Set(targetFilePaths.filter(Boolean)));
+
+      if (uniqueFilePaths.length > 0) {
+        similarChunks = await prisma.codeChunk.findMany({
+          where: {
+            repositoryId: id as string,
+            filePath: { in: uniqueFilePaths }
+          },
+          take: 20
+        });
+      }
       if (similarChunks.length === 0) {
         similarChunks = await prisma.codeChunk.findMany({
           where: { repositoryId: id as string },
           take: plan.limit
         });
       }
+    } else if (plan.useVector) {
+      const queryVector = await vectorService.getEmbedding(message);
+      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
+    } else {
+      similarChunks = await prisma.codeChunk.findMany({
+        where: { repositoryId: id as string },
+        take: plan.limit
+      });
     }
-
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
 
     const inDegreeMap: Record<string, number> = {};
     for (const [filePath, imports] of Object.entries(dependencyGraph)) {
@@ -1198,9 +1233,6 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
     const sortedChunks = hierarchyService.categorizeAndSortChunks(rawChunks, inDegreeMap);
     const contextChunks = hierarchyService.allocateTokens(sortedChunks, 8000);
 
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as Array<{ path: string }>;
     const fileTree = buildFileTreeString(scannedFiles);
 
     const repoMetadata = {
@@ -1220,7 +1252,8 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       contextChunks,
       model: requestedModel,
       repoMetadata,
-      evidenceTraces
+      evidenceTraces,
+      dependencyAnalysis: plan.dependencyAnalysis
     });
 
     await prisma.chatMessage.create({
@@ -1270,42 +1303,77 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
       where: { id: id as string, userId: userId as string },
       select: {
         id: true, name: true, fileCount: true, totalSize: true, framework: true,
-        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true
+        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true,
+        astMetadata: true
       }
     });
     if (!repo) {
       throw new AppError('Repository not found.', 404);
     }
 
-    const plan = plannerService.planQuery(message);
-    console.log(`Planner stream selected query intent: ${plan.intent}`);
-    plan.steps.forEach(step => console.log(`  -> Planning stream step: ${step}`));
+    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
+      ? JSON.parse(repo.dependencyGraph)
+      : repo.dependencyGraph) as Record<string, string[]> || {};
+
+    const scannedFiles = (typeof repo.scannedFiles === 'string'
+      ? JSON.parse(repo.scannedFiles)
+      : repo.scannedFiles) as Array<{ path: string }> || [];
+
+    const astMetadata = (typeof repo.astMetadata === 'string'
+      ? JSON.parse(repo.astMetadata)
+      : repo.astMetadata) as Record<string, any> || {};
+
+    const plan = plannerService.planQuery(message, {
+      scannedFiles,
+      dependencyGraph,
+      astMetadata
+    });
+    console.log(`[ARCHON AI Stream] Selected query intent: ${plan.intent}`);
+    plan.steps.forEach(step => console.log(`  -> [ARCHON AI Stream] Step: ${step}`));
+    if (plan.dependencyAnalysis) {
+      console.log(`[ENTITY Stream] Resolved: Source=${plan.dependencyAnalysis.sourceFile || 'none'}, Target=${plan.dependencyAnalysis.targetFile || 'none'}`);
+      console.log(`[GRAPH Stream] Verified Relationship: ${plan.dependencyAnalysis.relationship} (Hops: ${plan.dependencyAnalysis.hops ?? 'N/A'})`);
+      if (plan.dependencyAnalysis.evidence && plan.dependencyAnalysis.evidence.length > 0) {
+        plan.dependencyAnalysis.evidence.forEach(ev => {
+          console.log(`[EVIDENCE Stream] ${ev.filePath}:${ev.line} -> ${ev.statement}`);
+        });
+      }
+    }
 
     let similarChunks: any[] = [];
-    if (plan.useVector) {
-      const queryVector = await vectorService.getEmbedding(message);
-      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
-    } else {
-      similarChunks = await prisma.codeChunk.findMany({
-        where: {
-          repositoryId: id as string,
-          filePath: {
-            contains: 'package.json'
-          }
-        },
-        take: plan.limit
-      });
+    if (plan.intent === 'DEPENDENCY' && plan.dependencyAnalysis) {
+      const targetFilePaths: string[] = [];
+      if (plan.dependencyAnalysis.sourceFile) targetFilePaths.push(plan.dependencyAnalysis.sourceFile);
+      if (plan.dependencyAnalysis.targetFile) targetFilePaths.push(plan.dependencyAnalysis.targetFile);
+      if (plan.dependencyAnalysis.path && plan.dependencyAnalysis.path.length > 0) {
+        targetFilePaths.push(...plan.dependencyAnalysis.path);
+      }
+      const uniqueFilePaths = Array.from(new Set(targetFilePaths.filter(Boolean)));
+
+      if (uniqueFilePaths.length > 0) {
+        similarChunks = await prisma.codeChunk.findMany({
+          where: {
+            repositoryId: id as string,
+            filePath: { in: uniqueFilePaths }
+          },
+          take: 20
+        });
+      }
       if (similarChunks.length === 0) {
         similarChunks = await prisma.codeChunk.findMany({
           where: { repositoryId: id as string },
           take: plan.limit
         });
       }
+    } else if (plan.useVector) {
+      const queryVector = await vectorService.getEmbedding(message);
+      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
+    } else {
+      similarChunks = await prisma.codeChunk.findMany({
+        where: { repositoryId: id as string },
+        take: plan.limit
+      });
     }
-
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
 
     const inDegreeMap: Record<string, number> = {};
     for (const [filePath, imports] of Object.entries(dependencyGraph)) {
@@ -1325,9 +1393,6 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
     const sortedChunks = hierarchyService.categorizeAndSortChunks(rawChunks, inDegreeMap);
     const contextChunks = hierarchyService.allocateTokens(sortedChunks, 8000);
 
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as Array<{ path: string }>;
     const fileTree = buildFileTreeString(scannedFiles);
 
     const repoMetadata = {
@@ -1365,7 +1430,8 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
         contextChunks,
         model: requestedModel,
         repoMetadata,
-        evidenceTraces
+        evidenceTraces,
+        dependencyAnalysis: plan.dependencyAnalysis
       });
 
       for await (const chunk of stream) {
