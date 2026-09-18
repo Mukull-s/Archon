@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma, EMBEDDING_BATCH_SIZE, DB_BATCH_SIZE, MAX_FILES_LIMIT, MAX_TOTAL_SIZE_LIMIT, MAX_SINGLE_FILE_SIZE_LIMIT, MAX_CHUNKS_LIMIT } from '../config';
 import { ingestionService, deleteFolderWithRetry } from '../services/ingestion.service';
-import { AppError } from '../utils';
+import { AppError, getPlaintextToken } from '../utils';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -429,10 +429,19 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     });
     const isIndexed = chunkCount > 0;
 
+    // Strip scannedFiles to only the fields the frontend needs
+    // (path, size, lines) — omit 'hash' to reduce payload
+    const lightScannedFiles = (scannedFiles || []).map((f: any) => ({
+      path: f.path,
+      size: f.size,
+      lines: f.lines,
+    }));
+
     res.status(200).json({
       success: true,
       data: {
         ...repo,
+        scannedFiles: lightScannedFiles,
         isIndexed,
         confidenceDetails
       }
@@ -639,7 +648,7 @@ export async function performVectorIndexing(id: string, force = false, options?:
     // If it matches the stored SHA, return immediately without re-indexing.
     if (!force && repoRow.indexingStatus === 'completed' && repoRow.owner && !repoRow.isLocal) {
       try {
-        const token = repoRow.user?.githubToken || process.env.GITHUB_FALLBACK_TOKEN;
+        const token = getPlaintextToken(repoRow.user?.githubToken) || process.env.GITHUB_FALLBACK_TOKEN;
         const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
         if (token) headers['Authorization'] = `Bearer ${token}`;
         const shaRes = await (await import('axios')).default.get(
@@ -677,7 +686,7 @@ export async function performVectorIndexing(id: string, force = false, options?:
     let downloadTime = 0;
     if (!repoRow.isLocal && !zipPath) {
       const t0 = Date.now();
-      const token = repoRow.user?.githubToken || undefined;
+      const token = getPlaintextToken(repoRow.user?.githubToken) || undefined;
       zipPath = await ingestionService.downloadGithubRepo(repoRow.owner!, repoRow.name, token);
       downloadTime = Date.now() - t0;
       tempDirsToCleanup.push(zipPath);
@@ -1136,8 +1145,9 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Check monthly AI question entitlement
-    await entitlementService.canAskAI(userId);
+    // Atomically reserve monthly AI question entitlement upfront
+    await entitlementService.recordAiQuestion(userId);
+    let reservedAiQuota = true;
 
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
@@ -1247,14 +1257,21 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
 
     const evidenceTraces = evidenceService.generateEvidenceTraces(scannedFiles, dependencyGraph).map(t => t.pathString);
 
-    const aiResult = await llmService.chat({
-      prompt: message,
-      contextChunks,
-      model: requestedModel,
-      repoMetadata,
-      evidenceTraces,
-      dependencyAnalysis: plan.dependencyAnalysis
-    });
+    // Timeout: abort if LLM takes longer than 120 seconds
+    const CHAT_TIMEOUT_MS = 120_000;
+    const aiResult = await Promise.race([
+      llmService.chat({
+        prompt: message,
+        contextChunks,
+        model: requestedModel,
+        repoMetadata,
+        evidenceTraces,
+        dependencyAnalysis: plan.dependencyAnalysis
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new AppError('AI response timed out. Please try again.', 504)), CHAT_TIMEOUT_MS)
+      ),
+    ]);
 
     await prisma.chatMessage.create({
       data: { repositoryId: id as string, sender: 'USER', message }
@@ -1263,9 +1280,6 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
     await prisma.chatMessage.create({
       data: { repositoryId: id as string, sender: 'AI', message: aiResult.text, modelUsed: aiResult.modelUsed }
     });
-
-    // Authoritatively record monthly AI question usage
-    await entitlementService.recordAiQuestion(userId);
 
     res.status(200).json({
       success: true,
@@ -1276,6 +1290,9 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       }
     });
   } catch (error) {
+    if (req.user?.userId) {
+      await entitlementService.refundAiQuestion(req.user.userId).catch(() => {});
+    }
     next(error);
   }
 }
@@ -1296,8 +1313,8 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Check monthly AI question entitlement
-    await entitlementService.canAskAI(userId);
+    // Atomically reserve monthly AI question entitlement upfront
+    await entitlementService.recordAiQuestion(userId);
 
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
@@ -1421,6 +1438,23 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
 
     let completeText = '';
     let finalModel = requestedModel;
+    const abortController = new AbortController();
+    let clientDisconnected = false;
+
+    // Detect client disconnect
+    const onClose = () => {
+      clientDisconnected = true;
+      abortController.abort();
+    };
+    req.on('close', onClose);
+
+    // Maximum stream duration to prevent hanging connections (120 seconds)
+    const STREAM_TIMEOUT_MS = 120_000;
+    let streamTimedOut = false;
+    const streamTimer = setTimeout(() => {
+      streamTimedOut = true;
+      abortController.abort();
+    }, STREAM_TIMEOUT_MS);
 
     const evidenceTraces = evidenceService.generateEvidenceTraces(scannedFiles, dependencyGraph).map(t => t.pathString);
 
@@ -1431,34 +1465,69 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
         model: requestedModel,
         repoMetadata,
         evidenceTraces,
-        dependencyAnalysis: plan.dependencyAnalysis
+        dependencyAnalysis: plan.dependencyAnalysis,
+        signal: abortController.signal
       });
 
       for await (const chunk of stream) {
+        // Stop streaming if client disconnected or stream timed out
+        if (clientDisconnected || streamTimedOut) {
+          console.log(`[Stream] Aborting: ${clientDisconnected ? 'client disconnected' : 'stream timeout'}`);
+          break;
+        }
+
         completeText += chunk.content;
         finalModel = chunk.modelUsed;
-        res.write(`data: ${JSON.stringify({ token: chunk.content, modelUsed: chunk.modelUsed })}\n\n`);
+
+        try {
+          res.write(`data: ${JSON.stringify({ token: chunk.content, modelUsed: chunk.modelUsed })}\n\n`);
+        } catch {
+          // Write failed — client likely disconnected
+          clientDisconnected = true;
+          break;
+        }
       }
 
-      // Save complete AI response to history
-      await prisma.chatMessage.create({
-        data: {
-          repositoryId: id as string,
-          sender: 'AI',
-          message: completeText,
-          modelUsed: finalModel
+      // Save complete AI response to history (even partial on disconnect)
+      if (completeText.length > 0) {
+        await prisma.chatMessage.create({
+          data: {
+            repositoryId: id as string,
+            sender: 'AI',
+            message: completeText,
+            modelUsed: finalModel
+          }
+        }).catch(saveErr => {
+          console.error('[Stream] Failed to save AI response:', saveErr);
+        });
+      } else {
+        // Stream completed without producing text, refund reservation
+        await entitlementService.refundAiQuestion(userId).catch(() => {});
+      }
+
+      if (!clientDisconnected) {
+        if (streamTimedOut) {
+          res.write(`data: ${JSON.stringify({ error: 'Stream timed out after 2 minutes.' })}\n\n`);
         }
-      });
-
-      // Authoritatively record monthly AI question usage
-      await entitlementService.recordAiQuestion(userId);
-
-      res.write('data: [DONE]\n\n');
-      res.end();
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }
     } catch (err: any) {
       console.error('Streaming response failed:', err);
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-      res.end();
+      if (completeText.length === 0) {
+        await entitlementService.refundAiQuestion(userId).catch(() => {});
+      }
+      if (!clientDisconnected) {
+        try {
+          res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+          res.end();
+        } catch {
+          // Client already gone
+        }
+      }
+    } finally {
+      clearTimeout(streamTimer);
+      req.removeListener('close', onClose);
     }
   } catch (error) {
     next(error);
@@ -1636,7 +1705,15 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
     }
 
     const repo = await prisma.repository.findFirst({
-      where: { id: id as string, userId: userId as string }
+      where: { id: id as string, userId: userId as string },
+      select: {
+        id: true,
+        name: true,
+        framework: true,
+        languages: true,
+        totalSize: true,
+        scannedFiles: true
+      }
     });
     if (!repo) {
       throw new AppError('Repository not found.', 404);
