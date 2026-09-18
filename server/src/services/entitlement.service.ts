@@ -281,40 +281,115 @@ export class EntitlementService {
 
   /**
    * Authoritative server-side usage recorders.
+   * These use atomic check-and-increment to prevent concurrent requests
+   * from exceeding quotas.
    */
   async recordCodebaseAnalysis(userId: string): Promise<void> {
-    await prisma.user.update({
-      where: { id: userId },
+    const { limits } = await this.getUserUsageAndLimits(userId);
+
+    // Atomic: increment only if under the limit
+    const result = await prisma.user.updateMany({
+      where: {
+        id: userId,
+        lifetimeAnalysesUsed: { lt: limits.lifetimeAnalyses },
+      },
       data: {
         lifetimeAnalysesUsed: { increment: 1 },
       },
     });
+
+    if (result.count === 0) {
+      throw new AppError(
+        `Lifetime analysis quota reached. Upgrade to Pro for unlimited analyses.`,
+        403,
+        true,
+        'ANALYSIS_LIMIT_REACHED'
+      );
+    }
   }
 
   async recordAiQuestion(userId: string): Promise<void> {
-    await prisma.user.update({
-      where: { id: userId },
+    const { limits } = await this.getUserUsageAndLimits(userId);
+
+    // Atomic: increment only if under the limit
+    const result = await prisma.user.updateMany({
+      where: {
+        id: userId,
+        monthlyAiQuestionsUsed: { lt: limits.monthlyAiQuestions },
+      },
       data: {
         monthlyAiQuestionsUsed: { increment: 1 },
       },
     });
+
+    if (result.count === 0) {
+      throw new AppError(
+        `Monthly AI question quota reached. Upgrade to Pro for more questions.`,
+        403,
+        true,
+        'AI_LIMIT_REACHED'
+      );
+    }
   }
 
   async recordReindex(userId: string, repoId: string): Promise<void> {
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: userId },
-        data: {
-          monthlyReindexesUsed: { increment: 1 },
-        },
-      }),
-      prisma.repository.update({
-        where: { id: repoId },
-        data: {
-          reindexCount: { increment: 1 },
-        },
-      }),
-    ]);
+    const { limits } = await this.getUserUsageAndLimits(userId);
+
+    // Atomic: increment user monthly reindexes only if under the limit
+    const userResult = await prisma.user.updateMany({
+      where: {
+        id: userId,
+        monthlyReindexesUsed: { lt: limits.monthlyReindexes },
+      },
+      data: {
+        monthlyReindexesUsed: { increment: 1 },
+      },
+    });
+
+    if (userResult.count === 0) {
+      throw new AppError(
+        `Monthly re-index quota reached. Upgrade to Pro for more re-indexes.`,
+        403,
+        true,
+        'REINDEX_LIMIT_REACHED'
+      );
+    }
+
+    // Increment per-repo reindex counter (always succeeds)
+    await prisma.repository.update({
+      where: { id: repoId },
+      data: { reindexCount: { increment: 1 } },
+    });
+  }
+
+  /**
+   * Refunds an AI question reservation if request fails before completion.
+   */
+  async refundAiQuestion(userId: string): Promise<void> {
+    await prisma.user.updateMany({
+      where: {
+        id: userId,
+        monthlyAiQuestionsUsed: { gt: 0 },
+      },
+      data: {
+        monthlyAiQuestionsUsed: { decrement: 1 },
+      },
+    });
+  }
+
+  /**
+   * Refunds a codebase analysis reservation if ingestion fails before processing.
+   */
+  async refundCodebaseAnalysis(userId: string): Promise<void> {
+    await prisma.user.updateMany({
+      where: {
+        id: userId,
+        lifetimeAnalysesUsed: { gt: 0 },
+      },
+      data: {
+        lifetimeAnalysesUsed: { decrement: 1 },
+      },
+    });
   }
 
   /**
