@@ -23,6 +23,7 @@ export interface ChatCompletionRequest {
   };
   evidenceTraces?: string[];
   dependencyAnalysis?: DependencyAnalysisResult;
+  signal?: AbortSignal;
 }
 
 export interface StreamChunk {
@@ -249,12 +250,14 @@ Instructions:
   /**
    * Streaming chat method using native fetch & Server-Sent Events.
    */
-  async *chatStream({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
+  async *chatStream({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis, signal }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
     const modelsQueue = this.getModelsQueue(model);
     const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces, dependencyAnalysis);
     let lastError: any = null;
 
     for (const activeModel of modelsQueue) {
+      if (signal?.aborted) return;
+
       const isDirectDeepSeek = activeModel === 'deepseek-v4-flash' || activeModel === 'deepseek-v4-pro';
       const baseUrl = isDirectDeepSeek ? 'https://api.deepseek.com/v1' : 'https://openrouter.ai/api/v1';
       const apiKey = isDirectDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENROUTER_API_KEY;
@@ -268,6 +271,10 @@ Instructions:
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s connection timeout
+      const onSignalAbort = () => controller.abort();
+      if (signal) {
+        signal.addEventListener('abort', onSignalAbort, { once: true });
+      }
 
       try {
         const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -309,6 +316,11 @@ Instructions:
 
         try {
           while (true) {
+            if (signal?.aborted) {
+              await reader.cancel().catch(() => {});
+              return;
+            }
+
             const { done, value } = await reader.read();
             if (done) break;
 
@@ -317,6 +329,11 @@ Instructions:
             buffer = lines.pop() || '';
 
             for (const line of lines) {
+              if (signal?.aborted) {
+                await reader.cancel().catch(() => {});
+                return;
+              }
+
               const cleaned = line.trim();
               if (!cleaned) continue;
               if (cleaned === 'data: [DONE]') continue;
@@ -336,6 +353,9 @@ Instructions:
             }
           }
         } finally {
+          if (signal) {
+            signal.removeEventListener('abort', onSignalAbort);
+          }
           reader.releaseLock();
         }
 
@@ -343,6 +363,9 @@ Instructions:
         return;
       } catch (err: any) {
         clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', onSignalAbort);
+        }
         lastError = err;
         console.warn(`Model ${activeModel} stream failed: ${err.message}`);
         // Continue fallback loop
