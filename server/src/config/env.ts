@@ -29,6 +29,9 @@ const envSchema = z.object({
   MINIMAX_API_KEY: z.string().default(''),
   GEMINI_API_KEY: z.string().default(''),
   VOYAGE_API_KEY: z.string().min(1, 'VOYAGE_API_KEY is required for embedding generation'),
+
+  // Encryption (falls back to JWT_SECRET if unset)
+  GITHUB_TOKEN_ENCRYPTION_KEY: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;

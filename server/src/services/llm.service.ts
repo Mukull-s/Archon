@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { DependencyAnalysisResult } from './dependency-intelligence.service';
 
 export interface ChatCompletionRequest {
   prompt: string;
@@ -21,6 +22,8 @@ export interface ChatCompletionRequest {
     fileTree: string;
   };
   evidenceTraces?: string[];
+  dependencyAnalysis?: DependencyAnalysisResult;
+  signal?: AbortSignal;
 }
 
 export interface StreamChunk {
@@ -36,7 +39,8 @@ class LLMService {
   private buildSystemPrompt(
     contextChunks: ChatCompletionRequest['contextChunks'],
     repoMetadata?: ChatCompletionRequest['repoMetadata'],
-    evidenceTraces?: string[]
+    evidenceTraces?: string[],
+    dependencyAnalysis?: DependencyAnalysisResult
   ) {
     let contextBlock = '';
     if (contextChunks.length > 0) {
@@ -60,8 +64,8 @@ ${chunk.content}
 - Total Scanned Files: ${repoMetadata.fileCount}
 - Combined Code Size: ${repoMetadata.totalSize} bytes
 - Detected Framework: ${repoMetadata.framework || 'Vanilla/Custom'}
-- Languages: ${repoMetadata.languages.join(', ')}
-- Main Entry Points: ${repoMetadata.entryPoints.join(', ') || 'None detected'}
+- Languages: ${(repoMetadata.languages || []).join(', ')}
+- Main Entry Points: ${(repoMetadata.entryPoints || []).join(', ') || 'None detected'}
 
 ## Complete File Tree Structure:
 ${repoMetadata.fileTree}
@@ -76,8 +80,64 @@ ${evidenceTraces.map(t => `- ${t}`).join('\n')}
 `;
     }
 
-    return `You are Archon, a highly sophisticated Codebase Intelligence Platform designed for engineers and recruiters.
-Your goal is to answer queries using the provided repository context chunks and repository overview, showing deep engineering logic.
+    let structuralEvidenceBlock = '';
+    if (dependencyAnalysis) {
+      if (dependencyAnalysis.relationship === 'AMBIGUOUS' || dependencyAnalysis.relationship === 'AMBIGUOUS_ENTITY') {
+        const amb = dependencyAnalysis.source || dependencyAnalysis.target;
+        structuralEvidenceBlock = `## VERIFIED ARCHON STRUCTURAL EVIDENCE (AMBIGUOUS ENTITY)
+STATUS: AMBIGUOUS_FILE_REFERENCE
+The query mentions "${amb?.mention}", which ambiguously matches multiple files in the repository:
+${(amb?.candidates || []).map(c => `- [${c}]`).join('\n')}
+
+MANDATORY INSTRUCTION:
+Do NOT guess or assume which file the user meant. Explicitly inform the user that multiple files match this name, list the matching candidate paths, and ask them which file they want to analyze.
+`;
+      } else if (dependencyAnalysis.relationship === 'NOT_FOUND') {
+        structuralEvidenceBlock = `## VERIFIED ARCHON STRUCTURAL EVIDENCE (ENTITY NOT FOUND)
+STATUS: FILE_NOT_FOUND
+${dependencyAnalysis.factualSummary}
+
+MANDATORY INSTRUCTION:
+Clearly state that the requested file was not found in the parsed repository files.
+`;
+      } else {
+        const evidenceLines = dependencyAnalysis.evidence && dependencyAnalysis.evidence.length > 0
+          ? dependencyAnalysis.evidence.map(e => `- [${e.filePath}${e.lineStart ? `:${e.lineStart}` : ''}]: \`${e.content}\` (${e.description})`).join('\n')
+          : 'No direct source import lines extracted (verified via graph adjacency matrix).';
+
+        const pathDisplay = dependencyAnalysis.path && dependencyAnalysis.path.length > 0
+          ? dependencyAnalysis.path.map(p => `[${p}]`).join(' → ')
+          : 'None';
+
+        structuralEvidenceBlock = `## VERIFIED ARCHON STRUCTURAL EVIDENCE (MATHEMATICALLY VERIFIED FROM AST DEPENDENCY GRAPH)
+- FACT: ${dependencyAnalysis.factualSummary}
+- RELATIONSHIP: ${dependencyAnalysis.relationship}
+- DIRECTION: ${dependencyAnalysis.direction || 'NONE'}
+- HOPS: ${dependencyAnalysis.hops ?? 'N/A'}
+- DEPENDENCY PATH: ${pathDisplay}
+${dependencyAnalysis.directImports && dependencyAnalysis.directImports.length > 0 ? `- DIRECT OUTBOUND IMPORTS (${dependencyAnalysis.directImports.length}):\n${dependencyAnalysis.directImports.map(i => `  → [${i}]`).join('\n')}` : ''}
+${dependencyAnalysis.importedBy && dependencyAnalysis.importedBy.length > 0 ? `- INBOUND DEPENDENTS (${dependencyAnalysis.importedBy.length}):\n${dependencyAnalysis.importedBy.map(i => `  ← [${i}]`).join('\n')}` : ''}
+
+### Target Source Evidence Lines:
+${evidenceLines}
+
+CRITICAL DIRECTIVE ON STRUCTURAL TRUTH:
+The above structural relationships are mathematically verified facts derived directly from Archon's parsed AST repository dependency graph.
+1. You MUST state and explain these facts as absolute truth.
+2. You MUST NOT contradict or invent dependency relationships that conflict with this verified evidence.
+3. If RELATIONSHIP is "DIRECT_DEPENDENCY", state clearly that the source file directly imports the target file (1 hop).
+4. If RELATIONSHIP is "REVERSE_DEPENDENCY", state clearly that the source file does NOT depend on the target; rather, the target imports the source.
+5. If RELATIONSHIP is "TRANSITIVE_DEPENDENCY", explain the exact step-by-step dependency chain across the verified hops.
+6. If RELATIONSHIP is "NO_DEPENDENCY", state authoritatively that no dependency exists between them in either direction.
+7. Ground your explanation in the source import statements provided above.
+`;
+      }
+    }
+
+    return `You are Archon, a highly sophisticated Codebase Intelligence Platform designed for engineers and architects.
+Your goal is to answer queries using the provided repository context chunks, structural dependency evidence, and repository overview, showing deep engineering logic.
+
+${structuralEvidenceBlock}
 
 ${repoOverviewBlock}
 
@@ -89,7 +149,7 @@ ${contextBlock}
 =========================================
 
 Instructions:
-1. Ground your answers strictly in the provided code context and repository overview.
+1. Ground your answers strictly in the provided code context, structural evidence, and repository overview.
 2. For codebase, structural, or architectural explanations, structure your response using clear sections, lists, and tables. Highlight:
    - **Executive Summary** (brief overview)
    - **Architecture** & **Data Flow**
@@ -136,9 +196,9 @@ Instructions:
   /**
    * Standard non-streaming chat method (with new metadata-aware prompt).
    */
-  async chat({ prompt, contextChunks, model, repoMetadata, evidenceTraces }: ChatCompletionRequest) {
+  async chat({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis }: ChatCompletionRequest) {
     const modelsQueue = this.getModelsQueue(model);
-    const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces);
+    const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces, dependencyAnalysis);
     let lastError: any = null;
 
     for (const activeModel of modelsQueue) {
@@ -190,12 +250,14 @@ Instructions:
   /**
    * Streaming chat method using native fetch & Server-Sent Events.
    */
-  async *chatStream({ prompt, contextChunks, model, repoMetadata, evidenceTraces }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
+  async *chatStream({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis, signal }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
     const modelsQueue = this.getModelsQueue(model);
-    const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces);
+    const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces, dependencyAnalysis);
     let lastError: any = null;
 
     for (const activeModel of modelsQueue) {
+      if (signal?.aborted) return;
+
       const isDirectDeepSeek = activeModel === 'deepseek-v4-flash' || activeModel === 'deepseek-v4-pro';
       const baseUrl = isDirectDeepSeek ? 'https://api.deepseek.com/v1' : 'https://openrouter.ai/api/v1';
       const apiKey = isDirectDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENROUTER_API_KEY;
@@ -209,6 +271,10 @@ Instructions:
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s connection timeout
+      const onSignalAbort = () => controller.abort();
+      if (signal) {
+        signal.addEventListener('abort', onSignalAbort, { once: true });
+      }
 
       try {
         const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -250,6 +316,11 @@ Instructions:
 
         try {
           while (true) {
+            if (signal?.aborted) {
+              await reader.cancel().catch(() => {});
+              return;
+            }
+
             const { done, value } = await reader.read();
             if (done) break;
 
@@ -258,6 +329,11 @@ Instructions:
             buffer = lines.pop() || '';
 
             for (const line of lines) {
+              if (signal?.aborted) {
+                await reader.cancel().catch(() => {});
+                return;
+              }
+
               const cleaned = line.trim();
               if (!cleaned) continue;
               if (cleaned === 'data: [DONE]') continue;
@@ -277,6 +353,9 @@ Instructions:
             }
           }
         } finally {
+          if (signal) {
+            signal.removeEventListener('abort', onSignalAbort);
+          }
           reader.releaseLock();
         }
 
@@ -284,6 +363,9 @@ Instructions:
         return;
       } catch (err: any) {
         clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', onSignalAbort);
+        }
         lastError = err;
         console.warn(`Model ${activeModel} stream failed: ${err.message}`);
         // Continue fallback loop

@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { env, prisma } from '../config';
-import { AppError } from '../utils';
+import { AppError, encryptToken, getPlaintextToken } from '../utils';
 import { emailService } from './email.service';
 import type { AuthUser, JWTPayload, GitHubProfile, GoogleProfile, SignupInput, LoginInput } from '../types';
 
@@ -148,7 +148,7 @@ export class AuthService {
       user = await prisma.user.update({
         where: { id: user.id },
         data: {
-          githubToken: tokenData.access_token,
+          githubToken: encryptToken(tokenData.access_token),
           githubLogin: profile.login,
           avatarUrl: user.avatarUrl || profile.avatar_url,
           name: user.name || profile.name,
@@ -165,13 +165,13 @@ export class AuthService {
           provider: 'github',
           providerId: String(profile.id),
           emailVerified: true,
-          githubToken: tokenData.access_token,
+          githubToken: encryptToken(tokenData.access_token),
           githubLogin: profile.login,
         },
       });
     }
 
-    const token = this.generateJWT(user.id, user.email, 'github', tokenData.access_token);
+    const token = this.generateJWT(user.id, user.email, 'github');
     return { user: this.toAuthUser(user), token };
   }
 
@@ -261,8 +261,8 @@ export class AuthService {
   // JWT & HELPERS
   // ─────────────────────────────────────────────
 
-  generateJWT(userId: string, email: string, provider: string, githubToken?: string): string {
-    const payload: JWTPayload = { userId, email, provider, ...(githubToken && { githubToken }) };
+  generateJWT(userId: string, email: string, provider: string): string {
+    const payload: JWTPayload = { userId, email, provider };
     return jwt.sign(payload, env.JWT_SECRET, { expiresIn: '7d' });
   }
 
@@ -277,6 +277,18 @@ export class AuthService {
   async getUserById(id: string): Promise<AuthUser | null> {
     const user = await prisma.user.findUnique({ where: { id } });
     return user ? this.toAuthUser(user) : null;
+  }
+
+  /**
+   * Retrieves and decrypts the stored GitHub token for a user.
+   * Handles both encrypted and legacy plaintext tokens.
+   */
+  async getDecryptedGithubToken(userId: string): Promise<string | null> {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { githubToken: true },
+    });
+    return getPlaintextToken(user?.githubToken);
   }
 
   async updateProfile(userId: string, data: { name?: string; avatarUrl?: string }): Promise<AuthUser> {

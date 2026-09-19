@@ -180,6 +180,13 @@ export default function ProfilePage() {
     }
   };
 
+  const handleCopyAccountId = () => {
+    if (user?.id) {
+      navigator.clipboard.writeText(user.id);
+      toast.success('Account ID copied to clipboard');
+    }
+  };
+
   const isArchitect = usageData?.plan === 'pro' || user?.plan === 'pro';
   const tierDisplayName = isArchitect ? 'Architect' : 'Explorer';
 
@@ -523,7 +530,7 @@ export default function ProfilePage() {
                   Analyze a GitHub repository or upload a ZIP archive to generate your first architecture map.
                 </p>
                 <Link
-                  to="/dashboard/new"
+                  to="/"
                   className="inline-block px-5 py-2.5 rounded-lg bg-gradient-to-r from-[#b026ff] to-[#6366f1] text-white text-[13px] font-semibold no-underline shadow-[0_4px_16px_rgba(176,38,255,0.3)] hover:brightness-110 transition-all"
                 >
                   Analyze New Repository
@@ -579,6 +586,58 @@ export default function ProfilePage() {
         {/* ── TAB 3: ACCOUNT SECURITY ── */}
         {activeTab === 'account' && (
           <div className="max-w-[640px] flex flex-col gap-6">
+            {/* Account Identifier & Details Card */}
+            <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4">
+              <div>
+                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
+                  Account Details
+                </h3>
+                <p className="text-[13px] text-text-muted m-0">
+                  Unique workspace identifier and federated identity status.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-lg bg-surface-elevated/40 border border-border-subtle/70">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
+                    Account ID
+                  </div>
+                  <div className="text-[13px] font-mono text-text-secondary truncate select-all">
+                    {user?.id || 'Unknown'}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleCopyAccountId}
+                  className="shrink-0 text-xs"
+                >
+                  Copy ID
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div className="p-3 rounded-lg bg-surface-elevated/40 border border-border-subtle/70">
+                  <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
+                    Auth Method
+                  </div>
+                  <div className="text-[13px] font-medium text-text-primary capitalize">
+                    {providerName}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-surface-elevated/40 border border-border-subtle/70">
+                  <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
+                    Account Status
+                  </div>
+                  <div className="text-[13px] font-medium text-text-primary flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-status-success animate-pulse" />
+                    Active ({isArchitect ? 'Architect' : 'Explorer'})
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Display Name Edit */}
             <form
               onSubmit={handleSaveProfile}

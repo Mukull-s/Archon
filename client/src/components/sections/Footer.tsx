@@ -1,9 +1,15 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 
+interface FooterLinkItem {
+  label: string
+  href: string
+  external?: boolean
+}
+
 interface FooterGroupProps {
   title: string
-  links: string[]
+  links: FooterLinkItem[]
 }
 
 function FooterGroup({ title, links }: FooterGroupProps) {
@@ -14,13 +20,51 @@ function FooterGroup({ title, links }: FooterGroupProps) {
         textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '12px',
       }}>{title}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {links.map(l => <a key={l} href="#" className="footer-link">{l}</a>)}
+        {links.map(l => (
+          l.external ? (
+            <a
+              key={l.label}
+              href={l.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="footer-link"
+            >
+              {l.label}
+            </a>
+          ) : (
+            <Link
+              key={l.label}
+              to={l.href}
+              className="footer-link"
+            >
+              {l.label}
+            </Link>
+          )
+        ))}
       </div>
     </div>
   )
 }
 
 export default function Footer() {
+  const productLinks: FooterLinkItem[] = [
+    { label: 'Architecture Graph', href: '/dashboard' },
+    { label: 'Pricing Plans', href: '/pricing' },
+    { label: 'Documentation', href: '/docs' },
+  ]
+
+  const developerLinks: FooterLinkItem[] = [
+    { label: 'GitHub Repository', href: 'https://github.com/Mukull-s/Archon', external: true },
+    { label: 'API Reference', href: '/docs' },
+    { label: 'Codebase Hub', href: '/history' },
+  ]
+
+  const legalLinks: FooterLinkItem[] = [
+    { label: 'Privacy Policy', href: '/docs' },
+    { label: 'Terms of Service', href: '/docs' },
+    { label: 'System Status', href: '/docs' },
+  ]
+
   return (
     <footer style={{ borderTop: '1px solid var(--border)', padding: '48px 24px 32px' }}>
       <div style={{ maxWidth: '1120px', margin: '0 auto' }}>
@@ -39,9 +83,9 @@ export default function Footer() {
           </div>
 
           <div style={{ display: 'flex', gap: '48px', flexWrap: 'wrap' }}>
-            <FooterGroup title="Product" links={['Features', 'How It Works', 'Changelog']} />
-            <FooterGroup title="Developers" links={['GitHub', 'Docs', 'API']} />
-            <FooterGroup title="Legal" links={['Privacy', 'Terms']} />
+            <FooterGroup title="Product" links={productLinks} />
+            <FooterGroup title="Developers" links={developerLinks} />
+            <FooterGroup title="Resources" links={legalLinks} />
           </div>
         </div>
 

@@ -1,3 +1,8 @@
+import {
+  dependencyIntelligenceService,
+  DependencyAnalysisResult
+} from './dependency-intelligence.service';
+
 export type QueryIntent =
   | 'ARCHITECTURE'
   | 'DEPENDENCY'
@@ -11,13 +16,22 @@ export interface Plan {
   limit: number;
   useFts: boolean;
   useVector: boolean;
+  dependencyAnalysis?: DependencyAnalysisResult;
+}
+
+export interface RepoPlanningContext {
+  scannedFiles: Array<{ path: string }>;
+  dependencyGraph: Record<string, string[]>;
+  astMetadata?: Record<string, any>;
+  codeChunks?: Array<{ filePath: string; content: string; startLine: number; endLine: number }>;
 }
 
 export class PlannerService {
   /**
-   * Plans the retrieval steps based on the user's query text.
+   * Plans the retrieval steps based on the user's query text and executes
+   * real structural graph operations when repository context is available.
    */
-  planQuery(queryText: string): Plan {
+  planQuery(queryText: string, repoContext?: RepoPlanningContext): Plan {
     const lower = queryText.toLowerCase();
     
     // Heuristics for intent detection
@@ -26,19 +40,46 @@ export class PlannerService {
     let limit = 8;
     let useFts = true;
     let useVector = true;
+    let dependencyAnalysis: DependencyAnalysisResult | undefined;
 
     if (
       lower.includes('dependency') ||
       lower.includes('depends') ||
+      lower.includes('depend on') ||
       lower.includes('imports') ||
       lower.includes('imported') ||
-      lower.includes('dependency graph')
+      lower.includes('dependency graph') ||
+      lower.includes('call graph') ||
+      lower.includes('depend upon')
     ) {
       intent = 'DEPENDENCY';
-      steps.push('Walk dependency import graph edges');
-      steps.push('Identify topological hotspots and centrality');
-      useVector = false; // Dependency queries rely mostly on structural graph, skip vector
-      limit = 6;
+
+      if (repoContext && repoContext.scannedFiles && repoContext.dependencyGraph) {
+        // Execute REAL deterministic graph intelligence operation
+        dependencyAnalysis = dependencyIntelligenceService.analyzeDependencies({
+          queryText,
+          scannedFiles: repoContext.scannedFiles,
+          dependencyGraph: repoContext.dependencyGraph,
+          astMetadata: repoContext.astMetadata,
+          codeChunks: repoContext.codeChunks
+        });
+
+        // Use the actual executed steps from the graph engine
+        steps.push(...dependencyAnalysis.executedSteps);
+
+        // For specific entity queries, prioritize structural graph truth over vector search
+        if (dependencyAnalysis.queryType !== 'GENERAL') {
+          useVector = false;
+        } else {
+          useVector = true;
+        }
+      } else {
+        steps.push('Extract entity mentions from query');
+        steps.push('Resolve entities against scanned files');
+        steps.push('Query AST dependency graph');
+        useVector = false;
+      }
+      limit = 10;
     } else if (
       lower.includes('flow') ||
       lower.includes('execution') ||
@@ -92,7 +133,8 @@ export class PlannerService {
       steps,
       limit,
       useFts,
-      useVector
+      useVector,
+      dependencyAnalysis
     };
   }
 }

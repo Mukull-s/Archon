@@ -14,7 +14,6 @@ export interface JWTPayload {
   userId: string;
   email: string;
   provider: string;
-  githubToken?: string;
 }
 
 export interface GitHubProfile {

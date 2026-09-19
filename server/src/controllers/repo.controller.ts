@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma, EMBEDDING_BATCH_SIZE, DB_BATCH_SIZE, MAX_FILES_LIMIT, MAX_TOTAL_SIZE_LIMIT, MAX_SINGLE_FILE_SIZE_LIMIT, MAX_CHUNKS_LIMIT } from '../config';
 import { ingestionService, deleteFolderWithRetry } from '../services/ingestion.service';
-import { AppError } from '../utils';
+import { AppError, getPlaintextToken } from '../utils';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -429,10 +429,19 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     });
     const isIndexed = chunkCount > 0;
 
+    // Strip scannedFiles to only the fields the frontend needs
+    // (path, size, lines) — omit 'hash' to reduce payload
+    const lightScannedFiles = (scannedFiles || []).map((f: any) => ({
+      path: f.path,
+      size: f.size,
+      lines: f.lines,
+    }));
+
     res.status(200).json({
       success: true,
       data: {
         ...repo,
+        scannedFiles: lightScannedFiles,
         isIndexed,
         confidenceDetails
       }
@@ -639,7 +648,7 @@ export async function performVectorIndexing(id: string, force = false, options?:
     // If it matches the stored SHA, return immediately without re-indexing.
     if (!force && repoRow.indexingStatus === 'completed' && repoRow.owner && !repoRow.isLocal) {
       try {
-        const token = repoRow.user?.githubToken || process.env.GITHUB_FALLBACK_TOKEN;
+        const token = getPlaintextToken(repoRow.user?.githubToken) || process.env.GITHUB_FALLBACK_TOKEN;
         const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
         if (token) headers['Authorization'] = `Bearer ${token}`;
         const shaRes = await (await import('axios')).default.get(
@@ -677,7 +686,7 @@ export async function performVectorIndexing(id: string, force = false, options?:
     let downloadTime = 0;
     if (!repoRow.isLocal && !zipPath) {
       const t0 = Date.now();
-      const token = repoRow.user?.githubToken || undefined;
+      const token = getPlaintextToken(repoRow.user?.githubToken) || undefined;
       zipPath = await ingestionService.downloadGithubRepo(repoRow.owner!, repoRow.name, token);
       downloadTime = Date.now() - t0;
       tempDirsToCleanup.push(zipPath);
@@ -1136,49 +1145,85 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Check monthly AI question entitlement
-    await entitlementService.canAskAI(userId);
+    // Atomically reserve monthly AI question entitlement upfront
+    await entitlementService.recordAiQuestion(userId);
+    let reservedAiQuota = true;
 
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
         id: true, name: true, fileCount: true, totalSize: true, framework: true,
-        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true
+        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true,
+        astMetadata: true
       }
     });
     if (!repo) {
       throw new AppError('Repository not found.', 404);
     }
 
-    const plan = plannerService.planQuery(message);
-    console.log(`Planner selected query intent: ${plan.intent}`);
-    plan.steps.forEach(step => console.log(`  -> Planning step: ${step}`));
+    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
+      ? JSON.parse(repo.dependencyGraph)
+      : repo.dependencyGraph) as Record<string, string[]> || {};
+
+    const scannedFiles = (typeof repo.scannedFiles === 'string'
+      ? JSON.parse(repo.scannedFiles)
+      : repo.scannedFiles) as Array<{ path: string }> || [];
+
+    const astMetadata = (typeof repo.astMetadata === 'string'
+      ? JSON.parse(repo.astMetadata)
+      : repo.astMetadata) as Record<string, any> || {};
+
+    const plan = plannerService.planQuery(message, {
+      scannedFiles,
+      dependencyGraph,
+      astMetadata
+    });
+    console.log(`[ARCHON AI] Selected query intent: ${plan.intent}`);
+    plan.steps.forEach(step => console.log(`  -> [ARCHON AI] Step: ${step}`));
+    if (plan.dependencyAnalysis) {
+      console.log(`[ENTITY] Resolved: Source=${plan.dependencyAnalysis.sourceFile || 'none'}, Target=${plan.dependencyAnalysis.targetFile || 'none'}`);
+      console.log(`[GRAPH] Verified Relationship: ${plan.dependencyAnalysis.relationship} (Hops: ${plan.dependencyAnalysis.hops ?? 'N/A'})`);
+      if (plan.dependencyAnalysis.evidence && plan.dependencyAnalysis.evidence.length > 0) {
+        plan.dependencyAnalysis.evidence.forEach(ev => {
+          console.log(`[EVIDENCE] ${ev.filePath}:${ev.line} -> ${ev.statement}`);
+        });
+      }
+    }
 
     let similarChunks: any[] = [];
-    if (plan.useVector) {
-      const queryVector = await vectorService.getEmbedding(message);
-      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
-    } else {
-      similarChunks = await prisma.codeChunk.findMany({
-        where: {
-          repositoryId: id as string,
-          filePath: {
-            contains: 'package.json'
-          }
-        },
-        take: plan.limit
-      });
+    if (plan.intent === 'DEPENDENCY' && plan.dependencyAnalysis) {
+      const targetFilePaths: string[] = [];
+      if (plan.dependencyAnalysis.sourceFile) targetFilePaths.push(plan.dependencyAnalysis.sourceFile);
+      if (plan.dependencyAnalysis.targetFile) targetFilePaths.push(plan.dependencyAnalysis.targetFile);
+      if (plan.dependencyAnalysis.path && plan.dependencyAnalysis.path.length > 0) {
+        targetFilePaths.push(...plan.dependencyAnalysis.path);
+      }
+      const uniqueFilePaths = Array.from(new Set(targetFilePaths.filter(Boolean)));
+
+      if (uniqueFilePaths.length > 0) {
+        similarChunks = await prisma.codeChunk.findMany({
+          where: {
+            repositoryId: id as string,
+            filePath: { in: uniqueFilePaths }
+          },
+          take: 20
+        });
+      }
       if (similarChunks.length === 0) {
         similarChunks = await prisma.codeChunk.findMany({
           where: { repositoryId: id as string },
           take: plan.limit
         });
       }
+    } else if (plan.useVector) {
+      const queryVector = await vectorService.getEmbedding(message);
+      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
+    } else {
+      similarChunks = await prisma.codeChunk.findMany({
+        where: { repositoryId: id as string },
+        take: plan.limit
+      });
     }
-
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
 
     const inDegreeMap: Record<string, number> = {};
     for (const [filePath, imports] of Object.entries(dependencyGraph)) {
@@ -1198,9 +1243,6 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
     const sortedChunks = hierarchyService.categorizeAndSortChunks(rawChunks, inDegreeMap);
     const contextChunks = hierarchyService.allocateTokens(sortedChunks, 8000);
 
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as Array<{ path: string }>;
     const fileTree = buildFileTreeString(scannedFiles);
 
     const repoMetadata = {
@@ -1215,13 +1257,21 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
 
     const evidenceTraces = evidenceService.generateEvidenceTraces(scannedFiles, dependencyGraph).map(t => t.pathString);
 
-    const aiResult = await llmService.chat({
-      prompt: message,
-      contextChunks,
-      model: requestedModel,
-      repoMetadata,
-      evidenceTraces
-    });
+    // Timeout: abort if LLM takes longer than 120 seconds
+    const CHAT_TIMEOUT_MS = 120_000;
+    const aiResult = await Promise.race([
+      llmService.chat({
+        prompt: message,
+        contextChunks,
+        model: requestedModel,
+        repoMetadata,
+        evidenceTraces,
+        dependencyAnalysis: plan.dependencyAnalysis
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new AppError('AI response timed out. Please try again.', 504)), CHAT_TIMEOUT_MS)
+      ),
+    ]);
 
     await prisma.chatMessage.create({
       data: { repositoryId: id as string, sender: 'USER', message }
@@ -1230,9 +1280,6 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
     await prisma.chatMessage.create({
       data: { repositoryId: id as string, sender: 'AI', message: aiResult.text, modelUsed: aiResult.modelUsed }
     });
-
-    // Authoritatively record monthly AI question usage
-    await entitlementService.recordAiQuestion(userId);
 
     res.status(200).json({
       success: true,
@@ -1243,6 +1290,9 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       }
     });
   } catch (error) {
+    if (req.user?.userId) {
+      await entitlementService.refundAiQuestion(req.user.userId).catch(() => {});
+    }
     next(error);
   }
 }
@@ -1263,49 +1313,84 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Check monthly AI question entitlement
-    await entitlementService.canAskAI(userId);
+    // Atomically reserve monthly AI question entitlement upfront
+    await entitlementService.recordAiQuestion(userId);
 
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
         id: true, name: true, fileCount: true, totalSize: true, framework: true,
-        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true
+        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true,
+        astMetadata: true
       }
     });
     if (!repo) {
       throw new AppError('Repository not found.', 404);
     }
 
-    const plan = plannerService.planQuery(message);
-    console.log(`Planner stream selected query intent: ${plan.intent}`);
-    plan.steps.forEach(step => console.log(`  -> Planning stream step: ${step}`));
+    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
+      ? JSON.parse(repo.dependencyGraph)
+      : repo.dependencyGraph) as Record<string, string[]> || {};
+
+    const scannedFiles = (typeof repo.scannedFiles === 'string'
+      ? JSON.parse(repo.scannedFiles)
+      : repo.scannedFiles) as Array<{ path: string }> || [];
+
+    const astMetadata = (typeof repo.astMetadata === 'string'
+      ? JSON.parse(repo.astMetadata)
+      : repo.astMetadata) as Record<string, any> || {};
+
+    const plan = plannerService.planQuery(message, {
+      scannedFiles,
+      dependencyGraph,
+      astMetadata
+    });
+    console.log(`[ARCHON AI Stream] Selected query intent: ${plan.intent}`);
+    plan.steps.forEach(step => console.log(`  -> [ARCHON AI Stream] Step: ${step}`));
+    if (plan.dependencyAnalysis) {
+      console.log(`[ENTITY Stream] Resolved: Source=${plan.dependencyAnalysis.sourceFile || 'none'}, Target=${plan.dependencyAnalysis.targetFile || 'none'}`);
+      console.log(`[GRAPH Stream] Verified Relationship: ${plan.dependencyAnalysis.relationship} (Hops: ${plan.dependencyAnalysis.hops ?? 'N/A'})`);
+      if (plan.dependencyAnalysis.evidence && plan.dependencyAnalysis.evidence.length > 0) {
+        plan.dependencyAnalysis.evidence.forEach(ev => {
+          console.log(`[EVIDENCE Stream] ${ev.filePath}:${ev.line} -> ${ev.statement}`);
+        });
+      }
+    }
 
     let similarChunks: any[] = [];
-    if (plan.useVector) {
-      const queryVector = await vectorService.getEmbedding(message);
-      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
-    } else {
-      similarChunks = await prisma.codeChunk.findMany({
-        where: {
-          repositoryId: id as string,
-          filePath: {
-            contains: 'package.json'
-          }
-        },
-        take: plan.limit
-      });
+    if (plan.intent === 'DEPENDENCY' && plan.dependencyAnalysis) {
+      const targetFilePaths: string[] = [];
+      if (plan.dependencyAnalysis.sourceFile) targetFilePaths.push(plan.dependencyAnalysis.sourceFile);
+      if (plan.dependencyAnalysis.targetFile) targetFilePaths.push(plan.dependencyAnalysis.targetFile);
+      if (plan.dependencyAnalysis.path && plan.dependencyAnalysis.path.length > 0) {
+        targetFilePaths.push(...plan.dependencyAnalysis.path);
+      }
+      const uniqueFilePaths = Array.from(new Set(targetFilePaths.filter(Boolean)));
+
+      if (uniqueFilePaths.length > 0) {
+        similarChunks = await prisma.codeChunk.findMany({
+          where: {
+            repositoryId: id as string,
+            filePath: { in: uniqueFilePaths }
+          },
+          take: 20
+        });
+      }
       if (similarChunks.length === 0) {
         similarChunks = await prisma.codeChunk.findMany({
           where: { repositoryId: id as string },
           take: plan.limit
         });
       }
+    } else if (plan.useVector) {
+      const queryVector = await vectorService.getEmbedding(message);
+      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
+    } else {
+      similarChunks = await prisma.codeChunk.findMany({
+        where: { repositoryId: id as string },
+        take: plan.limit
+      });
     }
-
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
 
     const inDegreeMap: Record<string, number> = {};
     for (const [filePath, imports] of Object.entries(dependencyGraph)) {
@@ -1325,9 +1410,6 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
     const sortedChunks = hierarchyService.categorizeAndSortChunks(rawChunks, inDegreeMap);
     const contextChunks = hierarchyService.allocateTokens(sortedChunks, 8000);
 
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as Array<{ path: string }>;
     const fileTree = buildFileTreeString(scannedFiles);
 
     const repoMetadata = {
@@ -1356,6 +1438,23 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
 
     let completeText = '';
     let finalModel = requestedModel;
+    const abortController = new AbortController();
+    let clientDisconnected = false;
+
+    // Detect client disconnect
+    const onClose = () => {
+      clientDisconnected = true;
+      abortController.abort();
+    };
+    req.on('close', onClose);
+
+    // Maximum stream duration to prevent hanging connections (120 seconds)
+    const STREAM_TIMEOUT_MS = 120_000;
+    let streamTimedOut = false;
+    const streamTimer = setTimeout(() => {
+      streamTimedOut = true;
+      abortController.abort();
+    }, STREAM_TIMEOUT_MS);
 
     const evidenceTraces = evidenceService.generateEvidenceTraces(scannedFiles, dependencyGraph).map(t => t.pathString);
 
@@ -1365,34 +1464,70 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
         contextChunks,
         model: requestedModel,
         repoMetadata,
-        evidenceTraces
+        evidenceTraces,
+        dependencyAnalysis: plan.dependencyAnalysis,
+        signal: abortController.signal
       });
 
       for await (const chunk of stream) {
+        // Stop streaming if client disconnected or stream timed out
+        if (clientDisconnected || streamTimedOut) {
+          console.log(`[Stream] Aborting: ${clientDisconnected ? 'client disconnected' : 'stream timeout'}`);
+          break;
+        }
+
         completeText += chunk.content;
         finalModel = chunk.modelUsed;
-        res.write(`data: ${JSON.stringify({ token: chunk.content, modelUsed: chunk.modelUsed })}\n\n`);
+
+        try {
+          res.write(`data: ${JSON.stringify({ token: chunk.content, modelUsed: chunk.modelUsed })}\n\n`);
+        } catch {
+          // Write failed — client likely disconnected
+          clientDisconnected = true;
+          break;
+        }
       }
 
-      // Save complete AI response to history
-      await prisma.chatMessage.create({
-        data: {
-          repositoryId: id as string,
-          sender: 'AI',
-          message: completeText,
-          modelUsed: finalModel
+      // Save complete AI response to history (even partial on disconnect)
+      if (completeText.length > 0) {
+        await prisma.chatMessage.create({
+          data: {
+            repositoryId: id as string,
+            sender: 'AI',
+            message: completeText,
+            modelUsed: finalModel
+          }
+        }).catch(saveErr => {
+          console.error('[Stream] Failed to save AI response:', saveErr);
+        });
+      } else {
+        // Stream completed without producing text, refund reservation
+        await entitlementService.refundAiQuestion(userId).catch(() => {});
+      }
+
+      if (!clientDisconnected) {
+        if (streamTimedOut) {
+          res.write(`data: ${JSON.stringify({ error: 'Stream timed out after 2 minutes.' })}\n\n`);
         }
-      });
-
-      // Authoritatively record monthly AI question usage
-      await entitlementService.recordAiQuestion(userId);
-
-      res.write('data: [DONE]\n\n');
-      res.end();
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }
     } catch (err: any) {
       console.error('Streaming response failed:', err);
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-      res.end();
+      if (completeText.length === 0) {
+        await entitlementService.refundAiQuestion(userId).catch(() => {});
+      }
+      if (!clientDisconnected) {
+        try {
+          res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+          res.end();
+        } catch {
+          // Client already gone
+        }
+      }
+    } finally {
+      clearTimeout(streamTimer);
+      req.removeListener('close', onClose);
     }
   } catch (error) {
     next(error);
@@ -1570,7 +1705,15 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
     }
 
     const repo = await prisma.repository.findFirst({
-      where: { id: id as string, userId: userId as string }
+      where: { id: id as string, userId: userId as string },
+      select: {
+        id: true,
+        name: true,
+        framework: true,
+        languages: true,
+        totalSize: true,
+        scannedFiles: true
+      }
     });
     if (!repo) {
       throw new AppError('Repository not found.', 404);
