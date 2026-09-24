@@ -20,6 +20,16 @@ import { onboardingService } from '../services/onboarding.service';
 import { identityService } from '../services/identity.service';
 import { embeddingService } from '../services/embedding.service';
 import { entitlementService } from '../services/entitlement.service';
+import { queueService } from '../services/queue.service';
+
+// Register durable queue job handler for vector indexing
+queueService.registerHandler('VECTOR_INDEX', async (job) => {
+  await performVectorIndexing(job.repositoryId, job.payload.force ?? false, {
+    zipPath: job.payload.zipPath,
+    isNewAnalysis: job.payload.isNewAnalysis ?? false,
+    userId: job.userId
+  });
+});
 
 /**
  * Parses a GitHub repository URL to extract owner and repository name.
@@ -164,15 +174,19 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
       });
     }
 
-    // Trigger background vector indexing asynchronously
-    performVectorIndexing(repository.id, isReindex, { isNewAnalysis: !isReindex }).catch(err => {
-      console.error(`[Background Indexing] Failed for repo ${repository!.id}:`, err);
+    // Enqueue durable background vector indexing job in PostgreSQL queue
+    const enqueued = await queueService.enqueue(repository.id, userId, {
+      force: isReindex,
+      isNewAnalysis: !isReindex
     });
 
     res.status(201).json({
       success: true,
-      message: 'Repository registration successful. Indexing started in background.',
-      data: repository
+      message: 'Repository registration successful. Indexing job enqueued in background queue.',
+      data: {
+        ...repository,
+        jobId: enqueued.jobId
+      }
     });
   } catch (error) {
     next(error);
@@ -289,15 +303,20 @@ export async function scanLocalZip(req: Request, res: Response, next: NextFuncti
       });
     }
 
-    // Trigger background vector indexing passing the local zip path
-    performVectorIndexing(repository.id, isReindex, { zipPath, isNewAnalysis: !isReindex }).catch(err => {
-      console.error(`[Background Indexing] Failed for local repo ${repository!.id}:`, err);
+    // Enqueue durable background vector indexing job passing the local zip path
+    const enqueued = await queueService.enqueue(repository.id, userId, {
+      zipPath,
+      force: isReindex,
+      isNewAnalysis: !isReindex
     });
 
     res.status(201).json({
       success: true,
-      message: 'ZIP upload successful. Indexing started in background.',
-      data: repository
+      message: 'ZIP upload successful. Indexing job enqueued in background queue.',
+      data: {
+        ...repository,
+        jobId: enqueued.jobId
+      }
     });
   } catch (error) {
     next(error);
@@ -510,17 +529,17 @@ export async function analyzeImpact(req: Request, res: Response, next: NextFunct
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Retrieve user entitlement to check plan tier for advanced AI reasoning
-    const userLimits = await entitlementService.getUserUsageAndLimits(userId);
-    const isPro = userLimits.plan === 'pro';
-
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: { id: true, dependencyGraph: true }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
+
+    // Retrieve user entitlement to check plan tier for advanced AI reasoning
+    const userLimits = await entitlementService.getUserUsageAndLimits(userId);
+    const isPro = userLimits.plan === 'pro';
 
     const dependencyGraph = (typeof repo.dependencyGraph === 'string'
       ? JSON.parse(repo.dependencyGraph)
@@ -618,7 +637,7 @@ Explain WHY modifying this file propagates to these dependencies. Keep it short,
  * Standalone asynchronous vector indexing runner.
  * Automatically checks if repository is already indexed to return instantly unless force is true.
  */
-export async function performVectorIndexing(id: string, force = false, options?: { zipPath?: string; isNewAnalysis?: boolean }): Promise<void> {
+export async function performVectorIndexing(id: string, force = false, options?: { zipPath?: string; isNewAnalysis?: boolean; userId?: string }): Promise<void> {
   // ── Metrics helpers ───────────────────────────────────────────────────────
   function heapMB() { return Math.round(process.memoryUsage().heapUsed / 1024 / 1024); }
   function logStage(stage: string, durationMs?: number) {
@@ -641,7 +660,11 @@ export async function performVectorIndexing(id: string, force = false, options?:
       include: { user: true }
     });
 
-    if (!repoRow) throw new AppError('Repository not found.', 404);
+    if (!repoRow) throw new AppError('Repository not found or access denied.', 404);
+
+    if (options?.userId && repoRow.userId !== options.userId) {
+      throw new AppError('Repository not found or access denied.', 404);
+    }
 
     // ── Stage 0: Commit SHA early-exit ────────────────────────────────────
     // If the repo is GitHub-hosted and already completed, check the latest commit SHA.
@@ -843,14 +866,18 @@ export async function performVectorIndexing(id: string, force = false, options?:
     const filesToEmbed = scannedFiles.filter(f => changedOrDeletedFiles.has(f.path));
     console.log(`[Indexing] ${scannedFiles.length} total files | ${filesToEmbed.length} changed/new (need embedding) | ${scannedFiles.length - filesToEmbed.length} unchanged`);
 
-    // Clean stale chunks
+    // Clean stale chunks safely using Prisma ORM deleteMany
     if (changedOrDeletedFiles.size > 0 && !force) {
-      await prisma.$executeRawUnsafe(
-        `DELETE FROM "CodeChunk" WHERE "repositoryId" = $1 AND "filePath" = ANY($2)`,
-        id, Array.from(changedOrDeletedFiles)
-      );
+      await prisma.codeChunk.deleteMany({
+        where: {
+          repositoryId: id,
+          filePath: { in: Array.from(changedOrDeletedFiles) }
+        }
+      });
     } else if (force) {
-      await prisma.$executeRawUnsafe(`DELETE FROM "CodeChunk" WHERE "repositoryId" = $1`, id);
+      await prisma.codeChunk.deleteMany({
+        where: { repositoryId: id }
+      });
     }
 
     // Persist scanned file metadata to DB early
@@ -1022,10 +1049,10 @@ export async function performVectorIndexing(id: string, force = false, options?:
       }
     }
 
-    // If we fetched a latest SHA, try to persist it (best-effort, ignores schema errors)
+    // If we fetched a latest SHA, try to persist it safely parameterized (best-effort, ignores schema errors)
     if (latestSha) {
       try {
-        await prisma.$executeRawUnsafe(`UPDATE "Repository" SET "commitSha" = $1 WHERE id = $2`, latestSha, id);
+        await prisma.$executeRaw`UPDATE "Repository" SET "commitSha" = ${latestSha} WHERE id = ${id}`;
       } catch {} // Column may not exist yet — not fatal
     }
 
@@ -1057,10 +1084,13 @@ export async function performVectorIndexing(id: string, force = false, options?:
 
   } catch (error: any) {
     console.error(`[Indexing] Failed to index repository ${id}:`, error.stack || error);
-    await prisma.repository.update({
-      where: { id },
-      data: { indexingStatus: 'failed', indexingProgress: `Error: ${error.message || 'Unknown error'}` }
-    }).catch(updateErr => console.error('[Indexing] Failed to update repo status:', updateErr));
+    // Do not alter repository status if access was denied or repo was not found
+    if (!(error instanceof AppError && error.statusCode === 404)) {
+      await prisma.repository.update({
+        where: { id },
+        data: { indexingStatus: 'failed', indexingProgress: `Error: ${error.message || 'Unknown error'}` }
+      }).catch(updateErr => console.error('[Indexing] Failed to update repo status:', updateErr));
+    }
     throw error;
   } finally {
     logStage('cleanup');
@@ -1095,7 +1125,7 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
       where: { id: id as string, userId: userId as string }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
 
     if (repo.indexingStatus === 'indexing' && !force) {
@@ -1115,14 +1145,18 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
       }
     });
 
-    // Trigger background vector indexing asynchronously
-    performVectorIndexing(id as string, true, { isNewAnalysis: false }).catch(err => {
-      console.error(`[Background Indexing] Failed for repo ${id}:`, err);
+    // Enqueue durable background vector indexing job in PostgreSQL queue
+    const enqueued = await queueService.enqueue(id as string, userId, {
+      force: true,
+      isNewAnalysis: false
     });
 
     res.status(202).json({
       success: true,
-      message: 'Repository indexing started in the background.'
+      message: 'Repository indexing job enqueued in background queue.',
+      data: {
+        jobId: enqueued.jobId
+      }
     });
   } catch (error) {
     next(error);
@@ -1145,10 +1179,6 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Atomically reserve monthly AI question entitlement upfront
-    await entitlementService.recordAiQuestion(userId);
-    let reservedAiQuota = true;
-
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
@@ -1158,8 +1188,12 @@ export async function chatWithRepo(req: Request, res: Response, next: NextFuncti
       }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
+
+    // Atomically reserve monthly AI question entitlement upfront
+    await entitlementService.recordAiQuestion(userId);
+    let reservedAiQuota = true;
 
     const dependencyGraph = (typeof repo.dependencyGraph === 'string'
       ? JSON.parse(repo.dependencyGraph)
@@ -1313,9 +1347,6 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
       throw new AppError('Unauthorized.', 401);
     }
 
-    // Atomically reserve monthly AI question entitlement upfront
-    await entitlementService.recordAiQuestion(userId);
-
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
@@ -1325,8 +1356,11 @@ export async function chatWithRepoStream(req: Request, res: Response, next: Next
       }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
+
+    // Atomically reserve monthly AI question entitlement upfront
+    await entitlementService.recordAiQuestion(userId);
 
     const dependencyGraph = (typeof repo.dependencyGraph === 'string'
       ? JSON.parse(repo.dependencyGraph)
@@ -1549,7 +1583,7 @@ export async function getChatHistory(req: Request, res: Response, next: NextFunc
       select: { id: true }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
     const messages = await prisma.chatMessage.findMany({
       where: { repositoryId: id as string },
@@ -1576,7 +1610,7 @@ export async function getRepoInsights(req: Request, res: Response, next: NextFun
       select: { id: true, scannedFiles: true, dependencyGraph: true, entryPoints: true }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
 
     const scannedFiles = (typeof repo.scannedFiles === 'string'
@@ -1614,7 +1648,7 @@ export async function getRepoStory(req: Request, res: Response, next: NextFuncti
       select: { id: true, name: true, framework: true, languages: true, entryPoints: true, dependencyGraph: true }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
 
     const dependencyGraph = (typeof repo.dependencyGraph === 'string'
@@ -1666,7 +1700,7 @@ export async function getRepoOnboarding(req: Request, res: Response, next: NextF
       select: { id: true, framework: true, languages: true, astMetadata: true }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
 
     const astMetadata = (typeof repo.astMetadata === 'string'
@@ -1716,7 +1750,7 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
       }
     });
     if (!repo) {
-      throw new AppError('Repository not found.', 404);
+      throw new AppError('Repository not found or access denied.', 404);
     }
 
     const scannedFiles = (typeof repo.scannedFiles === 'string'
