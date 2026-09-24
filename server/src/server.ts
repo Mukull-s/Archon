@@ -4,6 +4,8 @@ import { logger } from './utils';
 import './services/embedding.service';
 
 
+import { queueService } from './services/queue.service';
+
 const app = createApp();
 
 const server = app.listen(env.PORT, () => {
@@ -13,6 +15,14 @@ const server = app.listen(env.PORT, () => {
     url: `http://localhost:${env.PORT}`,
   });
   logger.info(`📋 Health check: http://localhost:${env.PORT}/api/health`);
+
+  // Initialize durable PostgreSQL background queue and start worker
+  queueService.initQueue().then(() => {
+    queueService.startWorker({ concurrency: 2 });
+    logger.info('Durable PostgreSQL indexing queue worker started.');
+  }).catch(err => {
+    logger.error('Failed to initialize indexing queue worker:', { error: err.message });
+  });
 });
 
 // Set connection and header timeouts to 10 minutes to avoid premature drop on large repositories
@@ -21,8 +31,14 @@ server.keepAliveTimeout = 600000;
 server.headersTimeout = 605000;
 
 
-function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string) {
   logger.info(`${signal} received. Shutting down gracefully...`);
+  try {
+    await queueService.stopWorker();
+  } catch (err: any) {
+    logger.warn('Error stopping queue worker during shutdown:', err.message);
+  }
+
   server.close(() => {
     logger.info('Server closed.');
     process.exit(0);
