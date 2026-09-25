@@ -1,42 +1,44 @@
 import { Request, Response, NextFunction } from 'express';
-import { prisma, EMBEDDING_BATCH_SIZE, DB_BATCH_SIZE, MAX_FILES_LIMIT, MAX_TOTAL_SIZE_LIMIT, MAX_SINGLE_FILE_SIZE_LIMIT, MAX_CHUNKS_LIMIT } from '../config';
-import { ingestionService, deleteFolderWithRetry } from '../services/ingestion.service';
-import { AppError, getPlaintextToken } from '../utils';
-import path from 'path';
 import fs from 'fs';
-import os from 'os';
-import AdmZip from 'adm-zip';
-import { vectorService } from '../services/vector.service';
-import { llmService } from '../services/llm.service';
-import * as astService from '../services/ast.service';
-import crypto from 'crypto';
-import { hierarchyService } from '../services/hierarchy.service';
+import path from 'path';
+import { prisma } from '../config';
+import { ingestionService, deleteFolderWithRetry } from '../services/ingestion.service';
+import { AppError } from '../utils';
 import { confidenceService } from '../services/confidence.service';
-import { evidenceService } from '../services/evidence.service';
-import { insightService } from '../services/insight.service';
-import { plannerService } from '../services/planner.service';
-import { storyService } from '../services/story.service';
-import { onboardingService } from '../services/onboarding.service';
-import { identityService } from '../services/identity.service';
-import { embeddingService } from '../services/embedding.service';
 import { entitlementService } from '../services/entitlement.service';
 import { queueService } from '../services/queue.service';
+import { hierarchyService } from '../services/hierarchy.service';
+import { insightService } from '../services/insight.service';
+import { storyService } from '../services/story.service';
+import { onboardingService } from '../services/onboarding.service';
+import { llmService } from '../services/llm.service';
 
-// Register durable queue job handler for vector indexing
-queueService.registerHandler('VECTOR_INDEX', async (job) => {
-  await performVectorIndexing(job.repositoryId, job.payload.force ?? false, {
-    zipPath: job.payload.zipPath,
-    isNewAnalysis: job.payload.isNewAnalysis ?? false,
-    userId: job.userId
-  });
-});
+// Orchestrators (Extracted for separation of concerns and maintainability P1-1)
+import { performVectorIndexing } from '../services/indexing.orchestrator';
+import {
+  prepareChatContext,
+  buildFileTreeString,
+  executeChatWithRepo,
+  executeChatWithRepoStream,
+  getChatHistory,
+  PreparedChatContext
+} from '../services/chat.orchestrator';
+import { executeImpactAnalysis } from '../services/impact.orchestrator';
+
+// Re-export for backward compatibility with route definitions and tests
+export { performVectorIndexing };
+export { prepareChatContext, buildFileTreeString, PreparedChatContext };
+export const chatWithRepo = executeChatWithRepo;
+export const chatWithRepoStream = executeChatWithRepoStream;
+export { getChatHistory };
+export const analyzeImpact = executeImpactAnalysis;
 
 /**
  * Parses a GitHub repository URL to extract owner and repository name.
  */
 function parseGithubUrl(url: string): { owner: string; repo: string } {
   try {
-    const cleaned = url.trim().replace(/\/$/, ''); // Remove trailing slash
+    const cleaned = url.trim().replace(/\/$/, '');
     const regex = /(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)/i;
     const match = cleaned.match(regex);
     if (!match) {
@@ -47,54 +49,6 @@ function parseGithubUrl(url: string): { owner: string; repo: string } {
     if (error instanceof AppError) throw error;
     throw new AppError('Failed to parse GitHub URL. Ensure it matches github.com/owner/repo', 400);
   }
-}
-
-/**
- * Helper to convert file path list into tree structure string for system prompt context.
- */
-function buildFileTreeString(scannedFiles: Array<{ path: string }>): string {
-  const paths = scannedFiles.map(f => f.path);
-  paths.sort();
-  return paths.map(p => `- ${p}`).join('\n');
-}
-
-/**
- * Helper to recursively search a dependency graph in reverse order to map dependent nodes.
- */
-function findAffectedFiles(targetFile: string, dependencyGraph: Record<string, string[]>): string[] {
-  const affected = new Set<string>();
-  const queue: string[] = [targetFile];
-  const visited = new Set<string>();
-
-  // Build reverse graph: key is target, value is list of files that import key
-  const reverseGraph: Record<string, string[]> = {};
-  for (const [filePath, imports] of Object.entries(dependencyGraph)) {
-    for (const imp of imports) {
-      const normalizedImp = imp.replace(/\\/g, '/');
-      const normalizedFilePath = filePath.replace(/\\/g, '/');
-      if (!reverseGraph[normalizedImp]) {
-        reverseGraph[normalizedImp] = [];
-      }
-      reverseGraph[normalizedImp].push(normalizedFilePath);
-    }
-  }
-
-  while (queue.length > 0) {
-    const current = queue.shift()!.replace(/\\/g, '/');
-    if (visited.has(current)) continue;
-    visited.add(current);
-
-    const dependents = reverseGraph[current] || [];
-    for (const dep of dependents) {
-      const normalizedDep = dep.replace(/\\/g, '/');
-      if (!affected.has(normalizedDep)) {
-        affected.add(normalizedDep);
-        queue.push(normalizedDep);
-      }
-    }
-  }
-
-  return Array.from(affected);
 }
 
 /**
@@ -112,7 +66,6 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
     }
     const { owner, repo } = parseGithubUrl(url);
 
-    // Check if repository already exists for this user to avoid duplicates
     const existingRepo = await prisma.repository.findFirst({
       where: { userId, owner, name: repo }
     });
@@ -130,16 +83,13 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
         return;
       }
 
-      // Verify re-indexing entitlement
       await entitlementService.canReindex(userId, existingRepo.id);
 
-      // Set status to indexing, progress to Downloading
       repository = await prisma.repository.update({
         where: { id: existingRepo.id },
         data: {
           indexingStatus: 'indexing',
           indexingProgress: 'Downloading',
-          // Reset other fields for fresh scan
           framework: null,
           languages: [],
           entryPoints: [],
@@ -150,41 +100,40 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
         }
       });
     } else {
-      // For new analysis, enforce analysis limit and active codebase limit
       await entitlementService.canAnalyzeCodebase(userId);
-      await entitlementService.canCreateActiveCodebase(userId);
 
-      // Create new repository
       repository = await prisma.repository.create({
         data: {
           userId,
           owner,
           name: repo,
           isLocal: false,
-          framework: null,
+          indexingStatus: 'indexing',
+          indexingProgress: 'Downloading',
           languages: [],
           entryPoints: [],
           importantFiles: [],
           fileCount: 0,
           totalSize: 0,
-          confidence: 0,
-          indexingStatus: 'indexing',
-          indexingProgress: 'Downloading'
+          scannedFiles: [],
+          astMetadata: {},
+          dependencyGraph: {}
         }
       });
     }
 
-    // Enqueue durable background vector indexing job in PostgreSQL queue
     const enqueued = await queueService.enqueue(repository.id, userId, {
       force: isReindex,
       isNewAnalysis: !isReindex
     });
 
-    res.status(201).json({
+    res.status(202).json({
       success: true,
-      message: 'Repository registration successful. Indexing job enqueued in background queue.',
+      message: isReindex
+        ? 'Repository re-indexing started in the background.'
+        : 'Repository analysis started in the background.',
       data: {
-        ...repository,
+        repository,
         jobId: enqueued.jobId
       }
     });
@@ -194,127 +143,52 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
 }
 
 /**
- * Scan an uploaded ZIP file.
+ * Scan a local repository uploaded as a ZIP file.
  */
 export async function scanLocalZip(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const file = req.file;
     if (!file) {
-      throw new AppError('No repository ZIP file uploaded.', 400);
+      throw new AppError('A ZIP file is required for local scanning.', 400);
     }
+
     const userId = req.user?.userId;
     if (!userId) {
       throw new AppError('Unauthorized access.', 401);
     }
 
-    const repoName = path.parse(file.originalname).name;
-    const zipPath = file.path;
+    const originalName = path.parse(file.originalname).name;
+    await entitlementService.canAnalyzeCodebase(userId);
 
-    // Security check: Validate ZIP integrity and prevent Zip Slip / path traversal
-    let zip: AdmZip;
-    try {
-      zip = new AdmZip(zipPath);
-    } catch (zipErr: any) {
-      try { fs.unlinkSync(zipPath); } catch {}
-      throw new AppError('Invalid or corrupted ZIP archive.', 400);
-    }
-
-    const zipEntries = zip.getEntries();
-    let totalUncompressedSize = 0;
-    let fileCount = 0;
-
-    for (const entry of zipEntries) {
-      const entryName = entry.entryName;
-      // Thwart Zip Slip attacks
-      if (entryName.includes('..') || path.isAbsolute(entryName) || /^[a-zA-Z]:/.test(entryName)) {
-        try { fs.unlinkSync(zipPath); } catch {}
-        throw new AppError('Security violation: ZIP archive contains illegal path traversal entries.', 400, 'SECURITY_VIOLATION');
-      }
-      if (!entry.isDirectory) {
-        totalUncompressedSize += entry.header.size;
-        fileCount++;
-      }
-    }
-
-    // Enforce file count and repository size limits BEFORE expensive indexing starts
-    try {
-      await entitlementService.validateRepoSize(userId, fileCount, totalUncompressedSize);
-    } catch (limitErr) {
-      try { fs.unlinkSync(zipPath); } catch {}
-      throw limitErr;
-    }
-
-    // Check if repository already exists for this user
-    const existingRepo = await prisma.repository.findFirst({
-      where: { userId, name: repoName, isLocal: true }
-    });
-
-    let repository: any;
-    const isReindex = !!existingRepo;
-
-    if (existingRepo) {
-      if (existingRepo.indexingStatus === 'indexing') {
-        res.status(200).json({
-          success: true,
-          message: 'Repository is already indexing in the background.',
-          data: existingRepo
-        });
-        return;
-      }
-
-      // Check re-index entitlement
-      await entitlementService.canReindex(userId, existingRepo.id);
-
-      repository = await prisma.repository.update({
-        where: { id: existingRepo.id },
-        data: {
-          indexingStatus: 'indexing',
-          indexingProgress: 'Parsing',
-          framework: null,
-          languages: [],
-          entryPoints: [],
-          importantFiles: [],
-          fileCount: 0,
-          totalSize: 0,
-          confidence: 0
-        }
-      });
-    } else {
-      // Check codebase analysis and active repository limits
-      await entitlementService.canAnalyzeCodebase(userId);
-      await entitlementService.canCreateActiveCodebase(userId);
-
-      repository = await prisma.repository.create({
-        data: {
-          userId,
-          owner: null,
-          name: repoName,
-          isLocal: true,
-          framework: null,
-          languages: [],
-          entryPoints: [],
-          importantFiles: [],
-          fileCount: 0,
-          totalSize: 0,
-          confidence: 0,
-          indexingStatus: 'indexing',
-          indexingProgress: 'Parsing'
-        }
-      });
-    }
-
-    // Enqueue durable background vector indexing job passing the local zip path
-    const enqueued = await queueService.enqueue(repository.id, userId, {
-      zipPath,
-      force: isReindex,
-      isNewAnalysis: !isReindex
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'ZIP upload successful. Indexing job enqueued in background queue.',
+    const repository = await prisma.repository.create({
       data: {
-        ...repository,
+        userId,
+        name: originalName,
+        isLocal: true,
+        indexingStatus: 'indexing',
+        indexingProgress: 'Parsing',
+        languages: [],
+        entryPoints: [],
+        importantFiles: [],
+        fileCount: 0,
+        totalSize: 0,
+        scannedFiles: [],
+        astMetadata: {},
+        dependencyGraph: {}
+      }
+    });
+
+    const enqueued = await queueService.enqueue(repository.id, userId, {
+      zipPath: file.path,
+      force: false,
+      isNewAnalysis: true
+    });
+
+    res.status(202).json({
+      success: true,
+      message: 'Local ZIP scan started in the background.',
+      data: {
+        repository,
         jobId: enqueued.jobId
       }
     });
@@ -324,7 +198,7 @@ export async function scanLocalZip(req: Request, res: Response, next: NextFuncti
 }
 
 /**
- * Gets the list of repositories cached by the user.
+ * Lists all active repositories belonging to the authenticated user.
  */
 export async function listUserRepos(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -332,8 +206,10 @@ export async function listUserRepos(req: Request, res: Response, next: NextFunct
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+
     const repos = await prisma.repository.findMany({
-      where: { userId },
+      where: { userId, isArchived: false },
+      orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
         name: true,
@@ -346,29 +222,32 @@ export async function listUserRepos(req: Request, res: Response, next: NextFunct
         confidence: true,
         indexingStatus: true,
         indexingProgress: true,
-        isArchived: true,
-        reindexCount: true,
-        createdAt: true
-      },
-      orderBy: { createdAt: 'desc' }
+        aiSummary: true,
+        createdAt: true,
+        updatedAt: true
+      }
     });
-    res.status(200).json({ success: true, data: repos });
+
+    res.status(200).json({
+      success: true,
+      data: repos
+    });
   } catch (error) {
     next(error);
   }
 }
 
 /**
- * Retrieves the detailed repository index.
+ * Returns details for a specific repository.
  */
 export async function getRepoDetails(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
+    const lite = req.query.lite === 'true';
     const userId = req.user?.userId;
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
-    const lite = req.query.lite === 'true';
 
     let repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
@@ -385,16 +264,15 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
       throw new AppError('Repository not found or access denied.', 404);
     }
 
-    // Auto-fail stale indexing jobs (e.g., if process crashed/killed due to memory limits)
     if (repo.indexingStatus === 'indexing') {
-      const StaleTimeout = 10 * 60 * 1000; // 10 minutes
+      const StaleTimeout = 10 * 60 * 1000;
       const timeSinceUpdate = Date.now() - new Date(repo.updatedAt).getTime();
       if (timeSinceUpdate > StaleTimeout) {
         repo = await prisma.repository.update({
           where: { id: repo.id },
           data: {
             indexingStatus: 'failed',
-            indexingProgress: 'Error: Indexing timed out. The server process may have run out of memory or restarted.'
+            indexingProgress: 'Error: Indexing timed out. The server process may have restarted.'
           },
           select: {
             id: true, name: true, owner: true, isLocal: true, framework: true,
@@ -448,8 +326,6 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     });
     const isIndexed = chunkCount > 0;
 
-    // Strip scannedFiles to only the fields the frontend needs
-    // (path, size, lines) — omit 'hash' to reduce payload
     const lightScannedFiles = (scannedFiles || []).map((f: any) => ({
       path: f.path,
       size: f.size,
@@ -471,7 +347,7 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
 }
 
 /**
- * Deletes a repository owned by the user, cleaning up local extracted files and all associated data.
+ * Deletes a repository and clean up any local cache.
  */
 export async function deleteRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -490,7 +366,6 @@ export async function deleteRepo(req: Request, res: Response, next: NextFunction
       throw new AppError('Repository not found or access denied.', 404);
     }
 
-    // Clean up local filesystem directory if extracted files exist
     if (repo.localPath && fs.existsSync(repo.localPath)) {
       try {
         await deleteFolderWithRetry(repo.localPath);
@@ -499,7 +374,6 @@ export async function deleteRepo(req: Request, res: Response, next: NextFunction
       }
     }
 
-    // Delete repository from database (cascades to CodeChunks and ChatMessages)
     await prisma.repository.delete({
       where: { id: repo.id }
     });
@@ -514,605 +388,8 @@ export async function deleteRepo(req: Request, res: Response, next: NextFunction
 }
 
 /**
- * Calculates dependencies, affected routes, modules, and risk score for a selected file.
- * Automatically generates a human-friendly LLM explanation of the impact.
- */
-export async function analyzeImpact(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { id } = req.params;
-    const { filePath } = req.body;
-    if (!filePath) {
-      throw new AppError('Target filePath is required.', 400);
-    }
-    const userId = req.user?.userId;
-    if (!userId) {
-      throw new AppError('Unauthorized.', 401);
-    }
-
-    const repo = await prisma.repository.findFirst({
-      where: { id: id as string, userId: userId as string },
-      select: { id: true, dependencyGraph: true }
-    });
-    if (!repo) {
-      throw new AppError('Repository not found or access denied.', 404);
-    }
-
-    // Retrieve user entitlement to check plan tier for advanced AI reasoning
-    const userLimits = await entitlementService.getUserUsageAndLimits(userId);
-    const isPro = userLimits.plan === 'pro';
-
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
-
-    const normalizedTarget = filePath.replace(/\\/g, '/');
-
-    // Retrieve file content from CodeChunks
-    const chunks = await prisma.codeChunk.findMany({
-      where: {
-        repositoryId: id as string,
-        filePath: normalizedTarget
-      },
-      orderBy: { startLine: 'asc' }
-    });
-    const fileContent = chunks.map(c => c.content).join('\n');
-
-    const riskInfo = astService.computeImpactRisk(normalizedTarget, dependencyGraph, fileContent);
-    const affectedFiles = riskInfo.affectedFiles;
-
-    const affectedRoutes: string[] = [];
-    const affectedServices: string[] = [];
-    const affectedControllers: string[] = [];
-    const affectedComponents: string[] = [];
-    const otherFiles: string[] = [];
-
-    for (const f of affectedFiles) {
-      const lower = f.toLowerCase();
-      if (lower.includes('route') || lower.includes('/routes/')) {
-        affectedRoutes.push(f);
-      } else if (lower.includes('service') || lower.includes('/services/')) {
-        affectedServices.push(f);
-      } else if (lower.includes('controller') || lower.includes('/controllers/')) {
-        affectedControllers.push(f);
-      } else if (lower.includes('component') || lower.includes('/components/')) {
-        affectedComponents.push(f);
-      } else {
-        otherFiles.push(f);
-      }
-    }
-
-    // Generate high-level impact summary explanation
-    let summary = 'This file has no dependent files. Changing it is safe and will not impact other parts of the codebase.';
-    if (affectedFiles.length > 0) {
-      if (isPro) {
-        try {
-          const prompt = `Explain in 1 or 2 simple, friendly sentences the structural impact of modifying the file [${normalizedTarget}]. 
-It is directly or indirectly imported by these files:
-${affectedFiles.map(f => `- [${f}]`).join('\n')}
-
-Explain WHY modifying this file propagates to these dependencies. Keep it short, high-level, and easy for a beginner to understand.`;
-          
-          const aiSummary = await llmService.chat({
-            prompt,
-            contextChunks: [],
-            model: 'qwen/qwen3-coder:free'
-          });
-          summary = aiSummary.text;
-        } catch (err) {
-          summary = `Modifying this file will propagate changes to ${affectedFiles.length} dependent files across your project.`;
-        }
-      } else {
-        summary = `Modifying this file will propagate changes to ${affectedFiles.length} dependent files across your project. Upgrade to Pro for AI-powered architectural reasoning.`;
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      data: {
-        filePath: normalizedTarget,
-        riskLevel: riskInfo.riskLevel,
-        riskScore: riskInfo.riskScore,
-        inDegree: riskInfo.inDegree,
-        maxDepth: riskInfo.maxDepth,
-        affectedFilesCount: affectedFiles.length,
-        affectedFiles,
-        dbModels: riskInfo.dbModels,
-        envVars: riskInfo.envVars,
-        categories: {
-          routes: affectedRoutes,
-          services: affectedServices,
-          controllers: affectedControllers,
-          components: affectedComponents,
-          others: otherFiles
-        },
-        summary
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-}
-
-/**
- * Standalone asynchronous vector indexing runner.
- * Automatically checks if repository is already indexed to return instantly unless force is true.
- */
-export async function performVectorIndexing(id: string, force = false, options?: { zipPath?: string; isNewAnalysis?: boolean; userId?: string }): Promise<void> {
-  // ── Metrics helpers ───────────────────────────────────────────────────────
-  function heapMB() { return Math.round(process.memoryUsage().heapUsed / 1024 / 1024); }
-  function logStage(stage: string, durationMs?: number) {
-    console.log(JSON.stringify({
-      stage,
-      heapMB: heapMB(),
-      ...(durationMs !== undefined && { durationSec: parseFloat((durationMs / 1000).toFixed(2)) })
-    }));
-  }
-
-  const startTime = Date.now();
-  const tempDirsToCleanup: string[] = [];
-
-  // Yield immediately so the HTTP response is sent before we start heavy work
-  await new Promise(resolve => setImmediate(resolve));
-
-  try {
-    const repoRow = await prisma.repository.findUnique({
-      where: { id },
-      include: { user: true }
-    });
-
-    if (!repoRow) throw new AppError('Repository not found or access denied.', 404);
-
-    if (options?.userId && repoRow.userId !== options.userId) {
-      throw new AppError('Repository not found or access denied.', 404);
-    }
-
-    // ── Stage 0: Commit SHA early-exit ────────────────────────────────────
-    // If the repo is GitHub-hosted and already completed, check the latest commit SHA.
-    // If it matches the stored SHA, return immediately without re-indexing.
-    if (!force && repoRow.indexingStatus === 'completed' && repoRow.owner && !repoRow.isLocal) {
-      try {
-        const token = getPlaintextToken(repoRow.user?.githubToken) || process.env.GITHUB_FALLBACK_TOKEN;
-        const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        const shaRes = await (await import('axios')).default.get(
-          `https://api.github.com/repos/${repoRow.owner}/${repoRow.name}/commits?per_page=1`,
-          { headers, timeout: 8000 }
-        );
-        const latestSha: string = shaRes.data?.[0]?.sha ?? '';
-        const storedSha: string = (repoRow as any).commitSha ?? '';
-        if (latestSha && storedSha && latestSha === storedSha) {
-          console.log(`[Indexing] Repo ${id} is already up-to-date (SHA: ${latestSha.slice(0, 8)}). Skipping.`);
-          await prisma.repository.update({
-            where: { id },
-            data: { indexingStatus: 'completed', indexingProgress: 'Completed' }
-          });
-          return;
-        }
-        // Store latest SHA for future comparisons (best-effort, non-breaking)
-        if (latestSha) {
-          await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Downloading' } });
-          (repoRow as any)._latestSha = latestSha;
-        }
-      } catch (shaErr: any) {
-        console.warn(`[Indexing] Could not fetch commit SHA (non-fatal): ${shaErr.message}`);
-      }
-    }
-
-    await prisma.repository.update({
-      where: { id },
-      data: { indexingStatus: 'indexing', indexingProgress: repoRow.isLocal ? 'Parsing' : 'Downloading' }
-    });
-
-    // ── Stage 1: Download ─────────────────────────────────────────────────
-    logStage('start');
-    let zipPath = options?.zipPath;
-    let downloadTime = 0;
-    if (!repoRow.isLocal && !zipPath) {
-      const t0 = Date.now();
-      const token = getPlaintextToken(repoRow.user?.githubToken) || undefined;
-      zipPath = await ingestionService.downloadGithubRepo(repoRow.owner!, repoRow.name, token);
-      downloadTime = Date.now() - t0;
-      tempDirsToCleanup.push(zipPath);
-      logStage('download', downloadTime);
-    }
-
-    await new Promise(resolve => setImmediate(resolve));
-
-    // ── Stage 2: Extraction ────────────────────────────────────────────────
-    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Parsing' } });
-
-    const extractId = crypto.randomUUID();
-    const extractPath = path.join(os.tmpdir(), 'archon-extracted', extractId);
-    tempDirsToCleanup.push(extractPath);
-    if (!fs.existsSync(extractPath)) fs.mkdirSync(extractPath, { recursive: true });
-
-    const extractStart = Date.now();
-    console.log(`[Indexing] Extracting ZIP: ${zipPath} to ${extractPath}...`);
-    const zip = new AdmZip(zipPath!);
-    const zipEntries = zip.getEntries();
-    for (const entry of zipEntries) {
-      const entryName = entry.entryName;
-      if (entryName.includes('..') || path.isAbsolute(entryName) || /^[a-zA-Z]:/.test(entryName)) {
-        throw new AppError('Security violation: ZIP archive contains illegal path traversal entries.', 400, 'SECURITY_VIOLATION');
-      }
-    }
-    zip.extractAllTo(extractPath, true);
-    const extractTime = Date.now() - extractStart;
-    logStage('extract', extractTime);
-
-    const extractedEntries = fs.readdirSync(extractPath);
-    let repoRoot = extractPath;
-    if (extractedEntries.length === 1 && fs.statSync(path.join(extractPath, extractedEntries[0])).isDirectory()) {
-      repoRoot = path.join(extractPath, extractedEntries[0]);
-    }
-
-    // ── Stage 3: Discovery + Parsing ──────────────────────────────────────
-    const INDEXABLE_EXTENSIONS = new Set([
-      '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java',
-      '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.rb', '.swift',
-      '.kt', '.prisma', '.json', '.yml', '.yaml', '.toml'
-    ]);
-    const EXCLUDED_FILENAMES = new Set([
-      '.gitignore', '.env', '.env.local', '.env.development',
-      '.env.production', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-      'LICENSE', 'README.md', 'CHANGELOG.md'
-    ]);
-    const EXCLUDED_DIRS = new Set([
-      'node_modules', '.git', 'dist', 'build', 'coverage', '.next', 'out',
-      'generated', '.cache', '__pycache__', 'venv', '.venv', 'target', 'vendor'
-    ]);
-
-    const scannedFiles: Array<{ path: string; size: number; lines: number; hash: string }> = [];
-    const astMetadata: Record<string, any> = {};
-    const languages = new Set<string>();
-    let totalSize = 0;
-    let fileIndex = 0;
-
-    const parseStart = Date.now();
-
-    // Iterative (stack-based) walk to avoid deep recursion stack overflows
-    const dirStack: string[] = [repoRoot];
-    while (dirStack.length > 0 && scannedFiles.length < MAX_FILES_LIMIT) {
-      const dirPath = dirStack.pop()!;
-      let entries: string[];
-      try { entries = fs.readdirSync(dirPath); } catch { continue; }
-
-      for (const file of entries) {
-        if (scannedFiles.length >= MAX_FILES_LIMIT) break;
-
-        const fullPath = path.join(dirPath, file);
-        let stat: fs.Stats;
-        try { stat = fs.statSync(fullPath); } catch { continue; }
-
-        if (stat.isDirectory()) {
-          if (!EXCLUDED_DIRS.has(file)) dirStack.push(fullPath);
-          continue;
-        }
-
-        if (!stat.isFile()) continue;
-        if (EXCLUDED_FILENAMES.has(file)) continue;
-        const ext = path.extname(file).toLowerCase();
-        if (!INDEXABLE_EXTENSIONS.has(ext)) continue;
-        if (stat.size > MAX_SINGLE_FILE_SIZE_LIMIT) continue;
-        if (totalSize + stat.size > MAX_TOTAL_SIZE_LIMIT) break;
-
-        try {
-          let content = fs.readFileSync(fullPath, 'utf-8').replace(/\u0000/g, '');
-          if (!content.trim()) continue;
-
-          totalSize += stat.size;
-          const lang = identityService.detectLanguageByExtension(ext);
-          if (lang) languages.add(lang);
-
-          const fileHash = crypto.createHash('sha256').update(content).digest('hex');
-          const relativePath = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
-
-          scannedFiles.push({ path: relativePath, size: stat.size, lines: content.split('\n').length, hash: fileHash });
-
-          if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
-            astMetadata[relativePath] = astService.parseSourceFile(relativePath, content);
-          }
-
-          // Yield event loop every 50 files to prevent blocking
-          fileIndex++;
-          if (fileIndex % 50 === 0) {
-            await new Promise(resolve => setImmediate(resolve));
-          }
-        } catch (err) {
-          console.error(`[Indexing] Failed to read ${path.relative(repoRoot, fullPath)}:`, err);
-        }
-      }
-    }
-
-    const parseTime = Date.now() - parseStart;
-    logStage('parse', parseTime);
-
-    // Enforce repository file count & size limits on scanned files based on user plan
-    if (repoRow.userId) {
-      await entitlementService.validateRepoSize(repoRow.userId, scannedFiles.length, totalSize);
-    }
-
-    // Real progress: Discovery complete = 30%
-    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Parsed 30%' } });
-    await new Promise(resolve => setImmediate(resolve));
-
-    // ── Stage 4: Dependency resolution + Identity ──────────────────────────
-    const fileList = scannedFiles.map(f => f.path);
-    const dependencyGraph = astService.resolveDependencies(fileList, astMetadata);
-    const identityResult = identityService.runIdentityEngine(repoRoot, scannedFiles, dependencyGraph);
-    const framework = identityResult.framework;
-    const entryPoints = identityResult.entryPoints;
-
-    const { score } = confidenceService.calculateConfidence(
-      scannedFiles, astMetadata, dependencyGraph, languages, framework
-    );
-
-    // ── Stage 5: Incremental diff vs stored scannedFiles ──────────────────
-    const oldFiles = (typeof repoRow.scannedFiles === 'string'
-      ? JSON.parse(repoRow.scannedFiles)
-      : repoRow.scannedFiles) as Array<{ path: string; hash?: string }> || [];
-
-    const oldHashMap = new Map<string, string>();
-    for (const f of oldFiles) { if (f.path && f.hash) oldHashMap.set(f.path, f.hash); }
-
-    const newFilePaths = new Set(scannedFiles.map(f => f.path));
-    const changedOrDeletedFiles = new Set<string>();
-    for (const oldF of oldFiles) { if (!newFilePaths.has(oldF.path)) changedOrDeletedFiles.add(oldF.path); }
-    for (const newF of scannedFiles) {
-      if (oldHashMap.get(newF.path) !== newF.hash || force) changedOrDeletedFiles.add(newF.path);
-    }
-
-    // Only files that changed need re-embedding
-    const filesToEmbed = scannedFiles.filter(f => changedOrDeletedFiles.has(f.path));
-    console.log(`[Indexing] ${scannedFiles.length} total files | ${filesToEmbed.length} changed/new (need embedding) | ${scannedFiles.length - filesToEmbed.length} unchanged`);
-
-    // Clean stale chunks safely using Prisma ORM deleteMany
-    if (changedOrDeletedFiles.size > 0 && !force) {
-      await prisma.codeChunk.deleteMany({
-        where: {
-          repositoryId: id,
-          filePath: { in: Array.from(changedOrDeletedFiles) }
-        }
-      });
-    } else if (force) {
-      await prisma.codeChunk.deleteMany({
-        where: { repositoryId: id }
-      });
-    }
-
-    // Persist scanned file metadata to DB early
-    await prisma.repository.update({
-      where: { id },
-      data: {
-        framework,
-        languages: Array.from(languages),
-        entryPoints,
-        importantFiles: entryPoints,
-        fileCount: scannedFiles.length,
-        totalSize,
-        confidence: score,
-        scannedFiles: scannedFiles.map(f => ({ path: f.path, size: f.size, lines: f.lines, hash: f.hash })) as any,
-        astMetadata: astMetadata as any,
-        dependencyGraph: dependencyGraph as any
-      }
-    });
-
-    // ── Stage 5.5: Asynchronous Parallel Summary Generation ────────────────
-    let aiSummaryPromise: Promise<any> | null = null;
-    if (scannedFiles.length > 0) {
-      const summaryT0 = Date.now();
-      let readmeText = '';
-      for (const rp of ['README.md', 'readme.md', 'README', 'readme']) {
-        const p = path.join(repoRoot, rp);
-        if (fs.existsSync(p)) { try { readmeText = fs.readFileSync(p, 'utf-8').slice(0, 2000); break; } catch {} }
-      }
-      let pkgJsonText = '';
-      const pkgPath = path.join(repoRoot, 'package.json');
-      if (fs.existsSync(pkgPath)) { try { pkgJsonText = fs.readFileSync(pkgPath, 'utf-8').slice(0, 1000); } catch {} }
-
-      const fileTreeStr = scannedFiles
-        .map(f => f.path).slice(0, 40).join('\n') + (scannedFiles.length > 40 ? '\n... (truncated)' : '');
-
-      console.log(`[Indexing] Starting parallel AI Repository Summary generation...`);
-      aiSummaryPromise = llmService.generateRepositorySummary({
-        name: repoRow.name, framework: framework || null,
-        languages: Array.from(languages), fileCount: scannedFiles.length,
-        totalSize, readme: readmeText, packageJson: pkgJsonText, fileTree: fileTreeStr
-      }).then(async (summaryText) => {
-        try {
-          let cleaned = summaryText.trim();
-          if (cleaned.startsWith('```')) {
-            const lines = cleaned.split('\n');
-            if (lines[0].startsWith('```')) lines.shift();
-            if (lines[lines.length - 1].startsWith('```')) lines.pop();
-            cleaned = lines.join('\n').trim();
-          }
-          const summaryObj = JSON.parse(cleaned);
-          await prisma.repository.update({
-            where: { id },
-            data: { aiSummary: summaryObj }
-          });
-          console.log(`[Indexing] Parallel AI Summary successfully generated and saved in ${Date.now() - summaryT0}ms`);
-          return summaryObj;
-        } catch (err: any) {
-          console.warn(`[Indexing] Parallel AI Summary parsing/save failed: ${err.message}`);
-          return null;
-        }
-      }).catch((summaryErr) => {
-        console.warn(`[Indexing] Parallel AI Summary generation failed (non-fatal): ${summaryErr.message}`);
-        return null;
-      });
-    }
-
-    // ── Stage 6: Streaming Embedding Pipeline (Bounded Buffer) ────────────
-    const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({ where: { repositoryId: id } });
-    let totalChunksProcessed = 0;
-    let pendingChunks: any[] = []; // Bounded streaming buffer
-    let embeddingFailed = false;
-    let embedTime = 0;
-    let dbWriteTime = 0;
-    const embedStart = Date.now();
-
-    // Helper: flush the bounded buffer — embed + insert immediately, then clear
-    async function flushPendingChunks() {
-      if (pendingChunks.length === 0) return;
-      const batch = pendingChunks;
-      pendingChunks = []; // Free memory immediately before awaiting
-
-      const batchTexts = batch.map(c => c.content);
-      const t0 = Date.now();
-      let embeddings: number[][];
-      try {
-        embeddings = await vectorService.getEmbeddingsBatch(batchTexts);
-        embedTime += Date.now() - t0;
-      } catch (embedErr: any) {
-        console.error(`[Indexing] Embedding batch failed (graceful degradation): ${embedErr.message}`);
-        embeddingFailed = true;
-        return; // Skip insert, continue to next batch
-      }
-
-      const readyChunks = batch.map((c, j) => ({ ...c, embedding: embeddings[j] }));
-      const dbT0 = Date.now();
-      await vectorService.bulkInsertChunks(id, readyChunks, unchangedChunksCount + totalChunksProcessed);
-      dbWriteTime += Date.now() - dbT0;
-      totalChunksProcessed += readyChunks.length;
-    }
-
-    for (let fileIdx = 0; fileIdx < filesToEmbed.length; fileIdx++) {
-      const file = filesToEmbed[fileIdx];
-      const fullFilePath = path.join(repoRoot, file.path);
-
-      let fileContent = '';
-      try {
-        fileContent = fs.readFileSync(fullFilePath, 'utf-8').replace(/\u0000/g, '');
-      } catch { continue; }
-      if (!fileContent.trim()) continue;
-
-      const symbols = astService.getCodeSymbols(file.path, fileContent);
-      const fileChunks = ingestionService.chunkCodeFile(file.path, fileContent, symbols);
-      if (fileChunks.length === 0) continue;
-
-      if (unchangedChunksCount + totalChunksProcessed + pendingChunks.length + fileChunks.length > MAX_CHUNKS_LIMIT) {
-        console.warn(`[Indexing] Chunk limit (${MAX_CHUNKS_LIMIT}) approaching. Stopping embedding.`);
-        break;
-      }
-
-      for (const chunk of fileChunks) {
-        if (!chunk.content.trim()) continue; // Skip empty chunks
-        pendingChunks.push({
-          filePath: file.path,
-          content: chunk.content,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          symbolName: chunk.symbolName
-        });
-
-        // Flush whenever buffer fills up — memory stays bounded
-        if (pendingChunks.length >= EMBEDDING_BATCH_SIZE) {
-          await flushPendingChunks();
-          await new Promise(resolve => setImmediate(resolve)); // Yield event loop
-        }
-      }
-
-      // Real progress: Embedding phase = 40% to 90% based on files processed
-      if (fileIdx % 10 === 0 || fileIdx === filesToEmbed.length - 1) {
-        const pct = Math.round(40 + ((fileIdx + 1) / filesToEmbed.length) * 50);
-        await prisma.repository.update({ where: { id }, data: { indexingProgress: `Embedding ${pct}%` } });
-      }
-    }
-
-    // Flush any remaining chunks
-    if (pendingChunks.length > 0) await flushPendingChunks();
-    logStage('embedding', Date.now() - embedStart);
-    logStage('db-insert-total', dbWriteTime);
-
-    // Real progress: 92% — finalizing
-    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Saving 92%' } });
-
-    // ── Stage 8: Finalize ─────────────────────────────────────────────────
-    const latestSha = (repoRow as any)._latestSha;
-    await prisma.repository.update({
-      where: { id },
-      data: {
-        indexingStatus: 'completed',
-        indexingProgress: embeddingFailed ? 'Completed (partial — some embeddings failed)' : 'Completed',
-        ...(latestSha ? { indexingProgress: 'Completed' } : {})
-      }
-    });
-
-    // Authoritatively record usage in database upon successful completion
-    if (repoRow.userId) {
-      if (options?.isNewAnalysis) {
-        await entitlementService.recordCodebaseAnalysis(repoRow.userId);
-      } else if (force) {
-        await entitlementService.recordReindex(repoRow.userId, id);
-      }
-    }
-
-    // If we fetched a latest SHA, try to persist it safely parameterized (best-effort, ignores schema errors)
-    if (latestSha) {
-      try {
-        await prisma.$executeRaw`UPDATE "Repository" SET "commitSha" = ${latestSha} WHERE id = ${id}`;
-      } catch {} // Column may not exist yet — not fatal
-    }
-
-    const totalTime = Date.now() - startTime;
-    logStage('complete', totalTime);
-    
-    // Fetch Voyage AI embedding metrics
-    const embedMetrics = embeddingService.getAndResetMetrics();
-    const totalCalls = embedMetrics.successfulCalls + embedMetrics.failedCalls;
-    const avgLatency = totalCalls > 0 ? Math.round(embedMetrics.totalLatencyMs / totalCalls) : 0;
-
-    console.log(`\n==================================================`);
-    console.log(`[Benchmark] Indexing Finished`);
-    console.log(`Repository: ${repoRow.name}`);
-    console.log(`Files: ${scannedFiles.length}`);
-    console.log(`Chunks: ${unchangedChunksCount + totalChunksProcessed}`);
-    console.log(`Successful API Calls: ${embedMetrics.successfulCalls}`);
-    console.log(`Failed API Calls: ${embedMetrics.failedCalls}`);
-    console.log(`Retry Attempts: ${embedMetrics.retries}`);
-    console.log(`Rate Limit (429) Responses: ${embedMetrics.rateLimitResponses}`);
-    console.log(`Total Backoff Sleep Time: ${(embedMetrics.totalBackoffMs / 1000).toFixed(2)}s`);
-    console.log(`Actual API Call Latency: ${(embedMetrics.totalLatencyMs / 1000).toFixed(2)}s`);
-    console.log(`Average API Latency: ${avgLatency}ms`);
-    console.log(`Total Index Time: ${(totalTime / 1000).toFixed(2)}s`);
-    console.log(`==================================================\n`);
-
-    console.log(`[Indexing] ✅ Repo ${id} — ${scannedFiles.length} files | ${unchangedChunksCount + totalChunksProcessed} total chunks | ${filesToEmbed.length} files embedded | ${scannedFiles.length - filesToEmbed.length} unchanged`);
-    console.log(`[Indexing] Timing: download=${(downloadTime / 1000).toFixed(2)}s parse=${(parseTime / 1000).toFixed(2)}s embed=${(embedTime / 1000).toFixed(2)}s db=${(dbWriteTime / 1000).toFixed(2)}s total=${(totalTime / 1000).toFixed(2)}s`);
-
-  } catch (error: any) {
-    console.error(`[Indexing] Failed to index repository ${id}:`, error.stack || error);
-    // Do not alter repository status if access was denied or repo was not found
-    if (!(error instanceof AppError && error.statusCode === 404)) {
-      await prisma.repository.update({
-        where: { id },
-        data: { indexingStatus: 'failed', indexingProgress: `Error: ${error.message || 'Unknown error'}` }
-      }).catch(updateErr => console.error('[Indexing] Failed to update repo status:', updateErr));
-    }
-    throw error;
-  } finally {
-    logStage('cleanup');
-    for (const dir of tempDirsToCleanup) {
-      if (fs.existsSync(dir)) {
-        try {
-          if (fs.statSync(dir).isDirectory()) await deleteFolderWithRetry(dir);
-          else fs.unlinkSync(dir);
-        } catch (cleanupErr) {
-          console.error(`[Indexing] Cleanup failed for ${dir}:`, cleanupErr);
-        }
-      }
-    }
-    logStage('cleanup-done');
-  }
-}
-
-
-/**
  * Builds the vector index for all files inside a repository.
  */
-
 export async function buildVectorIndex(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
@@ -1133,10 +410,8 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
       return;
     }
 
-    // Verify re-indexing entitlement
     await entitlementService.canReindex(userId, id as string);
 
-    // Set indexing status to indexing and starting progress
     await prisma.repository.update({
       where: { id: id as string },
       data: {
@@ -1145,7 +420,6 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
       }
     });
 
-    // Enqueue durable background vector indexing job in PostgreSQL queue
     const enqueued = await queueService.enqueue(id as string, userId, {
       force: true,
       isNewAnalysis: false
@@ -1164,439 +438,7 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
 }
 
 /**
- * Handles conversational QA against the indexed repository.
- */
-export async function chatWithRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { id } = req.params;
-    const { message, model } = req.body;
-    if (!message) {
-      throw new AppError('Message prompt is required.', 400);
-    }
-    const requestedModel = model || 'qwen/qwen3-coder:free';
-    const userId = req.user?.userId;
-    if (!userId) {
-      throw new AppError('Unauthorized.', 401);
-    }
-
-    const repo = await prisma.repository.findFirst({
-      where: { id: id as string, userId: userId as string },
-      select: {
-        id: true, name: true, fileCount: true, totalSize: true, framework: true,
-        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true,
-        astMetadata: true
-      }
-    });
-    if (!repo) {
-      throw new AppError('Repository not found or access denied.', 404);
-    }
-
-    // Atomically reserve monthly AI question entitlement upfront
-    await entitlementService.recordAiQuestion(userId);
-    let reservedAiQuota = true;
-
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]> || {};
-
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as Array<{ path: string }> || [];
-
-    const astMetadata = (typeof repo.astMetadata === 'string'
-      ? JSON.parse(repo.astMetadata)
-      : repo.astMetadata) as Record<string, any> || {};
-
-    const plan = plannerService.planQuery(message, {
-      scannedFiles,
-      dependencyGraph,
-      astMetadata
-    });
-    console.log(`[ARCHON AI] Selected query intent: ${plan.intent}`);
-    plan.steps.forEach(step => console.log(`  -> [ARCHON AI] Step: ${step}`));
-    if (plan.dependencyAnalysis) {
-      console.log(`[ENTITY] Resolved: Source=${plan.dependencyAnalysis.sourceFile || 'none'}, Target=${plan.dependencyAnalysis.targetFile || 'none'}`);
-      console.log(`[GRAPH] Verified Relationship: ${plan.dependencyAnalysis.relationship} (Hops: ${plan.dependencyAnalysis.hops ?? 'N/A'})`);
-      if (plan.dependencyAnalysis.evidence && plan.dependencyAnalysis.evidence.length > 0) {
-        plan.dependencyAnalysis.evidence.forEach(ev => {
-          console.log(`[EVIDENCE] ${ev.filePath}:${ev.line} -> ${ev.statement}`);
-        });
-      }
-    }
-
-    let similarChunks: any[] = [];
-    if (plan.intent === 'DEPENDENCY' && plan.dependencyAnalysis) {
-      const targetFilePaths: string[] = [];
-      if (plan.dependencyAnalysis.sourceFile) targetFilePaths.push(plan.dependencyAnalysis.sourceFile);
-      if (plan.dependencyAnalysis.targetFile) targetFilePaths.push(plan.dependencyAnalysis.targetFile);
-      if (plan.dependencyAnalysis.path && plan.dependencyAnalysis.path.length > 0) {
-        targetFilePaths.push(...plan.dependencyAnalysis.path);
-      }
-      const uniqueFilePaths = Array.from(new Set(targetFilePaths.filter(Boolean)));
-
-      if (uniqueFilePaths.length > 0) {
-        similarChunks = await prisma.codeChunk.findMany({
-          where: {
-            repositoryId: id as string,
-            filePath: { in: uniqueFilePaths }
-          },
-          take: 20
-        });
-      }
-      if (similarChunks.length === 0) {
-        similarChunks = await prisma.codeChunk.findMany({
-          where: { repositoryId: id as string },
-          take: plan.limit
-        });
-      }
-    } else if (plan.useVector) {
-      const queryVector = await vectorService.getEmbedding(message);
-      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
-    } else {
-      similarChunks = await prisma.codeChunk.findMany({
-        where: { repositoryId: id as string },
-        take: plan.limit
-      });
-    }
-
-    const inDegreeMap: Record<string, number> = {};
-    for (const [filePath, imports] of Object.entries(dependencyGraph)) {
-      for (const imp of imports) {
-        inDegreeMap[imp] = (inDegreeMap[imp] || 0) + 1;
-      }
-    }
-
-    const rawChunks = similarChunks.map((chunk: any) => ({
-      filePath: chunk.filePath as string,
-      content: chunk.content as string,
-      startLine: chunk.startLine as number,
-      endLine: chunk.endLine as number,
-      symbolName: chunk.symbolName as string | null
-    }));
-
-    const sortedChunks = hierarchyService.categorizeAndSortChunks(rawChunks, inDegreeMap);
-    const contextChunks = hierarchyService.allocateTokens(sortedChunks, 8000);
-
-    const fileTree = buildFileTreeString(scannedFiles);
-
-    const repoMetadata = {
-      name: repo.name,
-      fileCount: repo.fileCount,
-      totalSize: repo.totalSize,
-      framework: repo.framework,
-      languages: typeof repo.languages === 'string' ? JSON.parse(repo.languages) : repo.languages,
-      entryPoints: typeof repo.entryPoints === 'string' ? JSON.parse(repo.entryPoints) : repo.entryPoints,
-      fileTree
-    };
-
-    const evidenceTraces = evidenceService.generateEvidenceTraces(scannedFiles, dependencyGraph).map(t => t.pathString);
-
-    // Timeout: abort if LLM takes longer than 120 seconds
-    const CHAT_TIMEOUT_MS = 120_000;
-    const aiResult = await Promise.race([
-      llmService.chat({
-        prompt: message,
-        contextChunks,
-        model: requestedModel,
-        repoMetadata,
-        evidenceTraces,
-        dependencyAnalysis: plan.dependencyAnalysis
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new AppError('AI response timed out. Please try again.', 504)), CHAT_TIMEOUT_MS)
-      ),
-    ]);
-
-    await prisma.chatMessage.create({
-      data: { repositoryId: id as string, sender: 'USER', message }
-    });
-
-    await prisma.chatMessage.create({
-      data: { repositoryId: id as string, sender: 'AI', message: aiResult.text, modelUsed: aiResult.modelUsed }
-    });
-
-    res.status(200).json({
-      success: true,
-      data: {
-        text: aiResult.text,
-        reasoning: aiResult.reasoning,
-        modelUsed: aiResult.modelUsed
-      }
-    });
-  } catch (error) {
-    if (req.user?.userId) {
-      await entitlementService.refundAiQuestion(req.user.userId).catch(() => {});
-    }
-    next(error);
-  }
-}
-
-/**
- * Handles conversational streaming QA using Server-Sent Events (SSE).
- */
-export async function chatWithRepoStream(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { id } = req.params;
-    const { message, model } = req.body;
-    if (!message) {
-      throw new AppError('Message prompt is required.', 400);
-    }
-    const requestedModel = model || 'qwen/qwen3-coder:free';
-    const userId = req.user?.userId;
-    if (!userId) {
-      throw new AppError('Unauthorized.', 401);
-    }
-
-    const repo = await prisma.repository.findFirst({
-      where: { id: id as string, userId: userId as string },
-      select: {
-        id: true, name: true, fileCount: true, totalSize: true, framework: true,
-        languages: true, entryPoints: true, scannedFiles: true, dependencyGraph: true,
-        astMetadata: true
-      }
-    });
-    if (!repo) {
-      throw new AppError('Repository not found or access denied.', 404);
-    }
-
-    // Atomically reserve monthly AI question entitlement upfront
-    await entitlementService.recordAiQuestion(userId);
-
-    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
-      ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]> || {};
-
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as Array<{ path: string }> || [];
-
-    const astMetadata = (typeof repo.astMetadata === 'string'
-      ? JSON.parse(repo.astMetadata)
-      : repo.astMetadata) as Record<string, any> || {};
-
-    const plan = plannerService.planQuery(message, {
-      scannedFiles,
-      dependencyGraph,
-      astMetadata
-    });
-    console.log(`[ARCHON AI Stream] Selected query intent: ${plan.intent}`);
-    plan.steps.forEach(step => console.log(`  -> [ARCHON AI Stream] Step: ${step}`));
-    if (plan.dependencyAnalysis) {
-      console.log(`[ENTITY Stream] Resolved: Source=${plan.dependencyAnalysis.sourceFile || 'none'}, Target=${plan.dependencyAnalysis.targetFile || 'none'}`);
-      console.log(`[GRAPH Stream] Verified Relationship: ${plan.dependencyAnalysis.relationship} (Hops: ${plan.dependencyAnalysis.hops ?? 'N/A'})`);
-      if (plan.dependencyAnalysis.evidence && plan.dependencyAnalysis.evidence.length > 0) {
-        plan.dependencyAnalysis.evidence.forEach(ev => {
-          console.log(`[EVIDENCE Stream] ${ev.filePath}:${ev.line} -> ${ev.statement}`);
-        });
-      }
-    }
-
-    let similarChunks: any[] = [];
-    if (plan.intent === 'DEPENDENCY' && plan.dependencyAnalysis) {
-      const targetFilePaths: string[] = [];
-      if (plan.dependencyAnalysis.sourceFile) targetFilePaths.push(plan.dependencyAnalysis.sourceFile);
-      if (plan.dependencyAnalysis.targetFile) targetFilePaths.push(plan.dependencyAnalysis.targetFile);
-      if (plan.dependencyAnalysis.path && plan.dependencyAnalysis.path.length > 0) {
-        targetFilePaths.push(...plan.dependencyAnalysis.path);
-      }
-      const uniqueFilePaths = Array.from(new Set(targetFilePaths.filter(Boolean)));
-
-      if (uniqueFilePaths.length > 0) {
-        similarChunks = await prisma.codeChunk.findMany({
-          where: {
-            repositoryId: id as string,
-            filePath: { in: uniqueFilePaths }
-          },
-          take: 20
-        });
-      }
-      if (similarChunks.length === 0) {
-        similarChunks = await prisma.codeChunk.findMany({
-          where: { repositoryId: id as string },
-          take: plan.limit
-        });
-      }
-    } else if (plan.useVector) {
-      const queryVector = await vectorService.getEmbedding(message);
-      similarChunks = await vectorService.searchSimilarChunks(id as string, queryVector, plan.limit);
-    } else {
-      similarChunks = await prisma.codeChunk.findMany({
-        where: { repositoryId: id as string },
-        take: plan.limit
-      });
-    }
-
-    const inDegreeMap: Record<string, number> = {};
-    for (const [filePath, imports] of Object.entries(dependencyGraph)) {
-      for (const imp of imports) {
-        inDegreeMap[imp] = (inDegreeMap[imp] || 0) + 1;
-      }
-    }
-
-    const rawChunks = similarChunks.map((chunk: any) => ({
-      filePath: chunk.filePath as string,
-      content: chunk.content as string,
-      startLine: chunk.startLine as number,
-      endLine: chunk.endLine as number,
-      symbolName: chunk.symbolName as string | null
-    }));
-
-    const sortedChunks = hierarchyService.categorizeAndSortChunks(rawChunks, inDegreeMap);
-    const contextChunks = hierarchyService.allocateTokens(sortedChunks, 8000);
-
-    const fileTree = buildFileTreeString(scannedFiles);
-
-    const repoMetadata = {
-      name: repo.name,
-      fileCount: repo.fileCount,
-      totalSize: repo.totalSize,
-      framework: repo.framework,
-      languages: typeof repo.languages === 'string' ? JSON.parse(repo.languages) : repo.languages,
-      entryPoints: typeof repo.entryPoints === 'string' ? JSON.parse(repo.entryPoints) : repo.entryPoints,
-      fileTree
-    };
-
-    // Set SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    // Write query planner steps
-    res.write(`data: ${JSON.stringify({ plan: { intent: plan.intent, steps: plan.steps } })}\n\n`);
-
-    // Save user query to history
-    await prisma.chatMessage.create({
-      data: { repositoryId: id as string, sender: 'USER', message }
-    });
-
-    let completeText = '';
-    let finalModel = requestedModel;
-    const abortController = new AbortController();
-    let clientDisconnected = false;
-
-    // Detect client disconnect
-    const onClose = () => {
-      clientDisconnected = true;
-      abortController.abort();
-    };
-    req.on('close', onClose);
-
-    // Maximum stream duration to prevent hanging connections (120 seconds)
-    const STREAM_TIMEOUT_MS = 120_000;
-    let streamTimedOut = false;
-    const streamTimer = setTimeout(() => {
-      streamTimedOut = true;
-      abortController.abort();
-    }, STREAM_TIMEOUT_MS);
-
-    const evidenceTraces = evidenceService.generateEvidenceTraces(scannedFiles, dependencyGraph).map(t => t.pathString);
-
-    try {
-      const stream = llmService.chatStream({
-        prompt: message,
-        contextChunks,
-        model: requestedModel,
-        repoMetadata,
-        evidenceTraces,
-        dependencyAnalysis: plan.dependencyAnalysis,
-        signal: abortController.signal
-      });
-
-      for await (const chunk of stream) {
-        // Stop streaming if client disconnected or stream timed out
-        if (clientDisconnected || streamTimedOut) {
-          console.log(`[Stream] Aborting: ${clientDisconnected ? 'client disconnected' : 'stream timeout'}`);
-          break;
-        }
-
-        completeText += chunk.content;
-        finalModel = chunk.modelUsed;
-
-        try {
-          res.write(`data: ${JSON.stringify({ token: chunk.content, modelUsed: chunk.modelUsed })}\n\n`);
-        } catch {
-          // Write failed — client likely disconnected
-          clientDisconnected = true;
-          break;
-        }
-      }
-
-      // Save complete AI response to history (even partial on disconnect)
-      if (completeText.length > 0) {
-        await prisma.chatMessage.create({
-          data: {
-            repositoryId: id as string,
-            sender: 'AI',
-            message: completeText,
-            modelUsed: finalModel
-          }
-        }).catch(saveErr => {
-          console.error('[Stream] Failed to save AI response:', saveErr);
-        });
-      } else {
-        // Stream completed without producing text, refund reservation
-        await entitlementService.refundAiQuestion(userId).catch(() => {});
-      }
-
-      if (!clientDisconnected) {
-        if (streamTimedOut) {
-          res.write(`data: ${JSON.stringify({ error: 'Stream timed out after 2 minutes.' })}\n\n`);
-        }
-        res.write('data: [DONE]\n\n');
-        res.end();
-      }
-    } catch (err: any) {
-      console.error('Streaming response failed:', err);
-      if (completeText.length === 0) {
-        await entitlementService.refundAiQuestion(userId).catch(() => {});
-      }
-      if (!clientDisconnected) {
-        try {
-          res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-          res.end();
-        } catch {
-          // Client already gone
-        }
-      }
-    } finally {
-      clearTimeout(streamTimer);
-      req.removeListener('close', onClose);
-    }
-  } catch (error) {
-    next(error);
-  }
-}
-
-/**
- * Retrieves the chat history for a specific repository.
- */
-export async function getChatHistory(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { id } = req.params;
-    const userId = req.user?.userId;
-    if (!userId) {
-      throw new AppError('Unauthorized.', 401);
-    }
-    const repo = await prisma.repository.findFirst({
-      where: { id: id as string, userId: userId as string },
-      select: { id: true }
-    });
-    if (!repo) {
-      throw new AppError('Repository not found or access denied.', 404);
-    }
-    const messages = await prisma.chatMessage.findMany({
-      where: { repositoryId: id as string },
-      orderBy: { createdAt: 'asc' }
-    });
-    res.status(200).json({ success: true, data: messages });
-  } catch (error) {
-    next(error);
-  }
-}
-
-/**
- * Computes and returns insights for the repository.
+ * Retrieves repository architecture insights.
  */
 export async function getRepoInsights(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -1605,9 +447,13 @@ export async function getRepoInsights(req: Request, res: Response, next: NextFun
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
-      select: { id: true, scannedFiles: true, dependencyGraph: true, entryPoints: true }
+      select: {
+        id: true, name: true, framework: true, languages: true,
+        scannedFiles: true, dependencyGraph: true, astMetadata: true
+      }
     });
     if (!repo) {
       throw new AppError('Repository not found or access denied.', 404);
@@ -1615,26 +461,33 @@ export async function getRepoInsights(req: Request, res: Response, next: NextFun
 
     const scannedFiles = (typeof repo.scannedFiles === 'string'
       ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as any[];
+      : repo.scannedFiles) as any[] || [];
 
     const dependencyGraph = (typeof repo.dependencyGraph === 'string'
       ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
+      : repo.dependencyGraph) as Record<string, string[]> || {};
 
-    const entryPoints = (typeof repo.entryPoints === 'string'
-      ? JSON.parse(repo.entryPoints)
-      : repo.entryPoints) as string[];
+    const astMetadata = (typeof repo.astMetadata === 'string'
+      ? JSON.parse(repo.astMetadata)
+      : repo.astMetadata) as Record<string, any> || {};
 
-    const insights = insightService.computeInsights(scannedFiles, dependencyGraph, entryPoints);
+    const insights = insightService.computeInsights(
+      scannedFiles,
+      dependencyGraph,
+      (repo as any).entryPoints || []
+    );
 
-    res.status(200).json({ success: true, data: insights });
+    res.status(200).json({
+      success: true,
+      data: insights
+    });
   } catch (error) {
     next(error);
   }
 }
 
 /**
- * Generates and returns a narrative explaining the high-level business domain and execution flow of the repository.
+ * Returns structured repository history and architectural narrative.
  */
 export async function getRepoStory(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -1643,50 +496,54 @@ export async function getRepoStory(req: Request, res: Response, next: NextFuncti
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
-      select: { id: true, name: true, framework: true, languages: true, entryPoints: true, dependencyGraph: true }
+      select: {
+        id: true, name: true, framework: true, languages: true,
+        fileCount: true, totalSize: true, entryPoints: true,
+        scannedFiles: true, dependencyGraph: true, astMetadata: true,
+        createdAt: true
+      }
     });
     if (!repo) {
       throw new AppError('Repository not found or access denied.', 404);
     }
 
+    const scannedFiles = (typeof repo.scannedFiles === 'string'
+      ? JSON.parse(repo.scannedFiles)
+      : repo.scannedFiles) as any[] || [];
+
     const dependencyGraph = (typeof repo.dependencyGraph === 'string'
       ? JSON.parse(repo.dependencyGraph)
-      : repo.dependencyGraph) as Record<string, string[]>;
+      : repo.dependencyGraph) as Record<string, string[]> || {};
 
-    const entryPoints = (typeof repo.entryPoints === 'string'
-      ? JSON.parse(repo.entryPoints)
-      : repo.entryPoints) as string[];
+    const astMetadata = (typeof repo.astMetadata === 'string'
+      ? JSON.parse(repo.astMetadata)
+      : repo.astMetadata) as Record<string, any> || {};
 
-    // Calculate hotspots using simple in-degree centrality weight
-    const inDegreeMap: Record<string, number> = {};
-    for (const [filePath, imports] of Object.entries(dependencyGraph)) {
-      for (const imp of imports) {
-        inDegreeMap[imp] = (inDegreeMap[imp] || 0) + 1;
-      }
-    }
-    const sortedHotspots = Object.entries(inDegreeMap)
-      .sort((a, b) => b[1] - a[1])
-      .map(([filePath]) => filePath);
-
+    const langObj: Record<string, number> = {};
+    (repo.languages || []).forEach(l => { langObj[l] = 1; });
     const story = storyService.generateStory(
       repo.name,
-      repo.framework || 'unknown',
-      (typeof repo.languages === 'string' ? JSON.parse(repo.languages) : repo.languages) || {},
-      entryPoints,
+      repo.framework || 'Unknown',
+      langObj,
+      repo.entryPoints,
       dependencyGraph,
-      sortedHotspots
+      repo.entryPoints
     );
 
-    res.status(200).json({ success: true, data: story });
+    res.status(200).json({
+      success: true,
+      data: story
+    });
   } catch (error) {
     next(error);
   }
 }
 
 /**
- * Generates and returns a custom onboarding guide for the repository.
+ * Returns interactive onboarding guide and learning tracks.
  */
 export async function getRepoOnboarding(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -1695,40 +552,46 @@ export async function getRepoOnboarding(req: Request, res: Response, next: NextF
     if (!userId) {
       throw new AppError('Unauthorized.', 401);
     }
+
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
-      select: { id: true, framework: true, languages: true, astMetadata: true }
+      select: {
+        id: true, name: true, framework: true, languages: true,
+        entryPoints: true, scannedFiles: true, dependencyGraph: true
+      }
     });
     if (!repo) {
       throw new AppError('Repository not found or access denied.', 404);
     }
 
-    const astMetadata = (typeof repo.astMetadata === 'string'
-      ? JSON.parse(repo.astMetadata)
-      : repo.astMetadata) as Record<string, any>;
+    const scannedFiles = (typeof repo.scannedFiles === 'string'
+      ? JSON.parse(repo.scannedFiles)
+      : repo.scannedFiles) as any[] || [];
 
-    // Collect all imports as dependencies
-    const dependencies = new Set<string>();
-    for (const fileMeta of Object.values(astMetadata)) {
-      if (fileMeta && Array.isArray(fileMeta.imports)) {
-        fileMeta.imports.forEach((imp: string) => dependencies.add(imp));
-      }
-    }
+    const dependencyGraph = (typeof repo.dependencyGraph === 'string'
+      ? JSON.parse(repo.dependencyGraph)
+      : repo.dependencyGraph) as Record<string, string[]> || {};
 
+    const langObj: Record<string, number> = {};
+    (repo.languages || []).forEach(l => { langObj[l] = 1; });
+    const allDeps = Object.values(dependencyGraph).flat();
     const onboarding = onboardingService.generateOnboardingGuide(
-      repo.framework || 'unknown',
-      (typeof repo.languages === 'string' ? JSON.parse(repo.languages) : repo.languages) || {},
-      Array.from(dependencies)
+      repo.framework || 'Unknown',
+      langObj,
+      allDeps
     );
 
-    res.status(200).json({ success: true, data: onboarding });
+    res.status(200).json({
+      success: true,
+      data: onboarding
+    });
   } catch (error) {
     next(error);
   }
 }
 
 /**
- * Manually generates or regenerates the AI Repository Summary.
+ * Generates an executive AI summary for a repository.
  */
 export async function generateRepoSummaryEndpoint(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -1741,59 +604,52 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
     const repo = await prisma.repository.findFirst({
       where: { id: id as string, userId: userId as string },
       select: {
-        id: true,
-        name: true,
-        framework: true,
-        languages: true,
-        totalSize: true,
-        scannedFiles: true
+        id: true, name: true, framework: true, languages: true,
+        fileCount: true, totalSize: true, aiSummary: true
       }
     });
     if (!repo) {
       throw new AppError('Repository not found or access denied.', 404);
     }
 
-    const scannedFiles = (typeof repo.scannedFiles === 'string'
-      ? JSON.parse(repo.scannedFiles)
-      : repo.scannedFiles) as any[] || [];
+    if (repo.aiSummary) {
+      res.status(200).json({
+        success: true,
+        data: repo.aiSummary
+      });
+      return;
+    }
 
-    const fileTreeLines = scannedFiles.map(f => f.path);
-    const fileTreeStr = fileTreeLines.slice(0, 100).join('\n') + (fileTreeLines.length > 100 ? '\n... (truncated)' : '');
+    const scannedFiles = (typeof (repo as any).scannedFiles === 'string'
+      ? JSON.parse((repo as any).scannedFiles)
+      : (repo as any).scannedFiles) as any[] || [];
+    const fileTree = buildFileTreeString(scannedFiles);
 
-    console.log(`[Manual Summary] Generating AI Repository Summary for repo ${id}...`);
-    const summaryText = await llmService.generateRepositorySummary({
+    const summary = await llmService.generateRepositorySummary({
       name: repo.name,
       framework: repo.framework,
       languages: repo.languages,
-      fileCount: scannedFiles.length,
+      fileCount: repo.fileCount,
       totalSize: repo.totalSize,
-      fileTree: fileTreeStr
+      fileTree
     });
 
-    let cleanedJson = summaryText.trim();
-    if (cleanedJson.startsWith('```')) {
-      const lines = cleanedJson.split('\n');
-      if (lines[0].startsWith('```')) lines.shift();
-      if (lines[lines.length - 1].startsWith('```')) lines.pop();
-      cleanedJson = lines.join('\n').trim();
-    }
-    const aiSummaryObj = JSON.parse(cleanedJson);
-
-    // Save to DB
-    const updated = await prisma.repository.update({
-      where: { id: id as string },
-      data: { aiSummary: aiSummaryObj }
+    await prisma.repository.update({
+      where: { id: repo.id },
+      data: { aiSummary: summary as any }
     });
 
-    res.status(200).json({ success: true, data: updated.aiSummary });
-  } catch (error: any) {
-    console.error('[Manual Summary] Generation failed:', error.message);
+    res.status(200).json({
+      success: true,
+      data: summary
+    });
+  } catch (error) {
     next(error);
   }
 }
 
 /**
- * Archives a repository to free up active codebase slots without deleting data.
+ * Archives a repository.
  */
 export async function archiveRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -1814,7 +670,7 @@ export async function archiveRepo(req: Request, res: Response, next: NextFunctio
 }
 
 /**
- * Unarchives/activates an archived repository if active slots are available.
+ * Unarchives a repository.
  */
 export async function unarchiveRepo(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
