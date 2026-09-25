@@ -1,15 +1,15 @@
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config';
-import { embeddingService } from './embedding.service';
+import { embeddingService, EmbeddingMetricsTracker } from './embedding.service';
 
 class VectorService {
-  async getEmbedding(text: string): Promise<number[]> {
-    return embeddingService.getEmbedding(text);
+  async getEmbedding(text: string, tracker?: EmbeddingMetricsTracker): Promise<number[]> {
+    return embeddingService.getEmbedding(text, tracker);
   }
 
-  async getEmbeddingsBatch(texts: string[]): Promise<number[][]> {
-    return embeddingService.getEmbeddingsBatch(texts);
+  async getEmbeddingsBatch(texts: string[], tracker?: EmbeddingMetricsTracker): Promise<number[][]> {
+    return embeddingService.getEmbeddingsBatch(texts, tracker);
   }
 
   async searchSimilarChunks(repositoryId: string, queryVector: number[], limit = 6) {
