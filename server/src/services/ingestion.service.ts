@@ -298,6 +298,9 @@ class IngestionService {
       }
       
       // 6. Persist to PostgreSQL database cache via Prisma
+      // Strip raw file contents to avoid giant multi-megabyte JSONB storage bloat (P1-4)
+      const dbScannedFiles = scannedFiles.map(({ path, size, lines }) => ({ path, size, lines }));
+
       const repository = await prisma.repository.create({
         data: {
           userId,
@@ -312,7 +315,7 @@ class IngestionService {
           fileCount: scannedFiles.length,
           totalSize,
           confidence: score,
-          scannedFiles: scannedFiles as any,
+          scannedFiles: dbScannedFiles as any,
           astMetadata: astMetadata as any,
           dependencyGraph: dependencyGraph as any
         }
