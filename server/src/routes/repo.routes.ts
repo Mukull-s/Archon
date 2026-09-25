@@ -3,17 +3,26 @@ import { requireAuth } from '../middlewares/requireAuth';
 import { repoController } from '../controllers';
 import multer from 'multer';
 import os from 'os';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const router = Router();
 
 // Configure multer for temp file uploads
 const upload = multer({ dest: os.tmpdir() });
 
-// Rate limiter for heavy operations (max 10 requests per 15 minutes)
+export const userOrIpKeyGenerator = (req: any): string => {
+  if (req.user?.userId) {
+    return `user:${req.user.userId}`;
+  }
+  const rawIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+  return `ip:${ipKeyGenerator(rawIp)}`;
+};
+
+// Rate limiter for heavy operations (max 10 requests per 15 minutes per user)
 const heavyLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
+  keyGenerator: userOrIpKeyGenerator,
   message: {
     success: false,
     error: { message: 'Too many resource-intensive operations. Please try again in 15 minutes.' }
@@ -22,10 +31,11 @@ const heavyLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// Rate limiter for interactive impact analysis (max 120 requests per 15 minutes)
+// Rate limiter for interactive impact analysis (max 120 requests per 15 minutes per user)
 const impactLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 120,
+  keyGenerator: userOrIpKeyGenerator,
   message: {
     success: false,
     error: { message: 'Too many impact simulations. Please try again shortly.' }
