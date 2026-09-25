@@ -1,6 +1,11 @@
 import axios from 'axios';
 import { DependencyAnalysisResult } from './dependency-intelligence.service';
 
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface ChatCompletionRequest {
   prompt: string;
   contextChunks: Array<{
@@ -12,6 +17,7 @@ export interface ChatCompletionRequest {
     inDegree: number;
   }>;
   model: string;
+  conversationHistory?: ChatHistoryMessage[];
   repoMetadata?: {
     name: string;
     fileCount: number;
@@ -30,6 +36,60 @@ export interface StreamChunk {
   content: string;
   reasoning: string;
   modelUsed: string;
+}
+
+export interface CircuitBreakerRecord {
+  failures: number;
+  openUntil: number;
+}
+
+export class ModelCircuitBreaker {
+  private records = new Map<string, CircuitBreakerRecord>();
+  private readonly failureThreshold: number;
+  private readonly cooldownMs: number;
+
+  constructor(failureThreshold = 2, cooldownMs = 3 * 60 * 1000) {
+    this.failureThreshold = failureThreshold;
+    this.cooldownMs = cooldownMs;
+  }
+
+  isAvailable(model: string): boolean {
+    const record = this.records.get(model);
+    if (!record) return true;
+    return record.openUntil <= Date.now();
+  }
+
+  recordSuccess(model: string): void {
+    this.records.delete(model);
+  }
+
+  recordFailure(model: string, error?: any): void {
+    const record = this.records.get(model) || { failures: 0, openUntil: 0 };
+    record.failures += 1;
+    if (record.failures >= this.failureThreshold) {
+      record.openUntil = Date.now() + this.cooldownMs;
+      console.warn(`[CircuitBreaker] Model ${model} tripped OPEN for ${Math.round(this.cooldownMs / 1000)}s due to ${record.failures} consecutive failures.`);
+    }
+    this.records.set(model, record);
+  }
+
+  trip(model: string, durationMs?: number): void {
+    this.records.set(model, {
+      failures: this.failureThreshold,
+      openUntil: Date.now() + (durationMs ?? this.cooldownMs)
+    });
+  }
+
+  reset(): void {
+    this.records.clear();
+  }
+
+  getTrippedModels(): string[] {
+    const now = Date.now();
+    return Array.from(this.records.entries())
+      .filter(([_, rec]) => rec.openUntil > now)
+      .map(([m]) => m);
+  }
 }
 
 class LLMService {
@@ -162,7 +222,11 @@ Instructions:
 7. Maintain a clean, professional, and architect-level tone.`;
   }
 
-  private getModelsQueue(requestedModel: string): string[] {
+
+
+  public readonly circuitBreaker = new ModelCircuitBreaker();
+
+  public getModelsQueue(requestedModel: string): string[] {
     let initialModel = requestedModel;
     
     // Map offline or highly congested models to stable active free models
@@ -190,15 +254,29 @@ Instructions:
         queue.push(f);
       }
     }
-    return queue;
+
+    // Configurable Paid Fallback Model as Tier-1 emergency backup
+    const paidFallback = process.env.PAID_FALLBACK_MODEL || (process.env.DEEPSEEK_API_KEY ? 'deepseek-v4-flash' : 'deepseek/deepseek-chat');
+    if (paidFallback && !queue.includes(paidFallback)) {
+      queue.push(paidFallback);
+    }
+
+    // Filter models using Circuit Breaker (skip models currently tripped OPEN)
+    const available = queue.filter(m => this.circuitBreaker.isAvailable(m));
+    return available.length > 0 ? available : queue;
   }
 
   /**
    * Standard non-streaming chat method (with new metadata-aware prompt).
    */
-  async chat({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis }: ChatCompletionRequest) {
+  async chat({ prompt, contextChunks, model, conversationHistory, repoMetadata, evidenceTraces, dependencyAnalysis }: ChatCompletionRequest) {
     const modelsQueue = this.getModelsQueue(model);
     const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces, dependencyAnalysis);
+    const clientReferer = process.env.CLIENT_URL || 'http://localhost:5173';
+    const priorTurns = (conversationHistory || []).map(h => ({
+      role: h.role,
+      content: h.content
+    }));
     let lastError: any = null;
 
     for (const activeModel of modelsQueue) {
@@ -217,6 +295,7 @@ Instructions:
           model: activeModel,
           messages: [
             { role: 'system', content: systemPrompt },
+            ...priorTurns,
             { role: 'user', content: prompt }
           ],
           temperature: 0.2
@@ -225,7 +304,7 @@ Instructions:
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             ...(!isDirectDeepSeek && {
-              'HTTP-Referer': 'http://localhost:5173',
+              'HTTP-Referer': clientReferer,
               'X-Title': 'Archon Intelligence Platform'
             })
           },
@@ -233,6 +312,7 @@ Instructions:
         });
 
         const choice = response.data.choices[0];
+        this.circuitBreaker.recordSuccess(activeModel);
         return {
           text: choice.message.content,
           reasoning: choice.message.reasoning_content || null,
@@ -240,6 +320,7 @@ Instructions:
         };
       } catch (err: any) {
         lastError = err;
+        this.circuitBreaker.recordFailure(activeModel, err);
         console.warn(`Model ${activeModel} failed: ${err.message}`);
         // Continue to fallback
       }
@@ -250,9 +331,14 @@ Instructions:
   /**
    * Streaming chat method using native fetch & Server-Sent Events.
    */
-  async *chatStream({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis, signal }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
+  async *chatStream({ prompt, contextChunks, model, conversationHistory, repoMetadata, evidenceTraces, dependencyAnalysis, signal }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
     const modelsQueue = this.getModelsQueue(model);
     const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces, dependencyAnalysis);
+    const clientReferer = process.env.CLIENT_URL || 'http://localhost:5173';
+    const priorTurns = (conversationHistory || []).map(h => ({
+      role: h.role,
+      content: h.content
+    }));
     let lastError: any = null;
 
     for (const activeModel of modelsQueue) {
@@ -283,7 +369,7 @@ Instructions:
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             ...(!isDirectDeepSeek && {
-              'HTTP-Referer': 'http://localhost:5173',
+              'HTTP-Referer': clientReferer,
               'X-Title': 'Archon Intelligence Platform'
             })
           },
@@ -291,6 +377,7 @@ Instructions:
             model: activeModel,
             messages: [
               { role: 'system', content: systemPrompt },
+              ...priorTurns,
               { role: 'user', content: prompt }
             ],
             temperature: 0.2,
@@ -360,6 +447,7 @@ Instructions:
         }
 
         // Successfully streamed from this model, so we can exit the fallback loop
+        this.circuitBreaker.recordSuccess(activeModel);
         return;
       } catch (err: any) {
         clearTimeout(timeoutId);
@@ -367,6 +455,7 @@ Instructions:
           signal.removeEventListener('abort', onSignalAbort);
         }
         lastError = err;
+        this.circuitBreaker.recordFailure(activeModel, err);
         console.warn(`Model ${activeModel} stream failed: ${err.message}`);
         // Continue fallback loop
       }
