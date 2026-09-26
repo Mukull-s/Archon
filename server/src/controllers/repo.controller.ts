@@ -51,6 +51,28 @@ function parseGithubUrl(url: string): { owner: string; repo: string } {
   }
 }
 
+/** Fields the client needs to render a repository immediately after a scan. */
+const REPO_SUMMARY_SELECT = {
+  id: true,
+  name: true,
+  owner: true,
+  isLocal: true,
+  indexingStatus: true,
+  indexingProgress: true
+} as const;
+
+/**
+ * Derives a 0–100 semantic (embedding) completion percentage.
+ * `structural-ready` means the repo is usable while embeddings stream in.
+ */
+function deriveSemanticCompleteness(indexingStatus: string, indexingProgress: string): number {
+  if (indexingStatus === 'completed') return 100;
+  if (indexingStatus !== 'structural-ready') return 0;
+  const match = /Embedding\s+(\d+)%/.exec(indexingProgress || '');
+  if (!match) return 0;
+  return Math.min(100, Math.max(0, parseInt(match[1], 10)));
+}
+
 /**
  * Scan a public GitHub URL.
  */
@@ -67,7 +89,10 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
     const { owner, repo } = parseGithubUrl(url);
 
     const existingRepo = await prisma.repository.findFirst({
-      where: { userId, owner, name: repo }
+      where: { userId, owner, name: repo },
+      // Minimal projection: avoids loading the large scannedFiles/astMetadata/
+      // dependencyGraph JSONB blobs just to check indexing status.
+      select: { id: true, indexingStatus: true, name: true, owner: true, indexingProgress: true }
     });
 
     let repository: any;
@@ -97,7 +122,8 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
           fileCount: 0,
           totalSize: 0,
           confidence: 0
-        }
+        },
+        select: REPO_SUMMARY_SELECT
       });
     } else {
       await entitlementService.canAnalyzeCodebase(userId);
@@ -118,7 +144,8 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
           scannedFiles: [],
           astMetadata: {},
           dependencyGraph: {}
-        }
+        },
+        select: REPO_SUMMARY_SELECT
       });
     }
 
@@ -256,6 +283,7 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
         languages: true, fileCount: true, totalSize: true, confidence: true,
         entryPoints: true, indexingStatus: true, indexingProgress: true,
         aiSummary: true,
+        indexingStats: true,
         createdAt: true, updatedAt: true,
         ...(lite ? {} : { scannedFiles: true, astMetadata: true, dependencyGraph: true })
       }
@@ -279,6 +307,7 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
             languages: true, fileCount: true, totalSize: true, confidence: true,
             entryPoints: true, indexingStatus: true, indexingProgress: true,
             aiSummary: true,
+            indexingStats: true,
             createdAt: true, updatedAt: true,
             ...(lite ? {} : { scannedFiles: true, astMetadata: true, dependencyGraph: true })
           }
@@ -287,11 +316,14 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     }
 
     if (lite) {
+      const semanticCompleteness = deriveSemanticCompleteness(repo.indexingStatus, repo.indexingProgress);
       res.status(200).json({
         success: true,
         data: {
           ...repo,
-          isIndexed: repo.indexingStatus === 'completed',
+          isIndexed: repo.indexingStatus === 'completed' || repo.indexingStatus === 'structural-ready',
+          isStructuralReady: repo.indexingStatus === 'structural-ready',
+          semanticCompleteness,
           scannedFiles: [],
           astMetadata: {},
           dependencyGraph: {},
@@ -324,7 +356,12 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
     const chunkCount = await prisma.codeChunk.count({
       where: { repositoryId: id as string }
     });
-    const isIndexed = chunkCount > 0;
+    // The repo is usable for structural intelligence as soon as parse completes.
+    const isIndexed =
+      chunkCount > 0 ||
+      repo.indexingStatus === 'completed' ||
+      repo.indexingStatus === 'structural-ready';
+    const semanticCompleteness = deriveSemanticCompleteness(repo.indexingStatus, repo.indexingProgress);
 
     const lightScannedFiles = (scannedFiles || []).map((f: any) => ({
       path: f.path,
@@ -338,6 +375,8 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
         ...repo,
         scannedFiles: lightScannedFiles,
         isIndexed,
+        isStructuralReady: repo.indexingStatus === 'structural-ready',
+        semanticCompleteness,
         confidenceDetails
       }
     });
@@ -605,7 +644,9 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
       where: { id: id as string, userId: userId as string },
       select: {
         id: true, name: true, framework: true, languages: true,
-        fileCount: true, totalSize: true, aiSummary: true
+        fileCount: true, totalSize: true, aiSummary: true,
+        // Needed to build the file tree passed to the summarizer.
+        scannedFiles: true
       }
     });
     if (!repo) {
