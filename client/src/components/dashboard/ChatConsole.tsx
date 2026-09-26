@@ -16,6 +16,8 @@ export interface ChatConsoleProps {
   selectedFiles: Set<string>;
   onToggleFile: (filePath: string) => void;
   isIndexed?: boolean;
+  semanticCompleteness?: number;
+  indexingStatus?: string;
   onNavigateToFile?: (filePath: string) => void;
   autoTriggerChatPrompt?: string | null;
   onClearAutoPrompt?: () => void;
@@ -60,6 +62,8 @@ export default function ChatConsole({
   selectedFiles,
   onToggleFile,
   isIndexed,
+  semanticCompleteness = 100,
+  indexingStatus,
   onNavigateToFile,
   autoTriggerChatPrompt = null,
   onClearAutoPrompt,
@@ -86,6 +90,7 @@ export default function ChatConsole({
   const [loading, setLoading] = useState(false);
   const [indexing, setIndexing] = useState(false);
   const [indexed, setIndexed] = useState(!!isIndexed);
+  const [semanticPct, setSemanticPct] = useState(semanticCompleteness);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [loadingStep, setLoadingStep] = useState('Analyzing repository context...');
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -137,6 +142,34 @@ export default function ChatConsole({
       setIndexed(isIndexed);
     }
   }, [isIndexed]);
+
+  // Keep the semantic progress in sync with the parent, then poll while the
+  // background embedding phase is still running so the banner stays live.
+  useEffect(() => {
+    setSemanticPct(semanticCompleteness);
+  }, [semanticCompleteness]);
+
+  useEffect(() => {
+    if (indexingStatus !== 'structural-ready' || semanticPct >= 100) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/repos/${repositoryId}?lite=true`);
+        const repo = data.data;
+        if (!cancelled && typeof repo?.semanticCompleteness === 'number') {
+          setSemanticPct(repo.semanticCompleteness);
+        }
+      } catch {
+        // Non-fatal: keep showing the last known percentage.
+      }
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [repositoryId, indexingStatus, semanticPct]);
+
+  const showSemanticBanner = indexingStatus === 'structural-ready' && semanticPct < 100;
 
   // Load chat history from backend if not already in local cache
   useEffect(() => {
@@ -1202,6 +1235,16 @@ export default function ChatConsole({
                   </button>
                 </span>
               )}
+            </div>
+          )}
+
+          {/* Semantic index progress banner (two-phase indexing) */}
+          {showSemanticBanner && (
+            <div className="mb-2 flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-blue-900/40 bg-blue-950/30 text-[11px] font-mono text-blue-200">
+              <span>
+                Semantic index {semanticPct}% — answers use the structural graph until embeddings finish.
+              </span>
+              <span className="tabular-nums text-blue-300/80 shrink-0">{semanticPct}%</span>
             </div>
           )}
 
