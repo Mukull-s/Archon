@@ -312,14 +312,33 @@ export function parseSourceFile(filePath: string, fileContent: string): ASTMetad
   }
 
   // Handle TypeScript & JavaScript files
-  let sourceFile: ts.SourceFile;
-  try {
-    sourceFile = ts.createSourceFile(filePath, fileContent, ts.ScriptTarget.Latest, true);
-  } catch (error) {
-    console.error(`Error creating AST SourceFile for ${filePath}:`, error);
-    return { imports: [], exports: [], functions: [], classes: [] };
+  const sourceFile = createTsSourceFile(filePath, fileContent);
+  if (!sourceFile) {
+    return emptyMetadata();
   }
 
+  return collectTsMetadata(sourceFile);
+}
+
+function createTsSourceFile(filePath: string, fileContent: string): ts.SourceFile | null {
+  try {
+    return ts.createSourceFile(filePath, fileContent, ts.ScriptTarget.Latest, true);
+  } catch (error) {
+    console.error(`Error creating AST SourceFile for ${filePath}:`, error);
+    return null;
+  }
+}
+
+function emptyMetadata(): ASTMetadata {
+  return { imports: [], exports: [], functions: [], classes: [] };
+}
+
+/**
+ * Extracts imports, exports, functions, and classes from an already-parsed
+ * SourceFile. Exposed so callers can extract metadata and symbols from a
+ * single `ts.createSourceFile` parse.
+ */
+export function collectTsMetadata(sourceFile: ts.SourceFile): ASTMetadata {
   const imports: string[] = [];
   const exports: string[] = [];
   const functions: string[] = [];
@@ -540,13 +559,17 @@ export function getCodeSymbols(filePath: string, fileContent: string): CodeSymbo
     return getPythonCodeSymbols(fileContent);
   }
 
-  let sourceFile: ts.SourceFile;
-  try {
-    sourceFile = ts.createSourceFile(filePath, fileContent, ts.ScriptTarget.Latest, true);
-  } catch (error) {
-    return [];
-  }
+  const sourceFile = createTsSourceFile(filePath, fileContent);
+  if (!sourceFile) return [];
 
+  return collectTsSymbols(sourceFile);
+}
+
+/**
+ * Extracts function/class symbols with line ranges from an already-parsed
+ * SourceFile.
+ */
+export function collectTsSymbols(sourceFile: ts.SourceFile): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
 
   function visit(node: ts.Node) {
@@ -564,6 +587,40 @@ export function getCodeSymbols(filePath: string, fileContent: string): CodeSymbo
 
   visit(sourceFile);
   return symbols.sort((a, b) => a.startLine - b.startLine);
+}
+
+export interface ParsedSourceFile {
+  metadata: ASTMetadata;
+  symbols: CodeSymbol[];
+}
+
+/**
+ * Parses a file once and returns both its AST metadata and its code symbols.
+ * This removes the second `ts.createSourceFile` parse that discovery + chunking
+ * previously performed on the same content.
+ */
+export function parseSourceFileWithSymbols(
+  filePath: string,
+  fileContent: string
+): ParsedSourceFile {
+  const normalized = filePath.replace(/\\/g, '/');
+
+  if (normalized.endsWith('.py')) {
+    return {
+      metadata: parsePythonSourceFile(filePath, fileContent),
+      symbols: getPythonCodeSymbols(fileContent)
+    };
+  }
+
+  const sourceFile = createTsSourceFile(filePath, fileContent);
+  if (!sourceFile) {
+    return { metadata: emptyMetadata(), symbols: [] };
+  }
+
+  return {
+    metadata: collectTsMetadata(sourceFile),
+    symbols: collectTsSymbols(sourceFile)
+  };
 }
 
 /**
