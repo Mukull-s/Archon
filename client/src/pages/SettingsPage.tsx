@@ -166,7 +166,7 @@ export default function SettingsPage() {
                 <span className="text-[13px] font-semibold text-text-primary">
                   {isArchitect ? 'Archon Architect Workspace' : 'Explorer Plan (Free)'}
                 </span>
-                <Badge variant={isArchitect ? 'accent' : 'neutral'} size="sm">
+                <Badge variant={isArchitect ? 'purple' : 'neutral'}>
                   {isArchitect ? 'PRO' : 'FREE'}
                 </Badge>
               </div>
