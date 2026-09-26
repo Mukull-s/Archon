@@ -57,9 +57,12 @@ export default function OverviewTab({
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [showManualButton, setShowManualButton] = useState(false);
 
-  // Polling for AI summary if completed and summary missing
+  // Polling for AI summary once the codebase is structurally ready
   useEffect(() => {
-    if (!repoDetails || repoDetails.aiSummary || repoDetails.indexingStatus !== 'completed') return;
+    const usableStatus =
+      repoDetails?.indexingStatus === 'completed' ||
+      repoDetails?.indexingStatus === 'structural-ready';
+    if (!repoDetails || repoDetails.aiSummary || !usableStatus) return;
 
     // Show manual fallback button after 20 seconds of polling
     const timer = setTimeout(() => {
