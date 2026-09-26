@@ -167,7 +167,10 @@ export default function HeroSection() {
         const { data } = await api.get(`/repos/${repoId}?lite=true`)
         const repo = data.data
 
-        if (repo.indexingStatus === 'completed') {
+        if (repo.indexingStatus === 'completed' || repo.indexingStatus === 'structural-ready') {
+          // `structural-ready` means the codebase is already usable (files, AST,
+          // graph, insights). Embeddings keep streaming in the background; the
+          // Chat tab shows semantic progress. Don't make the user wait for RAG.
           backendFinishedRef.current = true
           backendDataRef.current = repo
           setTargetProgress(100)
