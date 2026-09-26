@@ -3,12 +3,13 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import AdmZip from 'adm-zip';
-import { prisma, MAX_FILES_LIMIT } from '../config';
+import { prisma, MAX_FILES_LIMIT, MAX_CHUNKS_LIMIT, EMBEDDING_BATCH_SIZE, MAX_CONCURRENT_EMBEDDINGS } from '../config';
 import { AppError } from '../utils';
 import { getPlaintextToken } from '../utils/crypto';
 import { ingestionService, deleteFolderWithRetry } from './ingestion.service';
 import * as astService from './ast.service';
 import { embeddingService } from './embedding.service';
+import { AsyncSemaphore } from './concurrency';
 import { vectorService } from './vector.service';
 import { entitlementService } from './entitlement.service';
 import { identityService } from './identity.service';
@@ -165,6 +166,11 @@ export async function performVectorIndexing(
 
     const scannedFiles: Array<{ path: string; size: number; lines: number; hash: string }> = [];
     const astMetadata: Record<string, any> = {};
+    const symbolsCache = new Map<string, astService.CodeSymbol[]>();
+    const contentCache = new Map<string, string>();
+    const CONTENT_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+    let contentCacheBytes = 0;
+    const PARSEABLE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py']);
     const languages = new Set<string>();
     let totalSize = 0;
     let fileIndex = 0;
@@ -208,22 +214,34 @@ export async function performVectorIndexing(
         const detectedLang = identityService.detectLanguageByExtension(ext);
         if (detectedLang) languages.add(detectedLang);
 
-        let content = '';
+        let buffer: Buffer;
         try {
-          content = fs.readFileSync(fullPath, 'utf-8').replace(/\u0000/g, '');
+          buffer = fs.readFileSync(fullPath);
         } catch {
           continue;
         }
+        const content = buffer.toString('utf-8').replace(/\u0000/g, '');
 
         const lines = content.split('\n').length;
-        const hash = hashFile(fullPath);
+        // Hash from the buffer we already read — this removes a second filesystem read per file.
+        const hash = crypto.createHash('md5').update(buffer).digest('hex');
 
         scannedFiles.push({ path: relativePath, size: stat.size, lines, hash });
         totalSize += stat.size;
 
-        if (['.ts', '.tsx', '.js', '.jsx', '.py'].includes(ext)) {
+        // Bounded content cache: lets the chunking stage reuse this read instead
+        // of re-reading the file. Capped so a huge repo cannot exhaust memory.
+        if (contentCacheBytes + buffer.length <= CONTENT_CACHE_MAX_BYTES) {
+          contentCache.set(relativePath, content);
+          contentCacheBytes += buffer.length;
+        }
+
+        // Single parse for both AST metadata and chunk symbols.
+        if (PARSEABLE_EXTENSIONS.has(ext)) {
           try {
-            astMetadata[relativePath] = astService.parseSourceFile(relativePath, content);
+            const parsed = astService.parseSourceFileWithSymbols(relativePath, content);
+            astMetadata[relativePath] = parsed.metadata;
+            symbolsCache.set(relativePath, parsed.symbols);
           } catch {}
         }
 
@@ -301,24 +319,35 @@ export async function performVectorIndexing(
       }
     });
 
-    // ── Stage 6: Streaming Embedding Pipeline (Bounded Buffer) ────────────
+    // ── Structural phase complete ─────────────────────────────────────────
+    // Everything the Explorer / Insights / Graph / Architecture tabs need is
+    // now persisted. Unlock the product immediately; embeddings continue in
+    // the background and only affect RAG quality.
+    await prisma.repository.update({
+      where: { id },
+      data: { indexingStatus: 'structural-ready', indexingProgress: 'Embedding 0%' }
+    });
+
+    // ── Stage 6: Streaming Embedding Pipeline (Bounded, Concurrent Buffer) ─
     const embedTracker = embeddingService.createTracker();
     const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({ where: { repositoryId: id } });
     let totalChunksProcessed = 0;
+    let totalBatches = 0;
     let pendingChunks: any[] = [];
     let embeddingFailed = false;
     let embedTime = 0;
     let dbWriteTime = 0;
     const embedStart = Date.now();
 
-    const EMBEDDING_BATCH_SIZE = 64;
-    const MAX_CHUNKS_LIMIT = 5000;
+    // Bounded concurrent flush pool. Embedding + insert for independent batches
+    // overlap instead of running strictly one-at-a-time.
+    const embedConcurrency = Math.max(1, MAX_CONCURRENT_EMBEDDINGS);
+    const embedLimiter = new AsyncSemaphore(embedConcurrency);
+    const inFlight: Promise<void>[] = [];
+    let peakConcurrency = 0;
 
-    async function flushPendingChunks() {
-      if (pendingChunks.length === 0) return;
-      const batch = pendingChunks;
-      pendingChunks = [];
-
+    async function processBatch(batch: any[], startIndex: number): Promise<void> {
+      peakConcurrency = Math.max(peakConcurrency, embedLimiter.active);
       const batchTexts = batch.map(c => c.content);
       const t0 = Date.now();
       let embeddings: number[][];
@@ -333,22 +362,51 @@ export async function performVectorIndexing(
 
       const readyChunks = batch.map((c, j) => ({ ...c, embedding: embeddings[j] }));
       const dbT0 = Date.now();
-      await vectorService.bulkInsertChunks(id, readyChunks, unchangedChunksCount + totalChunksProcessed);
+      await vectorService.bulkInsertChunks(id, readyChunks, startIndex);
       dbWriteTime += Date.now() - dbT0;
-      totalChunksProcessed += readyChunks.length;
     }
 
+    function flushPendingChunks(): void {
+      if (pendingChunks.length === 0) return;
+      const batch = pendingChunks;
+      pendingChunks = [];
+      // Assign the global chunk index *before* dispatching so concurrent
+      // inserts can never race on ordering.
+      const startIndex = unchangedChunksCount + totalChunksProcessed;
+      totalChunksProcessed += batch.length;
+      totalBatches += 1;
+
+      const task = embedLimiter.run(() => processBatch(batch, startIndex)).catch(err => {
+        console.error(`[Indexing] Unexpected embedding pipeline error: ${err?.message || err}`);
+        embeddingFailed = true;
+      });
+      inFlight.push(task);
+      void task.finally(() => {
+        const idx = inFlight.indexOf(task);
+        if (idx >= 0) inFlight.splice(idx, 1);
+      });
+    }
+
+    async function drainInFlight(): Promise<void> {
+      while (inFlight.length > 0) {
+        await Promise.all(inFlight.slice());
+      }
+    }
+
+    let lastProgressWrite = Date.now();
     for (let fileIdx = 0; fileIdx < filesToEmbed.length; fileIdx++) {
       const file = filesToEmbed[fileIdx];
       const fullFilePath = path.join(repoRoot, file.path);
 
-      let fileContent = '';
-      try {
-        fileContent = fs.readFileSync(fullFilePath, 'utf-8').replace(/\u0000/g, '');
-      } catch { continue; }
+      let fileContent = contentCache.get(file.path);
+      if (fileContent === undefined) {
+        try {
+          fileContent = fs.readFileSync(fullFilePath, 'utf-8').replace(/\u0000/g, '');
+        } catch { continue; }
+      }
       if (!fileContent.trim()) continue;
 
-      const symbols = astService.getCodeSymbols(file.path, fileContent);
+      const symbols = symbolsCache.get(file.path) ?? astService.getCodeSymbols(file.path, fileContent);
       const fileChunks = ingestionService.chunkCodeFile(file.path, fileContent, symbols);
       if (fileChunks.length === 0) continue;
 
@@ -368,18 +426,25 @@ export async function performVectorIndexing(
         });
 
         if (pendingChunks.length >= EMBEDDING_BATCH_SIZE) {
-          await flushPendingChunks();
+          // Back-pressure: wait for a slot before dispatching the next batch.
+          if (inFlight.length >= embedConcurrency) {
+            await Promise.race(inFlight);
+          }
+          flushPendingChunks();
           await new Promise(resolve => setImmediate(resolve));
         }
       }
 
-      if (fileIdx % 10 === 0 || fileIdx === filesToEmbed.length - 1) {
-        const pct = Math.round(40 + ((fileIdx + 1) / filesToEmbed.length) * 50);
+      const now = Date.now();
+      if (fileIdx % 25 === 0 || now - lastProgressWrite >= 2000 || fileIdx === filesToEmbed.length - 1) {
+        lastProgressWrite = now;
+        const pct = filesToEmbed.length > 0 ? Math.round(((fileIdx + 1) / filesToEmbed.length) * 100) : 100;
         await prisma.repository.update({ where: { id }, data: { indexingProgress: `Embedding ${pct}%` } });
       }
     }
 
-    if (pendingChunks.length > 0) await flushPendingChunks();
+    if (pendingChunks.length > 0) flushPendingChunks();
+    await drainInFlight();
     logStage('embedding', Date.now() - embedStart);
     logStage('db-insert-total', dbWriteTime);
 
@@ -387,12 +452,28 @@ export async function performVectorIndexing(
 
     // ── Stage 7: Finalize ─────────────────────────────────────────────────
     const latestSha = (repoRow as any)._latestSha;
+    const embedMetrics = embedTracker.getMetrics();
+    const indexingStats = {
+      files: scannedFiles.length,
+      filesEmbedded: filesToEmbed.length,
+      chunks: unchangedChunksCount + totalChunksProcessed,
+      batches: totalBatches,
+      apiMs: embedMetrics.totalLatencyMs,
+      backoffMs: embedMetrics.totalBackoffMs,
+      dbMs: dbWriteTime,
+      embedWallMs: Date.now() - embedStart,
+      retries: embedMetrics.retries,
+      rateLimits: embedMetrics.rateLimitResponses,
+      timeouts: embedMetrics.timeoutResponses,
+      peakConcurrency,
+      failed: embeddingFailed
+    };
     await prisma.repository.update({
       where: { id },
       data: {
         indexingStatus: 'completed',
         indexingProgress: embeddingFailed ? 'Completed (partial — some embeddings failed)' : 'Completed',
-        ...(latestSha ? { indexingProgress: 'Completed' } : {})
+        indexingStats: indexingStats as any
       }
     });
 
@@ -412,8 +493,7 @@ export async function performVectorIndexing(
 
     const totalTime = Date.now() - startTime;
     logStage('complete', totalTime);
-    
-    const embedMetrics = embedTracker.getMetrics();
+
     const totalCalls = embedMetrics.successfulCalls + embedMetrics.failedCalls;
     const avgLatency = totalCalls > 0 ? Math.round(embedMetrics.totalLatencyMs / totalCalls) : 0;
 
@@ -422,10 +502,12 @@ export async function performVectorIndexing(
     console.log(`Repository: ${repoRow.name}`);
     console.log(`Files: ${scannedFiles.length}`);
     console.log(`Chunks: ${unchangedChunksCount + totalChunksProcessed}`);
+    console.log(`Embedding Batches Dispatched: ${totalBatches} (concurrency ${embedConcurrency}, peak ${peakConcurrency})`);
     console.log(`Successful API Calls: ${embedMetrics.successfulCalls}`);
     console.log(`Failed API Calls: ${embedMetrics.failedCalls}`);
     console.log(`Retry Attempts: ${embedMetrics.retries}`);
     console.log(`Rate Limit (429) Responses: ${embedMetrics.rateLimitResponses}`);
+    console.log(`Timeout Responses: ${embedMetrics.timeoutResponses}`);
     console.log(`Total Backoff Sleep Time: ${(embedMetrics.totalBackoffMs / 1000).toFixed(2)}s`);
     console.log(`Actual API Call Latency: ${(embedMetrics.totalLatencyMs / 1000).toFixed(2)}s`);
     console.log(`Average API Latency: ${avgLatency}ms`);
