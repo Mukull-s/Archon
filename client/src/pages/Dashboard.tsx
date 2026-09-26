@@ -33,6 +33,10 @@ interface RepositoryData {
   totalSize: number;
   confidence: number;
   isIndexed?: boolean;
+  isStructuralReady?: boolean;
+  indexingStatus?: string;
+  indexingProgress?: string;
+  semanticCompleteness?: number;
   scannedFiles: FileItem[];
   astMetadata: any;
   dependencyGraph: any;
@@ -373,6 +377,8 @@ export default function Dashboard() {
             selectedFiles={selectedFiles}
             onToggleFile={handleToggleFile}
             isIndexed={repo.isIndexed}
+            semanticCompleteness={repo.semanticCompleteness}
+            indexingStatus={repo.indexingStatus}
             onNavigateToFile={(filePath: string) => {
               setSelectedExplorerFile(filePath);
               setActiveTab('explorer');
