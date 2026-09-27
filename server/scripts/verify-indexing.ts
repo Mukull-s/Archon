@@ -307,7 +307,170 @@ async function main() {
     assert(maxLenSeen <= DEFAULT_MAX_CHARS_PER_INPUT, 'oversized input clamped before request', `max ${maxLenSeen}`);
   }
 
-  // ── 7. Before/after: the exact regression scenario ────────────────────────
+  // ── 6. BatchPipeline: bounded embeds + decoupled persistence ─────────────
+
+  section('BatchPipeline: bounded embeds + decoupled DB');
+  {
+    const { BatchPipeline } = require('../src/services/indexing.pipeline');
+
+    // concurrency 1 is the sharpest test: with a coupled design the insert would
+    // block the next embed; decoupled, they overlap.
+    let activeEmbeds = 0;
+    let activeInserts = 0;
+    let overlapped = false;
+    const inserted: number[] = [];
+
+    const pipeline = new BatchPipeline({
+      concurrency: 1,
+      maxOutstanding: 4,
+      embed: async (texts: string[]) => {
+        activeEmbeds++;
+        if (activeInserts > 0) overlapped = true;
+        await new Promise(r => setTimeout(r, 25));
+        activeEmbeds--;
+        return texts.map(() => [1, 2, 3]);
+      },
+      insert: async (items: any[], _embeddings: number[][], startIndex: number) => {
+        activeInserts++;
+        if (activeEmbeds > 0) overlapped = true;
+        await new Promise(r => setTimeout(r, 25));
+        activeInserts--;
+        inserted.push(...items.map((it: any) => startIndex + it.i));
+      },
+    });
+
+    const N = 4;
+    for (let b = 0; b < N; b++) {
+      const items = [{ i: 0 }, { i: 1 }];
+      pipeline.submit({ items, texts: items.map(() => 'x'), startIndex: b * 2 });
+    }
+    await pipeline.drain();
+
+    assert(pipeline.peakEmbedConcurrency === 1, 'embed concurrency respected', `peak ${pipeline.peakEmbedConcurrency}`);
+    assert(overlapped, 'a DB insert overlapped an embedding call (decoupled)');
+    assert(inserted.length === N * 2, 'all items inserted', `${inserted.length}`);
+    assert(
+      inserted.slice().sort((a, b) => a - b).join(',') === '0,1,2,3,4,5,6,7',
+      'global chunk indices remain correct',
+      inserted.join(',')
+    );
+
+    // Error isolation: one failing embed must not stop the others.
+    let embedCalls = 0;
+    let failed = 0;
+    const p2 = new BatchPipeline({
+      concurrency: 2,
+      embed: async () => {
+        embedCalls++;
+        if (embedCalls === 1) throw new Error('boom');
+        return [[1]];
+      },
+      insert: async () => {},
+      onEmbedError: () => { failed++; },
+    });
+    p2.submit({ items: [{ i: 0 }], texts: ['a'], startIndex: 0 });
+    p2.submit({ items: [{ i: 1 }], texts: ['b'], startIndex: 1 });
+    p2.submit({ items: [{ i: 2 }], texts: ['c'], startIndex: 2 });
+    await p2.drain();
+    assert(failed === 1, 'failing batch reported exactly once', `failed ${failed}`);
+    assert(p2.insertedItems === 2, 'unaffected batches still persisted', `inserted ${p2.insertedItems}`);
+
+    // Back-pressure keeps outstanding batches bounded.
+    let peakOutstanding = 0;
+    const p3 = new BatchPipeline({
+      concurrency: 2,
+      maxOutstanding: 2,
+      embed: async () => { await new Promise(r => setTimeout(r, 10)); return [[1]]; },
+      insert: async () => { await new Promise(r => setTimeout(r, 10)); },
+    });
+    for (let i = 0; i < 8; i++) {
+      await p3.waitForCapacity();
+      p3.submit({ items: [{ i }], texts: ['x'], startIndex: i });
+      peakOutstanding = Math.max(peakOutstanding, p3.outstanding);
+    }
+    await p3.drain();
+    assert(peakOutstanding <= 2, 'back-pressure bounds outstanding batches', `peak ${peakOutstanding}`);
+  }
+
+  // ── 7. Completion gate: summary parsing + quarantine accounting ──────────
+
+  section('Completion gate: summary parsing + quarantine');
+  {
+    const { parseRepositorySummary } = require('../src/services/indexing.orchestrator');
+
+    const rawJson = parseRepositorySummary('{"summary":"A tool","purpose":"x"}');
+    assert(rawJson.summary === 'A tool' && rawJson.purpose === 'x', 'parses raw JSON summary');
+
+    const fenced = parseRepositorySummary('```json\n{"summary":"Fenced"}\n```');
+    assert(fenced.summary === 'Fenced', 'parses fenced JSON summary');
+
+    const prose = parseRepositorySummary('Just some prose about the repo');
+    assert(prose.summary === 'Just some prose about the repo', 'falls back to prose as summary');
+
+    assert(parseRepositorySummary('').summary === '', 'empty summary parses to empty');
+
+    const { BatchPipeline } = require('../src/services/indexing.pipeline');
+
+    // Embed failures are quarantined (not terminal) and surfaced to the caller.
+    const quarantined: any[] = [];
+    const p = new BatchPipeline({
+      concurrency: 2,
+      embed: async (texts: string[]) => {
+        if (texts[0] === 'bad') throw new Error('voyage down');
+        return texts.map(() => [1]);
+      },
+      insert: async () => {},
+      onEmbedError: (_err: unknown, b: any) => quarantined.push(b)
+    });
+    p.submit({ items: [{ i: 0 }], texts: ['bad'], startIndex: 0 });
+    p.submit({ items: [{ i: 1 }], texts: ['good'], startIndex: 1 });
+    await p.drain();
+    assert(quarantined.length === 1, 'quarantine surfaces exactly the failed batch', `${quarantined.length}`);
+    assert(quarantined[0].startIndex === 0, 'quarantined batch keeps its global start index');
+    assert(p.resolvedBatches === 1, 'resolvedBatches counts successful batches', `${p.resolvedBatches}`);
+    assert(p.failedBatches === 0, 'embed failures are not terminal until recovery is attempted');
+
+    // Insert failures are terminal and counted.
+    const p2 = new BatchPipeline({
+      concurrency: 1,
+      embed: async () => [[1]],
+      insert: async () => { throw new Error('db write failed'); }
+    });
+    p2.submit({ items: [{ i: 0 }], texts: ['x'], startIndex: 0 });
+    await p2.drain();
+    assert(p2.failedBatches === 1, 'insert failure is terminal and counted', `${p2.failedBatches}`);
+    assert(p2.resolvedBatches === 0, 'no batch resolves on insert failure', `${p2.resolvedBatches}`);
+  }
+
+  // ── 9. Vector literal: compact AND float32-lossless ──────────────────────
+
+  section('Vector literal serialization (wire-byte reduction)');
+  {
+    const { toVectorLiteral } = require('../src/services/vector.service');
+
+    const vec = Array.from({ length: 512 }, () => Math.random() * 2 - 1);
+    const compact = toVectorLiteral(vec);
+    const naive = `[${vec.join(',')}]`;
+
+    // 1. It must be materially smaller on the wire.
+    assert(compact.length < naive.length * 0.65, 'compact literal is >=35% smaller', `${compact.length} vs ${naive.length}`);
+
+    // 2. It must round-trip to the exact same float32 pgvector would store.
+    const parts = compact.slice(1, -1).split(',');
+    assert(parts.length === 512, 'compact literal has all 512 dimensions');
+    let lossless = true;
+    for (let i = 0; i < vec.length; i++) {
+      if (Math.fround(Number(parts[i])) !== Math.fround(vec[i])) { lossless = false; break; }
+    }
+    assert(lossless, 'every component round-trips to the identical float32');
+
+    // 3. Edge cases must not produce invalid literals.
+    assert(toVectorLiteral([0, -0, 1, -1]).match(/^\[[-0-9.,eE]+\]$/) !== null, 'edge values produce a valid literal');
+    const tiny = toVectorLiteral([1e-8, -1.5e-7]);
+    assert(tiny.includes('e-'), 'tiny magnitudes keep scientific notation (not silently zeroed)');
+  }
+
+  // ── 10. Before/after: the exact regression scenario ───────────────────────
 
   section('Regression: 128-count batching vs token-aware batching');
   {
