@@ -92,7 +92,10 @@ export interface IEmbeddingService {
 
 export class EmbeddingService implements IEmbeddingService {
   private client: VoyageAIClient;
-  private readonly model = 'voyage-code-3';
+  // Configurable so the model can be upgraded without a code change. Both
+  // `voyage-code-3` and the current `voyage-code-4` support output_dimension
+  // 512, so the existing vector(512) schema is unchanged by an upgrade.
+  private readonly model = process.env.VOYAGE_MODEL?.trim() || 'voyage-code-4';
   private readonly dimension = 512;
   private globalTracker = new EmbeddingMetricsTracker();
   private semaphore: AsyncSemaphore;
@@ -101,7 +104,7 @@ export class EmbeddingService implements IEmbeddingService {
   private backoffUntil = 0;
   private readonly batchOptions: TokenBatchOptions = readBatchOptionsFromEnv();
 
-  constructor(clientOverride?: VoyageAIClient, maxConcurrency = 3) {
+  constructor(clientOverride?: VoyageAIClient, maxConcurrency = 2) {
     if (clientOverride) {
       this.client = clientOverride;
     } else {
@@ -118,11 +121,14 @@ export class EmbeddingService implements IEmbeddingService {
       });
     }
 
-    const concurrency = readPositiveIntEnv('VOYAGE_MAX_CONCURRENCY', maxConcurrency);
+    const concurrency = readPositiveIntEnv(
+      'VOYAGE_MAX_CONCURRENCY',
+      readPositiveIntEnv('EMBEDDING_CONCURRENCY', maxConcurrency)
+    );
     this.baseConcurrency = concurrency;
     this.semaphore = new AsyncSemaphore(concurrency);
 
-    console.log(`[Embedding] Embedding Provider: Voyage | Concurrency Limit: ${concurrency}`);
+    console.log(`[Embedding] Embedding Provider: Voyage ${this.model} | Concurrency Limit: ${concurrency}`);
     console.log(`[Embedding] Model: ${this.model}`);
     console.log(`[Embedding] Dimension: ${this.dimension}`);
   }
