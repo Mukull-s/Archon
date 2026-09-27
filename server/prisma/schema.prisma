@@ -94,7 +94,7 @@ model CodeChunk {
   endLine      Int
   symbolName   String?  // Name of class, function, or "file-level"
   
-  // 512-dimension vector matching Voyage AI voyage-code-3
+  // 512-dimension vector (Voyage voyage-code-3 / voyage-code-4 both support 512)
   embedding    Unsupported("vector(512)")? 
   
   createdAt    DateTime @default(now())
