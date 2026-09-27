@@ -29,6 +29,16 @@ const envSchema = z.object({
   MINIMAX_API_KEY: z.string().default(''),
   GEMINI_API_KEY: z.string().default(''),
   VOYAGE_API_KEY: z.string().min(1, 'VOYAGE_API_KEY is required for embedding generation'),
+  DEEPSEEK_API_KEY: z.string().default(''),
+  OPENROUTER_API_KEY: z.string().default(''),
+
+  // Optional OpenAI-compatible LLM gateway. Disabled unless LLM_PROVIDER is
+  // 'merge-gateway' AND base URL + key + model are all set. Falls back to the
+  // OpenRouter/DeepSeek queue on any failure.
+  LLM_PROVIDER: z.string().default('openrouter'),
+  MERGE_GATEWAY_API_KEY: z.string().default(''),
+  MERGE_GATEWAY_BASE_URL: z.string().default(''),
+  MERGE_GATEWAY_MODEL: z.string().default(''),
 
   // Encryption (falls back to JWT_SECRET if unset)
   GITHUB_TOKEN_ENCRYPTION_KEY: z.string().default(''),
