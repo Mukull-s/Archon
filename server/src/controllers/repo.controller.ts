@@ -14,7 +14,7 @@ import { onboardingService } from '../services/onboarding.service';
 import { llmService } from '../services/llm.service';
 
 // Orchestrators (Extracted for separation of concerns and maintainability P1-1)
-import { performVectorIndexing } from '../services/indexing.orchestrator';
+import { performVectorIndexing, parseRepositorySummary } from '../services/indexing.orchestrator';
 import {
   prepareChatContext,
   buildFileTreeString,
@@ -44,7 +44,10 @@ function parseGithubUrl(url: string): { owner: string; repo: string } {
     if (!match) {
       throw new AppError('Invalid GitHub URL format. Example: https://github.com/owner/repository', 400);
     }
-    return { owner: match[1], repo: match[2] };
+    // Strip a trailing `.git` (e.g. "https://github.com/owner/repo.git") and any
+    // query/hash so the zipball endpoint receives the bare repository name.
+    const repo = match[2].replace(/\.git$/i, '').replace(/[?#].*$/, '');
+    return { owner: match[1], repo };
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('Failed to parse GitHub URL. Ensure it matches github.com/owner/repo', 400);
@@ -62,13 +65,12 @@ const REPO_SUMMARY_SELECT = {
 } as const;
 
 /**
- * Derives a 0–100 semantic (embedding) completion percentage.
- * `structural-ready` means the repo is usable while embeddings stream in.
+ * Derives a 0–100 completion percentage from backend progress.
  */
 function deriveSemanticCompleteness(indexingStatus: string, indexingProgress: string): number {
   if (indexingStatus === 'completed') return 100;
-  if (indexingStatus !== 'structural-ready') return 0;
-  const match = /Embedding\s+(\d+)%/.exec(indexingProgress || '');
+  if (indexingStatus !== 'indexing') return 0;
+  const match = /(\d+)%/.exec(indexingProgress || '');
   if (!match) return 0;
   return Math.min(100, Math.max(0, parseInt(match[1], 10)));
 }
@@ -321,8 +323,9 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
         success: true,
         data: {
           ...repo,
-          isIndexed: repo.indexingStatus === 'completed' || repo.indexingStatus === 'structural-ready',
-          isStructuralReady: repo.indexingStatus === 'structural-ready',
+          // Strict gate: the UI renders repository data only when the run is
+          // fully complete (all files, all batches, summary present).
+          isIndexed: repo.indexingStatus === 'completed',
           semanticCompleteness,
           scannedFiles: [],
           astMetadata: {},
@@ -353,14 +356,9 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
       repo.framework
     );
 
-    const chunkCount = await prisma.codeChunk.count({
-      where: { repositoryId: id as string }
-    });
-    // The repo is usable for structural intelligence as soon as parse completes.
-    const isIndexed =
-      chunkCount > 0 ||
-      repo.indexingStatus === 'completed' ||
-      repo.indexingStatus === 'structural-ready';
+    // Strict gate: repository data is only "indexed" when the run fully
+    // completed. A partial/failed run renders an error + retry, never half-data.
+    const isIndexed = repo.indexingStatus === 'completed';
     const semanticCompleteness = deriveSemanticCompleteness(repo.indexingStatus, repo.indexingProgress);
 
     const lightScannedFiles = (scannedFiles || []).map((f: any) => ({
@@ -375,7 +373,6 @@ export async function getRepoDetails(req: Request, res: Response, next: NextFunc
         ...repo,
         scannedFiles: lightScannedFiles,
         isIndexed,
-        isStructuralReady: repo.indexingStatus === 'structural-ready',
         semanticCompleteness,
         confidenceDetails
       }
@@ -666,7 +663,7 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
       : (repo as any).scannedFiles) as any[] || [];
     const fileTree = buildFileTreeString(scannedFiles);
 
-    const summary = await llmService.generateRepositorySummary({
+    const raw = await llmService.generateRepositorySummary({
       name: repo.name,
       framework: repo.framework,
       languages: repo.languages,
@@ -674,6 +671,8 @@ export async function generateRepoSummaryEndpoint(req: Request, res: Response, n
       totalSize: repo.totalSize,
       fileTree
     });
+
+    const summary = parseRepositorySummary(raw);
 
     await prisma.repository.update({
       where: { id: repo.id },
