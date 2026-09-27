@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { env } from './config';
 import { errorHandler, notFoundHandler } from './middlewares';
 import apiRoutes from './routes';
@@ -53,6 +53,11 @@ export function createApp(): express.Application {
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,          // 15 minutes
     max: env.NODE_ENV === 'development' ? 200 : 100,
+    keyGenerator: (req) => {
+      if ((req as any).user?.userId) return `user:${(req as any).user.userId}`;
+      const rawIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+      return `ip:${ipKeyGenerator(rawIp)}`;
+    },
     message: {
       success: false,
       error: { message: 'Too many requests. Please try again later.' },

@@ -7,7 +7,10 @@
     "dev": "ts-node-dev --respawn --transpile-only --clear src/server.ts",
     "build": "prisma generate && tsc",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:ensure": "ts-node --transpile-only scripts/db-ensure.ts",
+    "verify:indexing": "ts-node --transpile-only scripts/verify-indexing.ts",
+    "verify:gateway": "ts-node --transpile-only scripts/verify-gateway.ts"
   },
   "keywords": [
     "archon",

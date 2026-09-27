@@ -9,68 +9,336 @@ export interface ASTMetadata {
 }
 
 /**
+ * Strips comments outside string literals in Python.
+ */
+function stripPythonComments(line: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    else if (ch === '#' && !inSingle && !inDouble) {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+/**
+ * Computes Python indentation (treating tabs as 4 spaces).
+ */
+function getPythonIndent(line: string): number {
+  let count = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === ' ') count += 1;
+    else if (line[i] === '\t') count += 4;
+    else break;
+  }
+  return count;
+}
+
+/**
+ * Extracts explicit exports from __all__ definition if present.
+ */
+function extractPythonAllExports(fileContent: string): string[] | null {
+  const match = fileContent.match(/__all__\s*=\s*(\[[^\]]*\]|\([^\)]*\))/s);
+  if (!match) return null;
+  const items: string[] = [];
+  const regex = /['"]([a-zA-Z_]\w*)['"]/g;
+  let m;
+  while ((m = regex.exec(match[1])) !== null) {
+    items.push(m[1]);
+  }
+  return items.length > 0 ? items : null;
+}
+
+/**
+ * Robust Python AST metadata extractor.
+ * Handles multi-line imports, parenthesized imports, conditional blocks,
+ * class methods, decorators, and export semantics.
+ */
+export function parsePythonSourceFile(filePath: string, fileContent: string): ASTMetadata {
+  const pyImports: string[] = [];
+  const pyExports: string[] = [];
+  const pyFunctions: string[] = [];
+  const pyClasses: string[] = [];
+
+  const rawLines = fileContent.split('\n');
+  let inDocstring = false;
+  let docstringDelimiter: '"""' | "'''" | null = null;
+
+  let accumulatingImport = '';
+  let inParentheses = false;
+  let currentClass: { name: string; indent: number } | null = null;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const rawLine = rawLines[i];
+    const trimmed = rawLine.trim();
+
+    // 1. Docstring detection (toggle state across lines)
+    if (!inDocstring) {
+      if (trimmed.startsWith('"""')) {
+        docstringDelimiter = '"""';
+        if (trimmed.length === 3 || !trimmed.slice(3).includes('"""')) {
+          inDocstring = true;
+          continue;
+        }
+      } else if (trimmed.startsWith("'''")) {
+        docstringDelimiter = "'''";
+        if (trimmed.length === 3 || !trimmed.slice(3).includes("'''")) {
+          inDocstring = true;
+          continue;
+        }
+      }
+    } else {
+      if (docstringDelimiter && trimmed.includes(docstringDelimiter)) {
+        inDocstring = false;
+        docstringDelimiter = null;
+      }
+      continue;
+    }
+
+    if (inDocstring) continue;
+
+    // 2. Strip comments and empty lines
+    const lineWithoutComments = stripPythonComments(rawLine);
+    const cleanLine = lineWithoutComments.trim();
+    if (!cleanLine) continue;
+
+    const lineIndent = getPythonIndent(rawLine);
+
+    // 3. Class context management: reset class when indentation drops
+    if (currentClass && lineIndent <= currentClass.indent && !cleanLine.startsWith('@')) {
+      currentClass = null;
+    }
+
+    // 4. Import parsing (handles multi-line parentheses, commas, and line continuations)
+    if (accumulatingImport || cleanLine.startsWith('import ') || cleanLine.startsWith('from ') || /^from\s+[.\w]+\s+import/.test(cleanLine)) {
+      accumulatingImport += (accumulatingImport ? ' ' : '') + cleanLine;
+
+      if (cleanLine.includes('(')) inParentheses = true;
+      if (cleanLine.includes(')')) inParentheses = false;
+
+      if (cleanLine.endsWith('\\') || inParentheses) {
+        if (cleanLine.endsWith('\\')) {
+          accumulatingImport = accumulatingImport.slice(0, -1).trim();
+        }
+        continue;
+      }
+
+      // Process complete import statement
+      const fullStmt = accumulatingImport.replace(/\(|\)/g, ' ').replace(/\s+/g, ' ');
+      accumulatingImport = '';
+
+      // Pattern A: from <module> import <items>
+      const fromMatch = fullStmt.match(/^from\s+([.\w]+)\s+import\s+(.+)$/);
+      if (fromMatch) {
+        const mod = fromMatch[1];
+        const items = fromMatch[2].split(',').map(s => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
+
+        if (mod === '.') {
+          for (const item of items) {
+            if (item && item !== '*') pyImports.push(`.${item}`);
+            else pyImports.push('.');
+          }
+        } else {
+          pyImports.push(mod);
+        }
+      } else {
+        // Pattern B: import <item1> as a, <item2>
+        const importMatch = fullStmt.match(/^import\s+(.+)$/);
+        if (importMatch) {
+          const items = importMatch[1].split(',').map(s => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
+          for (const item of items) {
+            if (item) pyImports.push(item);
+          }
+        }
+      }
+      continue;
+    }
+
+    // 5. Class declaration
+    const classMatch = cleanLine.match(/^class\s+([a-zA-Z_]\w*)\s*(?:\([^\)]*\))?\s*:/);
+    if (classMatch) {
+      const className = classMatch[1];
+      pyClasses.push(className);
+      currentClass = { name: className, indent: lineIndent };
+      if (!className.startsWith('_')) {
+        pyExports.push(className);
+      }
+      continue;
+    }
+
+    // 6. Function declaration (regular or async)
+    const funcMatch = cleanLine.match(/^(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\(/);
+    if (funcMatch) {
+      const funcName = funcMatch[1];
+      if (currentClass && lineIndent > currentClass.indent) {
+        pyFunctions.push(`${currentClass.name}.${funcName}`);
+      } else {
+        pyFunctions.push(funcName);
+        if (!funcName.startsWith('_')) {
+          pyExports.push(funcName);
+        }
+      }
+    }
+  }
+
+  // Check for explicit __all__ export declaration
+  const explicitExports = extractPythonAllExports(fileContent);
+  const finalExports = explicitExports ? explicitExports : pyExports;
+
+  return {
+    imports: Array.from(new Set(pyImports)),
+    exports: Array.from(new Set(finalExports)),
+    functions: Array.from(new Set(pyFunctions)),
+    classes: Array.from(new Set(pyClasses))
+  };
+}
+
+/**
+ * Extracts Python code symbols (functions, classes, methods) with startLine and endLine
+ * based on indentation structure and decorators.
+ */
+export function getPythonCodeSymbols(fileContent: string): CodeSymbol[] {
+  const symbols: CodeSymbol[] = [];
+  const lines = fileContent.split('\n');
+
+  let currentClass: { name: string; indent: number } | null = null;
+  let pendingDecoratorStart: number | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const indent = getPythonIndent(rawLine);
+
+    // Decorator line
+    if (trimmed.startsWith('@')) {
+      if (pendingDecoratorStart === null) {
+        pendingDecoratorStart = i + 1; // 1-indexed
+      }
+      continue;
+    }
+
+    // Check if exiting class scope
+    if (currentClass && indent <= currentClass.indent) {
+      currentClass = null;
+    }
+
+    // Check class declaration
+    const classMatch = trimmed.match(/^class\s+([a-zA-Z_]\w*)\s*(?:\([^\)]*\))?\s*:/);
+    if (classMatch) {
+      const className = classMatch[1];
+      const startLine = pendingDecoratorStart ?? (i + 1);
+      pendingDecoratorStart = null;
+      currentClass = { name: className, indent };
+
+      // Find end line by looking for next statement with indent <= class indent
+      let endLine = i + 1;
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextTrimmed = lines[j].trim();
+        if (!nextTrimmed || nextTrimmed.startsWith('#')) continue;
+        const nextIndent = getPythonIndent(lines[j]);
+        if (nextIndent <= indent) {
+          break;
+        }
+        endLine = j + 1;
+      }
+
+      symbols.push({
+        name: className,
+        kind: 'class',
+        startLine,
+        endLine: Math.max(startLine, endLine)
+      });
+      continue;
+    }
+
+    // Check function declaration
+    const funcMatch = trimmed.match(/^(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\(/);
+    if (funcMatch) {
+      const funcName = funcMatch[1];
+      const startLine = pendingDecoratorStart ?? (i + 1);
+      pendingDecoratorStart = null;
+
+      const symbolName = currentClass && indent > currentClass.indent
+        ? `${currentClass.name}.${funcName}`
+        : funcName;
+
+      // Find end line by looking for next statement with indent <= function indent
+      let endLine = i + 1;
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextTrimmed = lines[j].trim();
+        if (!nextTrimmed || nextTrimmed.startsWith('#')) continue;
+        const nextIndent = getPythonIndent(lines[j]);
+        if (nextIndent <= indent) {
+          break;
+        }
+        endLine = j + 1;
+      }
+
+      symbols.push({
+        name: symbolName,
+        kind: 'function',
+        startLine,
+        endLine: Math.max(startLine, endLine)
+      });
+      continue;
+    }
+
+    // Any other statement clears pending decorator
+    pendingDecoratorStart = null;
+  }
+
+  return symbols.sort((a, b) => a.startLine - b.startLine);
+}
+
+/**
  * Parses source file content (TypeScript, JavaScript, Python).
  * Extracts imports, exports, functions, and classes.
  */
 export function parseSourceFile(filePath: string, fileContent: string): ASTMetadata {
   const normalizedPath = filePath.replace(/\\/g, '/');
 
-  // Handle Python files via robust regex pattern matching
+  // Handle Python files via comprehensive Python AST metadata extractor
   if (normalizedPath.endsWith('.py')) {
-    const pyImports: string[] = [];
-    const pyExports: string[] = [];
-    const pyFunctions: string[] = [];
-    const pyClasses: string[] = [];
-
-    const lines = fileContent.split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('#') || !trimmed) continue;
-
-      // Match: from .foo import bar, from foo.bar import baz, from ..utils import helper
-      const fromMatch = trimmed.match(/^from\s+([.\w]+)\s+import\s+/);
-      if (fromMatch) {
-        pyImports.push(fromMatch[1]);
-      } else {
-        // Match: import foo, import foo.bar
-        const importMatch = trimmed.match(/^import\s+([.\w]+)/);
-        if (importMatch) {
-          pyImports.push(importMatch[1]);
-        }
-      }
-
-      // Match function declarations: def my_func(
-      const funcMatch = trimmed.match(/^def\s+([a-zA-Z_]\w*)\s*\(/);
-      if (funcMatch) {
-        pyFunctions.push(funcMatch[1]);
-        pyExports.push(funcMatch[1]);
-      }
-
-      // Match class declarations: class MyClass: or class MyClass(Base):
-      const classMatch = trimmed.match(/^class\s+([a-zA-Z_]\w*)\s*[:\(]/);
-      if (classMatch) {
-        pyClasses.push(classMatch[1]);
-        pyExports.push(classMatch[1]);
-      }
-    }
-
-    return {
-      imports: Array.from(new Set(pyImports)),
-      exports: Array.from(new Set(pyExports)),
-      functions: Array.from(new Set(pyFunctions)),
-      classes: Array.from(new Set(pyClasses)),
-    };
+    return parsePythonSourceFile(filePath, fileContent);
   }
 
   // Handle TypeScript & JavaScript files
-  let sourceFile: ts.SourceFile;
-  try {
-    sourceFile = ts.createSourceFile(filePath, fileContent, ts.ScriptTarget.Latest, true);
-  } catch (error) {
-    console.error(`Error creating AST SourceFile for ${filePath}:`, error);
-    return { imports: [], exports: [], functions: [], classes: [] };
+  const sourceFile = createTsSourceFile(filePath, fileContent);
+  if (!sourceFile) {
+    return emptyMetadata();
   }
 
+  return collectTsMetadata(sourceFile);
+}
+
+function createTsSourceFile(filePath: string, fileContent: string): ts.SourceFile | null {
+  try {
+    return ts.createSourceFile(filePath, fileContent, ts.ScriptTarget.Latest, true);
+  } catch (error) {
+    console.error(`Error creating AST SourceFile for ${filePath}:`, error);
+    return null;
+  }
+}
+
+function emptyMetadata(): ASTMetadata {
+  return { imports: [], exports: [], functions: [], classes: [] };
+}
+
+/**
+ * Extracts imports, exports, functions, and classes from an already-parsed
+ * SourceFile. Exposed so callers can extract metadata and symbols from a
+ * single `ts.createSourceFile` parse.
+ */
+export function collectTsMetadata(sourceFile: ts.SourceFile): ASTMetadata {
   const imports: string[] = [];
   const exports: string[] = [];
   const functions: string[] = [];
@@ -198,13 +466,20 @@ export function resolveDependencies(workspaceFiles: string[], astMap: Record<str
         const importDir = path.posix.dirname(normalizedFilePath);
         if (rawImport.startsWith('.')) {
           // Relative python import (e.g. .models or ..utils)
-          const relPath = rawImport.replace(/^\.+/, m => '../'.repeat(m.length - 1)).replace(/\./g, '/');
-          candidates.push(path.posix.normalize(path.posix.join(importDir, relPath)));
+          const dotsMatch = rawImport.match(/^(\.+)(.*)$/);
+          if (dotsMatch) {
+            const dotsCount = dotsMatch[1].length;
+            const modPart = dotsMatch[2].replace(/\./g, '/');
+            const parentSteps = '../'.repeat(Math.max(0, dotsCount - 1));
+            const relPath = parentSteps + modPart;
+            candidates.push(path.posix.normalize(path.posix.join(importDir, relPath)));
+          }
         } else {
           // Absolute / package python import (e.g. app.models -> app/models)
           const slashPath = rawImport.replace(/\./g, '/');
           candidates.push(slashPath);
           candidates.push(path.posix.join(importDir, slashPath));
+          candidates.push(`src/${slashPath}`);
         }
       }
       // JS / TS relative imports
@@ -279,13 +554,22 @@ export interface CodeSymbol {
 }
 
 export function getCodeSymbols(filePath: string, fileContent: string): CodeSymbol[] {
-  let sourceFile: ts.SourceFile;
-  try {
-    sourceFile = ts.createSourceFile(filePath, fileContent, ts.ScriptTarget.Latest, true);
-  } catch (error) {
-    return [];
+  const normalized = filePath.replace(/\\/g, '/');
+  if (normalized.endsWith('.py')) {
+    return getPythonCodeSymbols(fileContent);
   }
 
+  const sourceFile = createTsSourceFile(filePath, fileContent);
+  if (!sourceFile) return [];
+
+  return collectTsSymbols(sourceFile);
+}
+
+/**
+ * Extracts function/class symbols with line ranges from an already-parsed
+ * SourceFile.
+ */
+export function collectTsSymbols(sourceFile: ts.SourceFile): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
 
   function visit(node: ts.Node) {
@@ -303,6 +587,40 @@ export function getCodeSymbols(filePath: string, fileContent: string): CodeSymbo
 
   visit(sourceFile);
   return symbols.sort((a, b) => a.startLine - b.startLine);
+}
+
+export interface ParsedSourceFile {
+  metadata: ASTMetadata;
+  symbols: CodeSymbol[];
+}
+
+/**
+ * Parses a file once and returns both its AST metadata and its code symbols.
+ * This removes the second `ts.createSourceFile` parse that discovery + chunking
+ * previously performed on the same content.
+ */
+export function parseSourceFileWithSymbols(
+  filePath: string,
+  fileContent: string
+): ParsedSourceFile {
+  const normalized = filePath.replace(/\\/g, '/');
+
+  if (normalized.endsWith('.py')) {
+    return {
+      metadata: parsePythonSourceFile(filePath, fileContent),
+      symbols: getPythonCodeSymbols(fileContent)
+    };
+  }
+
+  const sourceFile = createTsSourceFile(filePath, fileContent);
+  if (!sourceFile) {
+    return { metadata: emptyMetadata(), symbols: [] };
+  }
+
+  return {
+    metadata: collectTsMetadata(sourceFile),
+    symbols: collectTsSymbols(sourceFile)
+  };
 }
 
 /**

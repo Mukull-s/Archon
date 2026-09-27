@@ -1,6 +1,11 @@
 import axios from 'axios';
 import { DependencyAnalysisResult } from './dependency-intelligence.service';
 
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface ChatCompletionRequest {
   prompt: string;
   contextChunks: Array<{
@@ -12,6 +17,7 @@ export interface ChatCompletionRequest {
     inDegree: number;
   }>;
   model: string;
+  conversationHistory?: ChatHistoryMessage[];
   repoMetadata?: {
     name: string;
     fileCount: number;
@@ -30,6 +36,60 @@ export interface StreamChunk {
   content: string;
   reasoning: string;
   modelUsed: string;
+}
+
+export interface CircuitBreakerRecord {
+  failures: number;
+  openUntil: number;
+}
+
+export class ModelCircuitBreaker {
+  private records = new Map<string, CircuitBreakerRecord>();
+  private readonly failureThreshold: number;
+  private readonly cooldownMs: number;
+
+  constructor(failureThreshold = 2, cooldownMs = 3 * 60 * 1000) {
+    this.failureThreshold = failureThreshold;
+    this.cooldownMs = cooldownMs;
+  }
+
+  isAvailable(model: string): boolean {
+    const record = this.records.get(model);
+    if (!record) return true;
+    return record.openUntil <= Date.now();
+  }
+
+  recordSuccess(model: string): void {
+    this.records.delete(model);
+  }
+
+  recordFailure(model: string, error?: any): void {
+    const record = this.records.get(model) || { failures: 0, openUntil: 0 };
+    record.failures += 1;
+    if (record.failures >= this.failureThreshold) {
+      record.openUntil = Date.now() + this.cooldownMs;
+      console.warn(`[CircuitBreaker] Model ${model} tripped OPEN for ${Math.round(this.cooldownMs / 1000)}s due to ${record.failures} consecutive failures.`);
+    }
+    this.records.set(model, record);
+  }
+
+  trip(model: string, durationMs?: number): void {
+    this.records.set(model, {
+      failures: this.failureThreshold,
+      openUntil: Date.now() + (durationMs ?? this.cooldownMs)
+    });
+  }
+
+  reset(): void {
+    this.records.clear();
+  }
+
+  getTrippedModels(): string[] {
+    const now = Date.now();
+    return Array.from(this.records.entries())
+      .filter(([_, rec]) => rec.openUntil > now)
+      .map(([m]) => m);
+  }
 }
 
 class LLMService {
@@ -162,7 +222,121 @@ Instructions:
 7. Maintain a clean, professional, and architect-level tone.`;
   }
 
-  private getModelsQueue(requestedModel: string): string[] {
+
+
+  public readonly circuitBreaker = new ModelCircuitBreaker();
+
+  /**
+   * Optional OpenAI-compatible LLM gateway.
+   *
+   * Enabled automatically when a base URL, key, and model are all configured,
+   * unless explicitly disabled with `LLM_PROVIDER=openrouter`. Every call falls
+   * back to the existing OpenRouter / DeepSeek queue on any failure, so enabling
+   * it can never take the product down by itself.
+   *
+   * The base URL must expose an OpenAI-compatible `POST {baseUrl}/chat/completions`.
+   */
+  private getGatewayConfig(): { baseUrl: string; apiKey: string; model: string } | null {
+    // Explicit opt-out keeps the legacy queue in charge.
+    if ((process.env.LLM_PROVIDER || '').toLowerCase() === 'openrouter') return null;
+    const baseUrl = (process.env.MERGE_GATEWAY_BASE_URL || '').replace(/\/+$/, '');
+    const apiKey = process.env.MERGE_GATEWAY_API_KEY || '';
+    const model = process.env.MERGE_GATEWAY_MODEL || '';
+    if (!baseUrl || !apiKey || !model) return null;
+    return { baseUrl, apiKey, model };
+  }
+
+  /**
+   * One non-streaming OpenAI-compatible gateway call. Returns null (after
+   * recording the failure) so callers fall through to the default queue.
+   */
+  private async gatewayChat(
+    messages: Array<{ role: string; content: string }>,
+    temperature: number,
+    timeoutMs = 30000
+  ): Promise<{ content: string; model: string; reasoning: string | null } | null> {
+    const gateway = this.getGatewayConfig();
+    if (!gateway) return null;
+    try {
+      const response = await axios.post(
+        `${gateway.baseUrl}/chat/completions`,
+        { model: gateway.model, messages, temperature },
+        {
+          headers: { Authorization: `Bearer ${gateway.apiKey}`, 'Content-Type': 'application/json' },
+          timeout: timeoutMs
+        }
+      );
+      const message = response.data?.choices?.[0]?.message;
+      const content = message?.content;
+      if (typeof content !== 'string' || !content) throw new Error('Gateway returned no content');
+      this.circuitBreaker.recordSuccess(gateway.model);
+      console.log(`[MergeGateway] Served request via ${gateway.model}.`);
+      // This gateway exposes chain-of-thought as `thinking` (OpenAI-compatible
+      // servers vary: also accept reasoning_content / reasoning).
+      const reasoning = message?.thinking || message?.reasoning_content || message?.reasoning || null;
+      return { content, model: gateway.model, reasoning };
+    } catch (err: any) {
+      this.circuitBreaker.recordFailure(gateway.model, err);
+      console.warn(`[MergeGateway] Request failed, falling back to default queue: ${err.message}`);
+      return null;
+    }
+  }
+
+  /** Streaming variant of {@link gatewayChat}. Throws before yielding on connect failure. */
+  private async *gatewayStream(
+    gateway: { baseUrl: string; apiKey: string; model: string },
+    messages: Array<{ role: string; content: string }>,
+    signal?: AbortSignal
+  ): AsyncGenerator<StreamChunk, void, unknown> {
+    const response = await fetch(`${gateway.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${gateway.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ model: gateway.model, messages, temperature: 0.2, stream: true }),
+      signal
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`HTTP ${response.status}: ${errText}`);
+    }
+    if (!response.body) throw new Error('Gateway response body is empty.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const cleaned = line.trim();
+          if (!cleaned || cleaned === 'data: [DONE]') continue;
+          if (!cleaned.startsWith('data: ')) continue;
+          try {
+            const parsed = JSON.parse(cleaned.slice(6));
+            const delta = parsed.choices?.[0]?.delta;
+            const content = delta?.content || '';
+            const reasoning = delta?.reasoning_content || delta?.reasoning || delta?.thinking || '';
+            if (content || reasoning) {
+              yield { content, reasoning, modelUsed: gateway.model };
+            }
+          } catch {
+            // Partial JSON line; wait for the next chunk.
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  public getModelsQueue(requestedModel: string): string[] {
     let initialModel = requestedModel;
     
     // Map offline or highly congested models to stable active free models
@@ -190,16 +364,39 @@ Instructions:
         queue.push(f);
       }
     }
-    return queue;
+
+    // Configurable Paid Fallback Model as Tier-1 emergency backup
+    const paidFallback = process.env.PAID_FALLBACK_MODEL || (process.env.DEEPSEEK_API_KEY ? 'deepseek-v4-flash' : 'deepseek/deepseek-chat');
+    if (paidFallback && !queue.includes(paidFallback)) {
+      queue.push(paidFallback);
+    }
+
+    // Filter models using Circuit Breaker (skip models currently tripped OPEN)
+    const available = queue.filter(m => this.circuitBreaker.isAvailable(m));
+    return available.length > 0 ? available : queue;
   }
 
   /**
    * Standard non-streaming chat method (with new metadata-aware prompt).
    */
-  async chat({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis }: ChatCompletionRequest) {
+  async chat({ prompt, contextChunks, model, conversationHistory, repoMetadata, evidenceTraces, dependencyAnalysis }: ChatCompletionRequest) {
     const modelsQueue = this.getModelsQueue(model);
     const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces, dependencyAnalysis);
+    const clientReferer = process.env.CLIENT_URL || 'http://localhost:5173';
+    const priorTurns = (conversationHistory || []).map(h => ({
+      role: h.role,
+      content: h.content
+    }));
     let lastError: any = null;
+
+    // Optional gateway first, with automatic fallback to the default queue.
+    const gatewayResult = await this.gatewayChat(
+      [{ role: 'system', content: systemPrompt }, ...priorTurns, { role: 'user', content: prompt }],
+      0.2
+    );
+    if (gatewayResult) {
+      return { text: gatewayResult.content, reasoning: gatewayResult.reasoning, modelUsed: gatewayResult.model };
+    }
 
     for (const activeModel of modelsQueue) {
       try {
@@ -217,6 +414,7 @@ Instructions:
           model: activeModel,
           messages: [
             { role: 'system', content: systemPrompt },
+            ...priorTurns,
             { role: 'user', content: prompt }
           ],
           temperature: 0.2
@@ -225,7 +423,7 @@ Instructions:
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             ...(!isDirectDeepSeek && {
-              'HTTP-Referer': 'http://localhost:5173',
+              'HTTP-Referer': clientReferer,
               'X-Title': 'Archon Intelligence Platform'
             })
           },
@@ -233,6 +431,7 @@ Instructions:
         });
 
         const choice = response.data.choices[0];
+        this.circuitBreaker.recordSuccess(activeModel);
         return {
           text: choice.message.content,
           reasoning: choice.message.reasoning_content || null,
@@ -240,6 +439,7 @@ Instructions:
         };
       } catch (err: any) {
         lastError = err;
+        this.circuitBreaker.recordFailure(activeModel, err);
         console.warn(`Model ${activeModel} failed: ${err.message}`);
         // Continue to fallback
       }
@@ -250,10 +450,39 @@ Instructions:
   /**
    * Streaming chat method using native fetch & Server-Sent Events.
    */
-  async *chatStream({ prompt, contextChunks, model, repoMetadata, evidenceTraces, dependencyAnalysis, signal }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
+  async *chatStream({ prompt, contextChunks, model, conversationHistory, repoMetadata, evidenceTraces, dependencyAnalysis, signal }: ChatCompletionRequest): AsyncGenerator<StreamChunk, void, unknown> {
     const modelsQueue = this.getModelsQueue(model);
     const systemPrompt = this.buildSystemPrompt(contextChunks, repoMetadata, evidenceTraces, dependencyAnalysis);
+    const clientReferer = process.env.CLIENT_URL || 'http://localhost:5173';
+    const priorTurns = (conversationHistory || []).map(h => ({
+      role: h.role,
+      content: h.content
+    }));
     let lastError: any = null;
+
+    // Optional gateway first, with automatic fallback to the default queue.
+    const gateway = this.getGatewayConfig();
+    if (gateway) {
+      const gatewayMessages = [
+        { role: 'system', content: systemPrompt },
+        ...priorTurns,
+        { role: 'user', content: prompt }
+      ];
+      let yielded = false;
+      try {
+        for await (const chunk of this.gatewayStream(gateway, gatewayMessages, signal)) {
+          yielded = true;
+          yield chunk;
+        }
+        this.circuitBreaker.recordSuccess(gateway.model);
+        return;
+      } catch (err: any) {
+        this.circuitBreaker.recordFailure(gateway.model, err);
+        console.warn(`[MergeGateway] Stream failed, falling back to default queue: ${err.message}`);
+        // If we already streamed part of an answer, do not start a second one.
+        if (yielded) return;
+      }
+    }
 
     for (const activeModel of modelsQueue) {
       if (signal?.aborted) return;
@@ -283,7 +512,7 @@ Instructions:
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             ...(!isDirectDeepSeek && {
-              'HTTP-Referer': 'http://localhost:5173',
+              'HTTP-Referer': clientReferer,
               'X-Title': 'Archon Intelligence Platform'
             })
           },
@@ -291,6 +520,7 @@ Instructions:
             model: activeModel,
             messages: [
               { role: 'system', content: systemPrompt },
+              ...priorTurns,
               { role: 'user', content: prompt }
             ],
             temperature: 0.2,
@@ -360,6 +590,7 @@ Instructions:
         }
 
         // Successfully streamed from this model, so we can exit the fallback loop
+        this.circuitBreaker.recordSuccess(activeModel);
         return;
       } catch (err: any) {
         clearTimeout(timeoutId);
@@ -367,6 +598,7 @@ Instructions:
           signal.removeEventListener('abort', onSignalAbort);
         }
         lastError = err;
+        this.circuitBreaker.recordFailure(activeModel, err);
         console.warn(`Model ${activeModel} stream failed: ${err.message}`);
         // Continue fallback loop
       }
@@ -423,6 +655,17 @@ Instructions:
 
     const modelsQueue = this.getModelsQueue('google/gemma-4-26b-a4b-it:free');
     let lastError: any = null;
+
+    // Optional gateway first, with automatic fallback to the default queue.
+    const gatewayResult = await this.gatewayChat(
+      [
+        { role: 'system', content: 'You are a Software Architect AI that outputs strictly valid JSON.' },
+        { role: 'user', content: prompt }
+      ],
+      0.1,
+      20000
+    );
+    if (gatewayResult) return gatewayResult.content;
 
     for (const activeModel of modelsQueue) {
       try {

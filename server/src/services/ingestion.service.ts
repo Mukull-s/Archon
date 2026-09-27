@@ -6,6 +6,7 @@ import AdmZip from 'adm-zip';
 import os from 'os';
 import { prisma, MAX_FILES_LIMIT, MAX_TOTAL_SIZE_LIMIT, MAX_SINGLE_FILE_SIZE_LIMIT } from '../config';
 import * as astService from './ast.service';
+import { chunkCodeFile as buildCodeChunks, ChunkLimits, readChunkLimitsFromEnv } from './chunking';
 import { AppError } from '../utils';
 import { identityService } from './identity.service';
 import { confidenceService } from './confidence.service';
@@ -25,6 +26,7 @@ const BINARY_EXTENSIONS = new Set([
 const MAX_FILES = MAX_FILES_LIMIT;
 const MAX_TOTAL_SIZE = MAX_TOTAL_SIZE_LIMIT;
 const MAX_SINGLE_FILE_SIZE = MAX_SINGLE_FILE_SIZE_LIMIT;
+const DOWNLOAD_TIMEOUT_MS = Number(process.env.GITHUB_DOWNLOAD_TIMEOUT_MS) || 30_000;
 
 interface ScannedFileInfo {
   path: string;
@@ -58,6 +60,35 @@ export async function deleteFolderWithRetry(dirPath: string, retries = 10, ms = 
  * Handles code downloading, zip extracting, limits validation, and parsing into PostgreSQL cache.
  */
 class IngestionService {
+  private readonly chunkLimits: ChunkLimits = readChunkLimitsFromEnv();
+
+  /**
+   * Builds an axios request config for the GitHub zipball endpoint with a hard
+   * timeout so a stalled connection cannot hang the indexing worker.
+   */
+  private githubZipballRequest(url: string, bearer?: string) {
+    return {
+      method: 'get' as const,
+      url,
+      responseType: 'arraybuffer' as const,
+      timeout: DOWNLOAD_TIMEOUT_MS,
+      headers: {
+        'User-Agent': 'Archon-Intelligence-Platform',
+        ...(bearer && { Authorization: `Bearer ${bearer}` })
+      }
+    };
+  }
+
+  /**
+   * A failure is worth exactly one retry when it is a network/timeout error or
+   * a 5xx server error. 4xx responses are deterministic and surface as-is.
+   */
+  private isRetryableDownloadError(err: any): boolean {
+    const status = err?.response?.status;
+    if (status === undefined) return true; // network error / timeout / socket reset
+    return status >= 500;
+  }
+
   /**
    * Downloads the zip archive for any public GitHub repository.
    */
@@ -75,20 +106,11 @@ class IngestionService {
     const fallbackToken = process.env.GITHUB_FALLBACK_TOKEN;
     let activeToken = token || fallbackToken;
     
-    console.log(`Downloading repository zipball from ${url} (authenticated: ${!!activeToken})...`);
+    console.log(`Downloading repository zipball from ${url} (authenticated: ${!!activeToken}, timeout: ${DOWNLOAD_TIMEOUT_MS}ms)...`);
     
     try {
       try {
-        const response = await axios({
-          method: 'get',
-          url,
-          responseType: 'arraybuffer',
-          headers: {
-            'User-Agent': 'Archon-Intelligence-Platform',
-            ...(activeToken && { 'Authorization': `Bearer ${activeToken}` })
-          }
-        });
-        
+        const response = await axios(this.githubZipballRequest(url, activeToken));
         fs.writeFileSync(filePath, response.data);
         return filePath;
       } catch (firstError: any) {
@@ -97,18 +119,19 @@ class IngestionService {
         if (firstError.response?.status === 401 && token && fallbackToken && token !== fallbackToken) {
           console.warn(`[GitHub Download] User token returned 401 (expired/revoked). Retrying download with GITHUB_FALLBACK_TOKEN...`);
           activeToken = fallbackToken;
-          const retryResponse = await axios({
-            method: 'get',
-            url,
-            responseType: 'arraybuffer',
-            headers: {
-              'User-Agent': 'Archon-Intelligence-Platform',
-              'Authorization': `Bearer ${fallbackToken}`
-            }
-          });
+          const retryResponse = await axios(this.githubZipballRequest(url, fallbackToken));
           fs.writeFileSync(filePath, retryResponse.data);
           return filePath;
         }
+
+        // Single retry for transient network/5xx failures.
+        if (this.isRetryableDownloadError(firstError)) {
+          console.warn(`[GitHub Download] Transient failure (status ${firstError.response?.status ?? 'network'}). Retrying once...`);
+          const retryResponse = await axios(this.githubZipballRequest(url, activeToken));
+          fs.writeFileSync(filePath, retryResponse.data);
+          return filePath;
+        }
+
         throw firstError;
       }
     } catch (error: any) {
@@ -298,6 +321,9 @@ class IngestionService {
       }
       
       // 6. Persist to PostgreSQL database cache via Prisma
+      // Strip raw file contents to avoid giant multi-megabyte JSONB storage bloat (P1-4)
+      const dbScannedFiles = scannedFiles.map(({ path, size, lines }) => ({ path, size, lines }));
+
       const repository = await prisma.repository.create({
         data: {
           userId,
@@ -312,7 +338,7 @@ class IngestionService {
           fileCount: scannedFiles.length,
           totalSize,
           confidence: score,
-          scannedFiles: scannedFiles as any,
+          scannedFiles: dbScannedFiles as any,
           astMetadata: astMetadata as any,
           dependencyGraph: dependencyGraph as any
         }
@@ -353,7 +379,9 @@ class IngestionService {
   }
 
   /**
-   * Chunks a code file using AST symbols (functions/classes) to keep declarations intact.
+   * Chunks a code file using AST symbols (functions/classes) to keep declarations intact,
+   * enforcing a hard size ceiling so no single symbol can produce an oversized embedding input.
+   * Size limits are configurable via CHUNK_MAX_CHARS / CHUNK_OVERLAP_CHARS / CHUNK_MIN_CHARS.
    */
   chunkCodeFile(filePath: string, content: string, symbols: astService.CodeSymbol[]): Array<{
     content: string;
@@ -361,76 +389,7 @@ class IngestionService {
     endLine: number;
     symbolName: string;
   }> {
-    const lines = content.split('\n');
-    const chunks: Array<{
-      content: string;
-      startLine: number;
-      endLine: number;
-      symbolName: string;
-    }> = [];
-
-    // Fallback: If no AST symbols are found, chunk by line boundaries
-    if (!symbols || symbols.length === 0) {
-      const chunkSize = 60; // 60 lines per chunk
-      for (let i = 0; i < lines.length; i += chunkSize) {
-        const slice = lines.slice(i, i + chunkSize).join('\n');
-        if (!slice.trim()) continue; // Skip empty/whitespace-only chunks
-        chunks.push({
-          content: slice,
-          startLine: i + 1,
-          endLine: Math.min(lines.length, i + chunkSize),
-          symbolName: 'file-level'
-        });
-      }
-      return chunks;
-    }
-
-    let lastLine = 0; // 0-indexed line index
-    for (const sym of symbols) {
-      const symStartIdx = sym.startLine - 1;
-      const symEndIdx = sym.endLine; // exclusive
-
-      // 1. Group any text before this symbol (e.g. imports, headers)
-      if (symStartIdx > lastLine) {
-        const headerLines = lines.slice(lastLine, symStartIdx);
-        const headerText = headerLines.join('\n');
-        if (headerText.trim()) {
-          chunks.push({
-            content: headerText,
-            startLine: lastLine + 1,
-            endLine: symStartIdx,
-            symbolName: 'imports/globals'
-          });
-        }
-      }
-
-      // 2. Group the symbol itself
-      const symLines = lines.slice(symStartIdx, symEndIdx);
-      chunks.push({
-        content: symLines.join('\n'),
-        startLine: sym.startLine,
-        endLine: sym.endLine,
-        symbolName: `${sym.kind}:${sym.name}`
-      });
-
-      lastLine = symEndIdx;
-    }
-
-    // 3. Group any trailing text
-    if (lastLine < lines.length) {
-      const trailingLines = lines.slice(lastLine);
-      const trailingText = trailingLines.join('\n');
-      if (trailingText.trim()) {
-        chunks.push({
-          content: trailingText,
-          startLine: lastLine + 1,
-          endLine: lines.length,
-          symbolName: 'trailing'
-        });
-      }
-    }
-
-    return chunks;
+    return buildCodeChunks(filePath, content, symbols, this.chunkLimits);
   }
 }
 

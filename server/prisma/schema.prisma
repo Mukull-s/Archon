@@ -27,6 +27,7 @@ model User {
   githubLogin   String?
   
   repositories  Repository[]
+  indexingJobs  IndexingJob[]
   
   // Subscription & Entitlements
   plan                   String   @default("free") // "free" | "pro"
@@ -64,8 +65,9 @@ model Repository {
   scannedFiles    Json     @default("[]")
   astMetadata     Json     @default("{}")
   dependencyGraph Json     @default("{}")
-  indexingStatus  String   @default("idle") // "idle" | "indexing" | "completed" | "failed"
+  indexingStatus  String   @default("idle") // "idle" | "indexing" | "structural-ready" | "completed" | "failed"
   indexingProgress String   @default("")
+  indexingStats   Json?
   aiSummary       Json?
   reindexCount    Int      @default(0)
   isArchived      Boolean  @default(false)
@@ -73,6 +75,7 @@ model Repository {
   // Relations
   codeChunks      CodeChunk[]
   chatMessages    ChatMessage[]
+  indexingJobs    IndexingJob[]
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -91,7 +94,7 @@ model CodeChunk {
   endLine      Int
   symbolName   String?  // Name of class, function, or "file-level"
   
-  // 512-dimension vector matching Voyage AI voyage-code-3
+  // 512-dimension vector (Voyage voyage-code-3 / voyage-code-4 both support 512)
   embedding    Unsupported("vector(512)")? 
   
   createdAt    DateTime @default(now())
@@ -109,5 +112,29 @@ model ChatMessage {
   createdAt    DateTime @default(now())
 
   @@index([repositoryId])
+}
+
+model IndexingJob {
+  id              String      @id @default(uuid())
+  repositoryId    String
+  repository      Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobType         String      @default("VECTOR_INDEX")
+  status          String      @default("pending") // "pending" | "processing" | "completed" | "failed"
+  attempts        Int         @default(0)
+  maxAttempts     Int         @default(3)
+  payload         Json?
+  lastError       String?     @db.Text
+  lockedAt        DateTime?
+  lockedBy        String?
+  leaseExpiresAt  DateTime?
+  nextRunAt       DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([status, nextRunAt])
+  @@index([repositoryId])
+  @@index([leaseExpiresAt])
 }
 

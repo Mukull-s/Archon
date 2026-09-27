@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../lib/api';
 import { toast } from 'sonner';
 import AppShell from '../components/dashboard/AppShell';
 import { Loading, Typography, Panel, Button } from '../components/ui/DesignSystem';
+import IndexingStageLoader from '../components/dashboard/IndexingStageLoader';
 
 // Lazy-loaded tab components — each loads its chunk only when first visited
 const OverviewTab = lazy(() => import('../components/dashboard/OverviewTab'));
@@ -33,6 +34,11 @@ interface RepositoryData {
   totalSize: number;
   confidence: number;
   isIndexed?: boolean;
+  isStructuralReady?: boolean;
+  indexingStatus?: string;
+  indexingProgress?: string;
+  indexingStats?: any;
+  semanticCompleteness?: number;
   scannedFiles: FileItem[];
   astMetadata: any;
   dependencyGraph: any;
@@ -65,6 +71,7 @@ export default function Dashboard() {
 
   const [loading, setLoading] = useState(true);
   const [repo, setRepo] = useState<RepositoryData | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('summary');
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [selectedExplorerFile, setSelectedExplorerFile] = useState<string | null>(null);
@@ -84,40 +91,85 @@ export default function Dashboard() {
 
 
   // Fetch repository data
-  useEffect(() => {
+  const loadRepo = useCallback(async (opts?: { spinner?: boolean }) => {
     if (!id) return;
-    const fetchRepo = async () => {
-      setLoading(true);
-      try {
-        const { data } = await api.get(`/repos/${id}`);
-        const repository = data.data;
-        const scannedFiles = typeof repository.scannedFiles === 'string'
-          ? JSON.parse(repository.scannedFiles) : repository.scannedFiles;
-        const parsedRepo: RepositoryData = {
-          ...repository,
-          scannedFiles,
-          languages: typeof repository.languages === 'string' ? JSON.parse(repository.languages) : repository.languages,
-          entryPoints: typeof repository.entryPoints === 'string' ? JSON.parse(repository.entryPoints) : repository.entryPoints,
-          importantFiles: typeof repository.importantFiles === 'string' ? JSON.parse(repository.importantFiles) : repository.importantFiles
-        };
-        setRepo(parsedRepo);
-        setSelectedFiles(new Set<string>(scannedFiles.map((f: FileItem) => f.path)));
-        if (parsedRepo.entryPoints.length > 0) {
-          setImpactTarget(parsedRepo.entryPoints[0]);
-          setInvestigationTarget(parsedRepo.entryPoints[0]);
-        } else if (scannedFiles.length > 0) {
-          setImpactTarget(scannedFiles[0].path);
-          setInvestigationTarget(scannedFiles[0].path);
-        }
-      } catch (err: any) {
-        toast.error(err.response?.data?.error?.message || 'Failed to load repository.');
-        navigate('/');
-      } finally {
-        setLoading(false);
+    const showSpinner = opts?.spinner !== false;
+    if (showSpinner) setLoading(true);
+    try {
+      const { data } = await api.get(`/repos/${id}`);
+      const repository = data.data;
+      const scannedFiles = typeof repository.scannedFiles === 'string'
+        ? JSON.parse(repository.scannedFiles) : repository.scannedFiles;
+      const parsedRepo: RepositoryData = {
+        ...repository,
+        scannedFiles,
+        languages: typeof repository.languages === 'string' ? JSON.parse(repository.languages) : repository.languages,
+        entryPoints: typeof repository.entryPoints === 'string' ? JSON.parse(repository.entryPoints) : repository.entryPoints,
+        importantFiles: typeof repository.importantFiles === 'string' ? JSON.parse(repository.importantFiles) : repository.importantFiles
+      };
+      setRepo(parsedRepo);
+      setSelectedFiles(new Set<string>(scannedFiles.map((f: FileItem) => f.path)));
+      if (parsedRepo.entryPoints.length > 0) {
+        setImpactTarget(parsedRepo.entryPoints[0]);
+        setInvestigationTarget(parsedRepo.entryPoints[0]);
+      } else if (scannedFiles.length > 0) {
+        setImpactTarget(scannedFiles[0].path);
+        setInvestigationTarget(scannedFiles[0].path);
       }
-    };
-    fetchRepo();
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Failed to load repository.');
+      navigate('/');
+    } finally {
+      if (showSpinner) setLoading(false);
+    }
   }, [id, navigate]);
+
+  useEffect(() => {
+    loadRepo();
+  }, [loadRepo]);
+
+  // While indexing, poll lightweight status. Data is not rendered until the run
+  // fully completes, so we only need progress here — never the heavy JSONB.
+  useEffect(() => {
+    if (!id || !repo || repo.isIndexed) return;
+    if (repo.indexingStatus !== 'indexing') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/repos/${id}?lite=true`);
+        const r = data.data;
+        if (!r) return;
+        if (r.indexingStatus === 'completed') {
+          await loadRepo({ spinner: false });
+        } else {
+          setRepo(prev => prev ? {
+            ...prev,
+            indexingStatus: r.indexingStatus,
+            indexingProgress: r.indexingProgress,
+            indexingStats: r.indexingStats,
+            semanticCompleteness: r.semanticCompleteness
+          } : prev);
+        }
+      } catch {
+        // Transient poll failure: keep the last known state.
+      }
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [id, repo?.isIndexed, repo?.indexingStatus, loadRepo]);
+
+  const handleRetryIndexing = async () => {
+    if (!id || retrying) return;
+    setRetrying(true);
+    try {
+      await api.post(`/repos/${id}/index`, { force: true }, { timeout: 300000 });
+      await loadRepo({ spinner: false });
+    } catch (err: any) {
+      toast.error(err.response?.data?.error?.message || 'Failed to restart indexing.');
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   // Command Palette event handlers
   useEffect(() => {
@@ -238,6 +290,23 @@ export default function Dashboard() {
   }
 
   if (!repo) return null;
+
+  // Strict gate: repository data is never rendered until indexing fully
+  // completes (100% files + 100% batches + summary present). While indexing or
+  // after a failure the user sees an honest stage loader, not half-data.
+  if (!repo.isIndexed) {
+    const inProgress = repo.indexingStatus === 'indexing';
+    return (
+      <IndexingStageLoader
+        name={repo.owner ? `${repo.owner}/${repo.name}` : repo.name}
+        status={inProgress ? 'indexing' : 'failed'}
+        progress={repo.indexingProgress || ''}
+        stats={repo.indexingStats}
+        onRetry={handleRetryIndexing}
+        retrying={retrying}
+      />
+    );
+  }
 
   // Minimal fallback shown while a lazy chunk loads (<200ms typically)
   const TabFallback = () => (
@@ -373,6 +442,8 @@ export default function Dashboard() {
             selectedFiles={selectedFiles}
             onToggleFile={handleToggleFile}
             isIndexed={repo.isIndexed}
+            semanticCompleteness={repo.semanticCompleteness}
+            indexingStatus={repo.indexingStatus}
             onNavigateToFile={(filePath: string) => {
               setSelectedExplorerFile(filePath);
               setActiveTab('explorer');

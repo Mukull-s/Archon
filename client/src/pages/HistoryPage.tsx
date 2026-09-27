@@ -519,13 +519,19 @@ export default function HistoryPage() {
                                 variant={
                                   repo.indexingStatus === 'completed'
                                     ? 'success'
+                                    : repo.indexingStatus === 'structural-ready'
+                                    ? 'info'
                                     : repo.indexingStatus === 'indexing'
                                     ? 'info'
                                     : 'danger'
                                 }
                                 showDot
                               >
-                                {repo.indexingStatus === 'completed' ? 'Indexed' : repo.indexingStatus}
+                                {repo.indexingStatus === 'completed'
+                                  ? 'Indexed'
+                                  : repo.indexingStatus === 'structural-ready'
+                                  ? 'Indexed (partial)'
+                                  : repo.indexingStatus}
                               </Badge>
                               <Badge variant={repo.isArchived ? 'neutral' : 'purple'}>
                                 {repo.isArchived ? 'Archived' : 'Active'}
@@ -692,13 +698,19 @@ export default function HistoryPage() {
                         variant={
                           repo.indexingStatus === 'completed'
                             ? 'success'
+                            : repo.indexingStatus === 'structural-ready'
+                            ? 'info'
                             : repo.indexingStatus === 'indexing'
                             ? 'info'
                             : 'danger'
                         }
                         showDot
                       >
-                        {repo.indexingStatus === 'completed' ? 'Indexed' : repo.indexingStatus}
+                        {repo.indexingStatus === 'completed'
+                          ? 'Indexed'
+                          : repo.indexingStatus === 'structural-ready'
+                          ? 'Indexed (partial)'
+                          : repo.indexingStatus}
                       </Badge>
                       <Badge variant={repo.isArchived ? 'neutral' : 'purple'}>
                         {repo.isArchived ? 'Archived' : 'Active'}
