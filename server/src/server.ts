@@ -2,57 +2,69 @@ import { createApp } from './app';
 import { env } from './config';
 import { logger } from './utils';
 import './services/embedding.service';
+import { ensureDatabaseSchema } from './services/schema.service';
 
 
 import { queueService } from './services/queue.service';
 
 const app = createApp();
 
-const server = app.listen(env.PORT, () => {
-  logger.info(`🚀 Archon API running`, {
-    port: env.PORT,
-    env: env.NODE_ENV,
-    url: `http://localhost:${env.PORT}`,
-  });
-  logger.info(`📋 Health check: http://localhost:${env.PORT}/api/health`);
+async function bootstrap() {
 
-  // Initialize durable PostgreSQL background queue and start worker
-  queueService.initQueue().then(() => {
-    queueService.startWorker({ concurrency: 2 });
-    logger.info('Durable PostgreSQL indexing queue worker started.');
-  }).catch(err => {
-    logger.error('Failed to initialize indexing queue worker:', { error: err.message });
-  });
-});
-
-// Set connection and header timeouts to 10 minutes to avoid premature drop on large repositories
-server.timeout = 600000;
-server.keepAliveTimeout = 600000;
-server.headersTimeout = 605000;
-
-
-async function gracefulShutdown(signal: string) {
-  logger.info(`${signal} received. Shutting down gracefully...`);
   try {
-    await queueService.stopWorker();
+    await ensureDatabaseSchema();
   } catch (err: any) {
-    logger.warn('Error stopping queue worker during shutdown:', err.message);
+    logger.error('Failed to reconcile database schema', { error: err.message });
   }
 
-  server.close(() => {
-    logger.info('Server closed.');
-    process.exit(0);
+  const server = app.listen(env.PORT, () => {
+    logger.info(`?? Archon API running`, {
+      port: env.PORT,
+      env: env.NODE_ENV,
+      url: `http://localhost:${env.PORT}`,
+    });
+    logger.info(`?? Health check: http://localhost:${env.PORT}/api/health`);
+
+    // Initialize durable PostgreSQL background queue and start worker
+    queueService.initQueue().then(() => {
+      queueService.startWorker({ concurrency: 2 });
+      logger.info('Durable PostgreSQL indexing queue worker started.');
+    }).catch(err => {
+      logger.error('Failed to initialize indexing queue worker:', { error: err.message });
+    });
   });
 
-  setTimeout(() => {
-    logger.error('Forced shutdown — connections did not close in time.');
-    process.exit(1);
-  }, 10_000);
+  // Set connection and header timeouts to 10 minutes to avoid premature drop on large repositories
+  server.timeout = 600000;
+  server.keepAliveTimeout = 600000;
+  server.headersTimeout = 605000;
+
+  async function gracefulShutdown(signal: string) {
+    logger.info(`${signal} received. Shutting down gracefully...`);
+    try {
+      await queueService.stopWorker();
+    } catch (err: any) {
+      logger.warn('Error stopping queue worker during shutdown:', err.message);
+    }
+
+    server.close(() => {
+      logger.info('Server closed.');
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      logger.error('Forced shutdown - connections did not close in time.');
+      process.exit(1);
+    }, 10_000);
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  return server;
 }
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
+const serverPromise = bootstrap();
 
 process.on('unhandledRejection', (reason: unknown) => {
   logger.error('Unhandled Promise Rejection', {
@@ -61,11 +73,11 @@ process.on('unhandledRejection', (reason: unknown) => {
 });
 
 process.on('uncaughtException', (error: Error) => {
-  logger.error('Uncaught Exception — shutting down', {
+  logger.error('Uncaught Exception - shutting down', {
     message: error.message,
     stack: error.stack,
   });
   process.exit(1);
 });
 
-export default server;
+export default serverPromise;
