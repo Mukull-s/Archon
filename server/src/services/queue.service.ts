@@ -230,7 +230,19 @@ export class QueueService {
 
     const errorMessage = error?.message || String(error);
 
-    if (job.attempts < job.maxAttempts) {
+    // Deterministic client errors (404 not found, 400 bad request, …) can never
+    // succeed on retry — only 408 (timeout) and 429 (rate limit) are worth
+    // re-attempting. This prevents e.g. a bad repository URL from being fetched
+    // three times.
+    const statusCode: number | undefined = error?.statusCode ?? error?.response?.status;
+    const isDeterministicClientError =
+      typeof statusCode === 'number' &&
+      statusCode >= 400 &&
+      statusCode < 500 &&
+      statusCode !== 408 &&
+      statusCode !== 429;
+
+    if (job.attempts < job.maxAttempts && !isDeterministicClientError) {
       // Exponential backoff: 2s, 4s, 8s (capped at 60s)
       const delayMs = Math.min(60_000, 2000 * Math.pow(2, job.attempts - 1));
       const nextRunAt = new Date(Date.now() + delayMs);
