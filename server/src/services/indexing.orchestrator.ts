@@ -3,14 +3,17 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import AdmZip from 'adm-zip';
-import { prisma, MAX_FILES_LIMIT, MAX_CHUNKS_LIMIT, EMBEDDING_BATCH_SIZE, MAX_CONCURRENT_EMBEDDINGS } from '../config';
+import { prisma, MAX_FILES_LIMIT, MAX_CHUNKS_LIMIT, MAX_CONCURRENT_EMBEDDINGS } from '../config';
 import { AppError } from '../utils';
 import { getPlaintextToken } from '../utils/crypto';
 import { ingestionService, deleteFolderWithRetry } from './ingestion.service';
 import * as astService from './ast.service';
 import { embeddingService } from './embedding.service';
-import { AsyncSemaphore } from './concurrency';
+import { BatchPipeline } from './indexing.pipeline';
 import { vectorService } from './vector.service';
+import { llmService } from './llm.service';
+import { buildFileTreeString } from './chat.orchestrator';
+import { estimateTokens, readBatchOptionsFromEnv } from './embedding.batching';
 import { entitlementService } from './entitlement.service';
 import { identityService } from './identity.service';
 import { confidenceService } from './confidence.service';
@@ -36,6 +39,25 @@ export function cleanString(val: string): string {
 }
 
 /**
+ * Parses the LLM's repository-summary response.
+ *
+ * The model is instructed to return raw JSON; if it returns fenced or prose
+ * text instead, the text is preserved as `{ summary }` so the completion gate
+ * still sees a present, displayable summary rather than failing the whole run.
+ */
+export function parseRepositorySummary(raw: string): Record<string, any> {
+  if (!raw || typeof raw !== 'string') return { summary: String(raw ?? '') };
+  let cleaned = raw.trim();
+  const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fence) cleaned = fence[1].trim();
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch {}
+  return { summary: raw };
+}
+
+/**
  * Standalone asynchronous vector indexing runner.
  * Orchestrates download, extraction, AST discovery, bounded chunking, and streaming embedding.
  */
@@ -51,6 +73,18 @@ export async function performVectorIndexing(
       heapMB: heapMB(),
       ...(durationMs !== undefined && { durationSec: parseFloat((durationMs / 1000).toFixed(2)) })
     }));
+  }
+
+  // Progressive stage state, persisted so the client's stage loader is driven by
+  // real backend progress (Download -> Parse -> Embed -> Summary -> Done) rather
+  // than a client-side timer.
+  const stageState: Record<string, any> = { stage: 'download' };
+  async function persistStage(progressText: string, patch: Record<string, any> = {}) {
+    Object.assign(stageState, patch);
+    await prisma.repository.update({
+      where: { id },
+      data: { indexingProgress: progressText, indexingStats: { ...stageState } as any }
+    }).catch(() => {});
   }
 
   const startTime = Date.now();
@@ -121,7 +155,7 @@ export async function performVectorIndexing(
     await new Promise(resolve => setImmediate(resolve));
 
     // ── Stage 2: Extraction ────────────────────────────────────────────────
-    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Parsing' } });
+    await persistStage('Parsing', { stage: 'extract' });
 
     const extractId = crypto.randomUUID();
     const extractPath = path.join(os.tmpdir(), 'archon-extracted', extractId);
@@ -254,6 +288,7 @@ export async function performVectorIndexing(
 
     const parseTime = Date.now() - parseStart;
     logStage('parse', parseTime);
+    await persistStage('Parsing', { stage: 'parse', filesScanned: scannedFiles.length });
 
     // ── Stage 4: Dependency Graph + Identity ──────────────────────────────
     const fileList = scannedFiles.map(f => f.path);
@@ -319,78 +354,78 @@ export async function performVectorIndexing(
       }
     });
 
-    // ── Structural phase complete ─────────────────────────────────────────
-    // Everything the Explorer / Insights / Graph / Architecture tabs need is
-    // now persisted. Unlock the product immediately; embeddings continue in
-    // the background and only affect RAG quality.
-    await prisma.repository.update({
-      where: { id },
-      data: { indexingStatus: 'structural-ready', indexingProgress: 'Embedding 0%' }
-    });
+    // ── Stage 6: Streaming Embedding Pipeline (Bounded, Concurrent) ───────
+    // Status stays `indexing` until ALL batches are resolved AND the summary
+    // is present. The UI renders nothing until `completed` (no half-data).
+    await persistStage('Embedding 0%', { stage: 'embed', chunksTotal: 0 });
 
-    // ── Stage 6: Streaming Embedding Pipeline (Bounded, Concurrent Buffer) ─
+    // Summary generation runs in parallel with embeddings so it adds no serial
+    // latency, but it is a required gate for completion.
+    let summaryJson: Record<string, any> | null = null;
+    let summaryError: any = null;
+    const summaryPromise = (async () => {
+      try {
+        const fileTree = buildFileTreeString(scannedFiles);
+        const raw = await llmService.generateRepositorySummary({
+          name: repoRow.name,
+          framework,
+          languages: Array.from(languages),
+          fileCount: scannedFiles.length,
+          totalSize,
+          fileTree
+        });
+        summaryJson = parseRepositorySummary(raw);
+      } catch (err) {
+        summaryError = err;
+      }
+    })();
     const embedTracker = embeddingService.createTracker();
     const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({ where: { repositoryId: id } });
     let totalChunksProcessed = 0;
-    let totalBatches = 0;
+    let filesProcessed = 0;
+    let filesSkipped = 0;
+    let truncatedByLimit = false;
     let pendingChunks: any[] = [];
-    let embeddingFailed = false;
-    let embedTime = 0;
-    let dbWriteTime = 0;
+    let pendingTokens = 0;
+    const batchOptions = readBatchOptionsFromEnv();
+    const quarantine: Array<{ items: any[]; texts: string[]; startIndex: number }> = [];
+    let insertFailures = 0;
+    let quarantineRecovered = 0;
+    let quarantineFailed = 0;
     const embedStart = Date.now();
 
-    // Bounded concurrent flush pool. Embedding + insert for independent batches
-    // overlap instead of running strictly one-at-a-time.
+    // Embedding and persistence are decoupled: the embedding slot is released
+    // as soon as the API call returns, so a DB insert overlaps the next embed.
     const embedConcurrency = Math.max(1, MAX_CONCURRENT_EMBEDDINGS);
-    const embedLimiter = new AsyncSemaphore(embedConcurrency);
-    const inFlight: Promise<void>[] = [];
-    let peakConcurrency = 0;
-
-    async function processBatch(batch: any[], startIndex: number): Promise<void> {
-      peakConcurrency = Math.max(peakConcurrency, embedLimiter.active);
-      const batchTexts = batch.map(c => c.content);
-      const t0 = Date.now();
-      let embeddings: number[][];
-      try {
-        embeddings = await vectorService.getEmbeddingsBatch(batchTexts, embedTracker);
-        embedTime += Date.now() - t0;
-      } catch (embedErr: any) {
-        console.error(`[Indexing] Embedding batch failed (graceful degradation): ${embedErr.message}`);
-        embeddingFailed = true;
-        return;
+    const pipeline = new BatchPipeline<any>({
+      concurrency: embedConcurrency,
+      maxOutstanding: embedConcurrency + 2,
+      embed: (texts) => vectorService.getEmbeddingsBatch(texts, embedTracker),
+      insert: (items, embeddings, startIndex) => {
+        const readyChunks = items.map((c, j) => ({ ...c, embedding: embeddings[j] }));
+        return vectorService.bulkInsertChunks(id, readyChunks, startIndex);
+      },
+      onEmbedError: (embedErr: any, batch) => {
+        // Quarantine rather than drop: retried via the split path after drain.
+        console.error(`[Indexing] Embedding batch failed; quarantined for retry: ${embedErr?.message || embedErr}`);
+        quarantine.push({ items: batch.items, texts: batch.texts, startIndex: batch.startIndex });
+      },
+      onInsertError: (dbErr: any) => {
+        console.error(`[Indexing] Chunk insert failed: ${dbErr?.message || dbErr}`);
+        insertFailures += 1;
       }
-
-      const readyChunks = batch.map((c, j) => ({ ...c, embedding: embeddings[j] }));
-      const dbT0 = Date.now();
-      await vectorService.bulkInsertChunks(id, readyChunks, startIndex);
-      dbWriteTime += Date.now() - dbT0;
-    }
+    });
 
     function flushPendingChunks(): void {
       if (pendingChunks.length === 0) return;
       const batch = pendingChunks;
       pendingChunks = [];
-      // Assign the global chunk index *before* dispatching so concurrent
-      // inserts can never race on ordering.
+      pendingTokens = 0;
+      // Assign the global chunk index *before* dispatch so concurrent inserts
+      // can never race on ordering.
       const startIndex = unchangedChunksCount + totalChunksProcessed;
       totalChunksProcessed += batch.length;
-      totalBatches += 1;
-
-      const task = embedLimiter.run(() => processBatch(batch, startIndex)).catch(err => {
-        console.error(`[Indexing] Unexpected embedding pipeline error: ${err?.message || err}`);
-        embeddingFailed = true;
-      });
-      inFlight.push(task);
-      void task.finally(() => {
-        const idx = inFlight.indexOf(task);
-        if (idx >= 0) inFlight.splice(idx, 1);
-      });
-    }
-
-    async function drainInFlight(): Promise<void> {
-      while (inFlight.length > 0) {
-        await Promise.all(inFlight.slice());
-      }
+      pipeline.submit({ items: batch, texts: batch.map(c => c.content), startIndex });
     }
 
     let lastProgressWrite = Date.now();
@@ -402,16 +437,17 @@ export async function performVectorIndexing(
       if (fileContent === undefined) {
         try {
           fileContent = fs.readFileSync(fullFilePath, 'utf-8').replace(/\u0000/g, '');
-        } catch { continue; }
+        } catch { filesSkipped++; continue; }
       }
-      if (!fileContent.trim()) continue;
+      if (!fileContent.trim()) { filesSkipped++; continue; }
 
       const symbols = symbolsCache.get(file.path) ?? astService.getCodeSymbols(file.path, fileContent);
       const fileChunks = ingestionService.chunkCodeFile(file.path, fileContent, symbols);
-      if (fileChunks.length === 0) continue;
+      if (fileChunks.length === 0) { filesSkipped++; continue; }
 
       if (unchangedChunksCount + totalChunksProcessed + pendingChunks.length + fileChunks.length > MAX_CHUNKS_LIMIT) {
-        console.warn(`[Indexing] Chunk limit (${MAX_CHUNKS_LIMIT}) approaching. Stopping embedding.`);
+        console.warn(`[Indexing] Chunk limit (${MAX_CHUNKS_LIMIT}) reached. Stopping embedding (run will be incomplete).`);
+        truncatedByLimit = true;
         break;
       }
 
@@ -424,40 +460,99 @@ export async function performVectorIndexing(
           endLine: chunk.endLine,
           symbolName: chunk.symbolName
         });
+        pendingTokens += estimateTokens(chunk.content);
 
-        if (pendingChunks.length >= EMBEDDING_BATCH_SIZE) {
-          // Back-pressure: wait for a slot before dispatching the next batch.
-          if (inFlight.length >= embedConcurrency) {
-            await Promise.race(inFlight);
-          }
+        // Token-aware sealing: seal on the estimated token budget OR the input
+        // count ceiling, whichever binds first. This makes the ≤90k-token /
+        // ≤96-input invariant explicit at the seal point (defense-in-depth keeps
+        // the inner layer token-aware too).
+        if (
+          pendingChunks.length >= batchOptions.maxInputsPerRequest ||
+          pendingTokens >= batchOptions.maxTokensPerRequest
+        ) {
+          await pipeline.waitForCapacity();
           flushPendingChunks();
           await new Promise(resolve => setImmediate(resolve));
         }
       }
 
+      filesProcessed++;
       const now = Date.now();
       if (fileIdx % 25 === 0 || now - lastProgressWrite >= 2000 || fileIdx === filesToEmbed.length - 1) {
         lastProgressWrite = now;
         const pct = filesToEmbed.length > 0 ? Math.round(((fileIdx + 1) / filesToEmbed.length) * 100) : 100;
-        await prisma.repository.update({ where: { id }, data: { indexingProgress: `Embedding ${pct}%` } });
+        await persistStage(`Embedding ${pct}%`, {
+          stage: 'embed',
+          chunksTotal: unchangedChunksCount + totalChunksProcessed + pendingChunks.length,
+          filesProcessed,
+          filesEmbedded: filesToEmbed.length
+        });
       }
     }
 
     if (pendingChunks.length > 0) flushPendingChunks();
-    await drainInFlight();
+    await pipeline.drain();
+
+    // Quarantine recovery: retry failed batches one input at a time via the
+    // split path. This is the last chance before the run is marked failed.
+    if (quarantine.length > 0) {
+      console.warn(`[Indexing] Retrying ${quarantine.length} quarantined batch(es) one input at a time...`);
+      for (const q of quarantine) {
+        for (let i = 0; i < q.items.length; i++) {
+          try {
+            const vecs = await vectorService.getEmbeddingsBatch([q.texts[i]], embedTracker);
+            await vectorService.bulkInsertChunks(id, [{ ...q.items[i], embedding: vecs[0] }], q.startIndex + i);
+            quarantineRecovered += 1;
+          } catch (retryErr: any) {
+            quarantineFailed += 1;
+            console.error(`[Indexing] Quarantined chunk could not be embedded: ${retryErr?.message || retryErr}`);
+          }
+        }
+      }
+    }
+
+    const totalBatches = pipeline.batchCount;
+    const batchesResolved = pipeline.resolvedBatches + quarantineRecovered;
+    const batchesFailed = pipeline.failedBatches + insertFailures + quarantineFailed;
+    const dbWriteTime = pipeline.dbMs;
+    const peakConcurrency = pipeline.peakEmbedConcurrency;
     logStage('embedding', Date.now() - embedStart);
     logStage('db-insert-total', dbWriteTime);
 
-    await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Saving 92%' } });
+    // Await the parallel summary before deciding completion.
+    await persistStage('Generating summary', { stage: 'summary' });
+    await summaryPromise;
+    const summaryPresent = !!summaryJson;
 
-    // ── Stage 7: Finalize ─────────────────────────────────────────────────
+    // ── Stage 7: Completion gate ──────────────────────────────────────────
+    // `completed` requires 100% of files processed, 100% of batches resolved,
+    // and a present summary. Anything less is an explicit failure — never a
+    // silent "partial" that would render half-data.
+    const complete = !truncatedByLimit && batchesResolved === totalBatches && batchesFailed === 0 && summaryPresent;
+
+    const failureReasons: string[] = [];
+    if (truncatedByLimit) failureReasons.push('chunk limit reached');
+    if (batchesFailed > 0) failureReasons.push(`${batchesFailed} batch(es) unresolved`);
+    else if (batchesResolved !== totalBatches) failureReasons.push(`${totalBatches - batchesResolved} batch(es) missing`);
+    if (!summaryPresent) failureReasons.push(`summary generation failed${summaryError ? ` (${summaryError.message || summaryError})` : ''}`);
+
     const latestSha = (repoRow as any)._latestSha;
     const embedMetrics = embedTracker.getMetrics();
     const indexingStats = {
+      stage: complete ? 'done' : 'failed',
       files: scannedFiles.length,
       filesEmbedded: filesToEmbed.length,
+      filesProcessed,
+      filesSkipped,
       chunks: unchangedChunksCount + totalChunksProcessed,
       batches: totalBatches,
+      batchesResolved,
+      batchesFailed,
+      quarantined: quarantine.length,
+      quarantineRecovered,
+      quarantineFailed,
+      summaryPresent,
+      truncatedByLimit,
       apiMs: embedMetrics.totalLatencyMs,
       backoffMs: embedMetrics.totalBackoffMs,
       dbMs: dbWriteTime,
@@ -465,19 +560,25 @@ export async function performVectorIndexing(
       retries: embedMetrics.retries,
       rateLimits: embedMetrics.rateLimitResponses,
       timeouts: embedMetrics.timeoutResponses,
-      peakConcurrency,
-      failed: embeddingFailed
+      peakConcurrency
     };
     await prisma.repository.update({
       where: { id },
-      data: {
-        indexingStatus: 'completed',
-        indexingProgress: embeddingFailed ? 'Completed (partial — some embeddings failed)' : 'Completed',
-        indexingStats: indexingStats as any
-      }
+      data: complete
+        ? {
+            indexingStatus: 'completed',
+            indexingProgress: 'Completed',
+            indexingStats: indexingStats as any,
+            ...(summaryJson ? { aiSummary: summaryJson as any } : {})
+          }
+        : {
+            indexingStatus: 'failed',
+            indexingProgress: `Error: incomplete index (${failureReasons.join('; ')})`,
+            indexingStats: indexingStats as any
+          }
     });
 
-    if (repoRow.userId) {
+    if (complete && repoRow.userId) {
       if (options?.isNewAnalysis) {
         await entitlementService.recordCodebaseAnalysis(repoRow.userId);
       } else if (force) {
@@ -503,6 +604,9 @@ export async function performVectorIndexing(
     console.log(`Files: ${scannedFiles.length}`);
     console.log(`Chunks: ${unchangedChunksCount + totalChunksProcessed}`);
     console.log(`Embedding Batches Dispatched: ${totalBatches} (concurrency ${embedConcurrency}, peak ${peakConcurrency})`);
+    console.log(`Batches Resolved: ${batchesResolved}/${totalBatches} | Failed: ${batchesFailed} | Quarantined: ${quarantine.length} (recovered ${quarantineRecovered})`);
+    console.log(`Summary Present: ${summaryPresent}`);
+    console.log(`Index Status: ${complete ? 'completed' : `failed (${failureReasons.join('; ')})`}`);
     console.log(`Successful API Calls: ${embedMetrics.successfulCalls}`);
     console.log(`Failed API Calls: ${embedMetrics.failedCalls}`);
     console.log(`Retry Attempts: ${embedMetrics.retries}`);
