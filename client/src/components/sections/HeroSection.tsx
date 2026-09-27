@@ -37,7 +37,7 @@ const parseRepoUrl = (url: string) => {
     const cleaned = url.trim().replace(/\/$/, '');
     const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)/i);
     if (match) {
-      return { owner: match[1], repo: match[2] };
+      return { owner: match[1], repo: match[2].replace(/\.git$/i, '').replace(/[?#].*$/, '') };
     }
   } catch (e) {}
   return null;
@@ -52,6 +52,7 @@ export default function HeroSection() {
   const [overallProgress, setOverallProgress] = useState(0)
   const [targetProgress, setTargetProgress] = useState(0)
   const [messageIndex, setMessageIndex] = useState(0)
+  const [activeRepoId, setActiveRepoId] = useState<string | null>(null)
   const [scannedInfo, setScannedInfo] = useState<{
     name: string;
     owner?: string;
@@ -120,6 +121,7 @@ export default function HeroSection() {
       setTargetProgress(0)
       backendFinishedRef.current = false
       backendDataRef.current = null
+      setActiveRepoId(null)
       return
     }
 
@@ -159,18 +161,16 @@ export default function HeroSection() {
 
   // Polling logic when analyzing
   useEffect(() => {
-    if (!isAnalyzing || !backendDataRef.current?.id || backendFinishedRef.current) return
+    if (!isAnalyzing || !activeRepoId || backendFinishedRef.current) return
 
     const pollInterval = setInterval(async () => {
       try {
-        const repoId = backendDataRef.current.id
-        const { data } = await api.get(`/repos/${repoId}?lite=true`)
+        const { data } = await api.get(`/repos/${activeRepoId}?lite=true`)
         const repo = data.data
 
-        if (repo.indexingStatus === 'completed' || repo.indexingStatus === 'structural-ready') {
-          // `structural-ready` means the codebase is already usable (files, AST,
-          // graph, insights). Embeddings keep streaming in the background; the
-          // Chat tab shows semantic progress. Don't make the user wait for RAG.
+        if (repo.indexingStatus === 'completed') {
+          // Strict gate: the dashboard is only opened once the index is fully
+          // complete (all files, all batches, summary present).
           backendFinishedRef.current = true
           backendDataRef.current = repo
           setTargetProgress(100)
@@ -219,7 +219,7 @@ export default function HeroSection() {
     }, 2000)
 
     return () => clearInterval(pollInterval)
-  }, [isAnalyzing, targetProgress])
+  }, [isAnalyzing, activeRepoId])
 
   // Redirection when finished
   useEffect(() => {
@@ -262,8 +262,12 @@ export default function HeroSection() {
 
     try {
       const { data } = await api.post('/repos/scan-url', { url: repoUrl }, { timeout: 300000 })
-      backendDataRef.current = data.data
+      // The API returns { repository, jobId }; tolerate a flattened shape too so
+      // this can never silently break the poll (which needs `.id`).
+      const payload = data?.data ?? {}
+      backendDataRef.current = payload.repository ?? payload
       setTargetProgress(10)
+      setActiveRepoId(backendDataRef.current?.id ?? null)
     } catch (err: any) {
       setIsAnalyzing(false)
       toast.error(err.response?.data?.error?.message || 'Failed to scan repository.')
