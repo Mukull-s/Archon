@@ -76,6 +76,17 @@ class VectorService {
     return results;
   }
 
+  /** Parameterized multi-row SQL INSERT (fallback path). */
+  private async insertViaSql(repositoryId: string, rows: any[], startIndex: number): Promise<void> {
+    const rowQueries = rows.map((c, i) =>
+      Prisma.sql`(${c.id}, ${repositoryId}, ${c.filePath}, ${startIndex + i}, ${c.content}, ${c.startLine}, ${c.endLine}, ${c.symbolName ?? null}, ${toVectorLiteral(c.embedding)}::vector)`
+    );
+    await prisma.$executeRaw`
+      INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding)
+      VALUES ${Prisma.join(rowQueries)}
+    `;
+  }
+
   /** Native binary COPY FROM STDIN. A failed COPY is atomic (no partial rows). */
   private async insertViaCopy(repositoryId: string, rows: any[], startIndex: number): Promise<void> {
     const client = await pgPool.connect();
