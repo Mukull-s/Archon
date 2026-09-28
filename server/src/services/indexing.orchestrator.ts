@@ -363,22 +363,25 @@ export async function performVectorIndexing(
     // latency, but it is a required gate for completion.
     let summaryJson: Record<string, any> | null = null;
     let summaryError: any = null;
-    const summaryPromise = (async () => {
-      try {
-        const fileTree = buildFileTreeString(scannedFiles);
-        const raw = await llmService.generateRepositorySummary({
-          name: repoRow.name,
-          framework,
-          languages: Array.from(languages),
-          fileCount: scannedFiles.length,
-          totalSize,
-          fileTree
-        });
-        summaryJson = parseRepositorySummary(raw);
-      } catch (err) {
-        summaryError = err;
-      }
-    })();
+    const existingSummary = (repoRow as any).aiSummary as Record<string, any> | null;
+    const summaryPromise = (filesToEmbed.length === 0 && existingSummary)
+      ? (async () => { summaryJson = existingSummary; })()
+      : (async () => {
+          try {
+            const fileTree = buildFileTreeString(scannedFiles);
+            const raw = await llmService.generateRepositorySummary({
+              name: repoRow.name,
+              framework,
+              languages: Array.from(languages),
+              fileCount: scannedFiles.length,
+              totalSize,
+              fileTree
+            });
+            summaryJson = parseRepositorySummary(raw);
+          } catch (err) {
+            summaryError = err;
+          }
+        })();
     const embedTracker = embeddingService.createTracker();
     const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({ where: { repositoryId: id } });
     let totalChunksProcessed = 0;
