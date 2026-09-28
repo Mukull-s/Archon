@@ -16,6 +16,27 @@ function readInsertMode(): 'copy' | 'insert' {
   return (process.env.EMBEDDING_INSERT_MODE || 'copy').toLowerCase() === 'insert' ? 'insert' : 'copy';
 }
 
+/** Builds the full binary COPY payload (header + rows + trailer). */
+export function buildCopyPayload(repositoryId: string, chunks: any[], startIndex: number): Buffer {
+  const header = Buffer.concat([COPY_BINARY_SIGNATURE, Buffer.alloc(8)]); // signature + flags(0) + extension(0)
+  const body = new BinaryWriter(Math.max(64 * 1024, chunks.length * 8 * 1024));
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i];
+    body.int16(9); // field count
+    body.textField(c.id ?? crypto.randomUUID());
+    body.textField(repositoryId);
+    body.textField(c.filePath);
+    body.int4Field(startIndex + i);
+    body.textField(c.content);
+    body.int4Field(c.startLine);
+    body.int4Field(c.endLine);
+    body.textField(c.symbolName ?? null);
+    body.vectorField(c.embedding);
+  }
+  body.int16(-1); // trailer
+  return Buffer.concat([header, body.bytes()]);
+}
+
 class VectorService {
   async getEmbedding(text: string, tracker?: EmbeddingMetricsTracker): Promise<number[]> {
     return embeddingService.getEmbedding(text, tracker);
