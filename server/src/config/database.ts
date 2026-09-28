@@ -6,18 +6,20 @@ import pg from 'pg';
  * Prisma Client Singleton (Prisma v7)
  * 
  * Uses the PostgreSQL driver adapter for direct database connection.
- * Singleton pattern prevents multiple connections during hot-reloading.
+ * The raw `pg` pool is also exported so bulk paths (binary COPY) can use the
+ * native PostgreSQL COPY protocol, which Prisma's query engine cannot express.
  */
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
+  pgPool: pg.Pool | undefined;
 };
 
 function createPgPool(): pg.Pool {
   const connectionString = process.env.DATABASE_URL;
 
   if (!connectionString) {
-    throw new Error('DATABASE_URL environment variable is required');
+    throw new Error('DATABASE_URL environment variable is not set');
   }
 
   // Create a pg Pool with SSL for Neon, configured for scale
@@ -35,9 +37,14 @@ function createPrismaClient(pool: pg.Pool): PrismaClient {
   return new PrismaClient({ adapter });
 }
 
-const pool = createPgPool();
-export const prisma = globalForPrisma.prisma ?? createPrismaClient(pool);
+const pool = globalForPrisma.pgPool ?? createPgPool();
+const prismaClient = globalForPrisma.prisma ?? createPrismaClient(pool);
 
 if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma;
+  globalForPrisma.prisma = prismaClient;
+  globalForPrisma.pgPool = pool;
 }
+
+export const prisma = prismaClient;
+/** Raw pg pool. Use only for operations Prisma cannot express (e.g. COPY). */
+export const pgPool = pool;
