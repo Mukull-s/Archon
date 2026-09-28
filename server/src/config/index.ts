@@ -1,4 +1,4 @@
 export { env } from './env';
-export { prisma } from './database';
+export { prisma, pgPool } from './database';
 export * from './constants';
 export * from './plans';
