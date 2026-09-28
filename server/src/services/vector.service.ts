@@ -16,6 +16,90 @@ function readInsertMode(): 'copy' | 'insert' {
   return (process.env.EMBEDDING_INSERT_MODE || 'copy').toLowerCase() === 'insert' ? 'insert' : 'copy';
 }
 
+/**
+ * Serializes an embedding to pgvector's text literal.
+ *
+ * pgvector stores `vector` columns as float32, so we first round to float32
+ * (`Math.fround`) and then emit the *shortest* decimal string that round-trips
+ * back to that exact float32. This is bit-for-bit lossless against what the
+ * database stores, while cutting the wire payload ~1.8x versus emitting JS's
+ * full double precision (which pgvector discards anyway).
+ */
+export function toVectorLiteral(embedding: number[]): string {
+  const parts = new Array<string>(embedding.length);
+  for (let i = 0; i < embedding.length; i++) {
+    const y = Math.fround(embedding[i]);
+    if (!Number.isFinite(y) || y === 0) {
+      parts[i] = '0';
+      continue;
+    }
+    // Shortest precision (1..9 significant digits) that round-trips to this float32.
+    let s = y.toPrecision(9);
+    for (let p = 1; p < 9; p++) {
+      const candidate = y.toPrecision(p);
+      if (Math.fround(Number(candidate)) === y) { s = candidate; break; }
+    }
+    parts[i] = s;
+  }
+  return `[${parts.join(',')}]`;
+}
+
+/**
+ * Growable big-endian byte writer used to build PostgreSQL binary COPY rows.
+ */
+class BinaryWriter {
+  private buf: Buffer;
+  private len = 0;
+
+  constructor(initial = 16 * 1024) {
+    this.buf = Buffer.allocUnsafe(initial);
+  }
+
+  private ensure(extra: number): void {
+    if (this.len + extra <= this.buf.length) return;
+    let size = this.buf.length * 2;
+    while (size < this.len + extra) size *= 2;
+    const next = Buffer.allocUnsafe(size);
+    this.buf.copy(next, 0, 0, this.len);
+    this.buf = next;
+  }
+
+  int16(value: number): void { this.ensure(2); this.buf.writeInt16BE(value, this.len); this.len += 2; }
+  int32(value: number): void { this.ensure(4); this.buf.writeInt32BE(value, this.len); this.len += 4; }
+  float4(value: number): void { this.ensure(4); this.buf.writeFloatBE(Math.fround(value), this.len); this.len += 4; }
+
+  /** int4 column field: length prefix (4) then the value. */
+  int4Field(value: number): void { this.int32(4); this.int32(value); }
+
+  /** text column field: length prefix then UTF-8 bytes; null => length -1. */
+  textField(value: string | null): void {
+    if (value === null || value === undefined) { this.int32(-1); return; }
+    const bytes = Buffer.from(value, 'utf8');
+    this.int32(bytes.length);
+    this.ensure(bytes.length);
+    bytes.copy(this.buf, this.len);
+    this.len += bytes.length;
+  }
+
+  /**
+   * pgvector binary format (vector_send): int16 dimension, int16 unused,
+   * then `dimension` big-endian float4 values.
+   */
+  vectorField(embedding: number[]): void {
+    const dim = embedding.length;
+    this.int32(4 + dim * 4);
+    this.int16(dim);
+    this.int16(0);
+    for (let i = 0; i < dim; i++) this.float4(embedding[i]);
+  }
+
+  bytes(): Buffer {
+    return this.buf.subarray(0, this.len);
+  }
+
+  get length(): number { return this.len; }
+}
+
 /** Writes a buffer to a stream, awaiting drain when back-pressured. */
 function writeWithBackpressure(stream: NodeJS.WritableStream, chunk: Buffer): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -53,6 +137,8 @@ export function buildCopyPayload(repositoryId: string, chunks: any[], startIndex
 }
 
 class VectorService {
+  private readonly insertMode = readInsertMode();
+
   async getEmbedding(text: string, tracker?: EmbeddingMetricsTracker): Promise<number[]> {
     return embeddingService.getEmbedding(text, tracker);
   }
@@ -74,6 +160,31 @@ class VectorService {
       LIMIT ${limit}
     `;
     return results;
+  }
+
+  /**
+   * Bulk-inserts chunks. Uses the native binary COPY protocol by default, and
+   * transparently falls back to a parameterized SQL INSERT if COPY is
+   * unavailable or fails. Both paths write the identical float32 vectors, so
+   * results are equivalent; only throughput differs.
+   */
+  async bulkInsertChunks(repositoryId: string, chunks: any[], startIndex: number): Promise<void> {
+    if (chunks.length === 0) return;
+    const t0 = Date.now();
+    const rows = chunks.map(c => ({ id: c.id ?? crypto.randomUUID(), ...c }));
+
+    if (this.insertMode === 'copy') {
+      try {
+        await this.insertViaCopy(repositoryId, rows, startIndex);
+        console.log(`[DB] Copied ${rows.length} chunks (binary COPY) in ${Date.now() - t0}ms`);
+        return;
+      } catch (err: any) {
+        console.warn(`[DB] Binary COPY failed for ${rows.length} chunks; falling back to SQL INSERT: ${err?.message || err}`);
+      }
+    }
+
+    await this.insertViaSql(repositoryId, rows, startIndex);
+    console.log(`[DB] Inserted ${rows.length} chunks in ${Date.now() - t0}ms`);
   }
 
   /** Parameterized multi-row SQL INSERT (fallback path). */
@@ -108,26 +219,6 @@ class VectorService {
     } finally {
       client.release();
     }
-  }
-}
-
-export const vectorService = new VectorService();
-export default vectorService;
-
-  async bulkInsertChunks(repositoryId: string, chunks: any[], startIndex: number): Promise<void> {
-    if (chunks.length === 0) return;
-    const t0 = Date.now();
-
-    const rowQueries = chunks.map((c, i) => {
-      const chunkId = crypto.randomUUID();
-      return Prisma.sql`(${chunkId}, ${repositoryId}, ${c.filePath}, ${startIndex + i}, ${c.content}, ${c.startLine}, ${c.endLine}, ${c.symbolName ?? null}, ${toVectorLiteral(c.embedding)}::vector)`;
-    });
-
-    await prisma.$executeRaw`
-      INSERT INTO "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding)
-      VALUES ${Prisma.join(rowQueries)}
-    `;
-    console.log(`[DB] Inserted ${chunks.length} chunks in ${Date.now() - t0}ms`);
   }
 }
 
