@@ -16,6 +16,21 @@ function readInsertMode(): 'copy' | 'insert' {
   return (process.env.EMBEDDING_INSERT_MODE || 'copy').toLowerCase() === 'insert' ? 'insert' : 'copy';
 }
 
+/** Writes a buffer to a stream, awaiting drain when back-pressured. */
+function writeWithBackpressure(stream: NodeJS.WritableStream, chunk: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => reject(err);
+    stream.once('error', onError);
+    const flushed = stream.write(chunk, () => {
+      stream.removeListener('error', onError);
+      resolve();
+    });
+    if (!flushed) {
+      // write() will still invoke the callback once queued; nothing more to do.
+    }
+  });
+}
+
 /** Builds the full binary COPY payload (header + rows + trailer). */
 export function buildCopyPayload(repositoryId: string, chunks: any[], startIndex: number): Buffer {
   const header = Buffer.concat([COPY_BINARY_SIGNATURE, Buffer.alloc(8)]); // signature + flags(0) + extension(0)
@@ -60,6 +75,33 @@ class VectorService {
     `;
     return results;
   }
+
+  /** Native binary COPY FROM STDIN. A failed COPY is atomic (no partial rows). */
+  private async insertViaCopy(repositoryId: string, rows: any[], startIndex: number): Promise<void> {
+    const client = await pgPool.connect();
+    try {
+      const stream = client.query(
+        copyFrom(
+          `COPY "CodeChunk" (id, "repositoryId", "filePath", "chunkIndex", "content", "startLine", "endLine", "symbolName", embedding) FROM STDIN WITH (FORMAT binary)`
+        )
+      ) as unknown as NodeJS.WritableStream;
+
+      const finished = new Promise<void>((resolve, reject) => {
+        stream.once('finish', () => resolve());
+        stream.once('error', (err: Error) => reject(err));
+      });
+
+      await writeWithBackpressure(stream, buildCopyPayload(repositoryId, rows, startIndex));
+      stream.end();
+      await finished;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+export const vectorService = new VectorService();
+export default vectorService;
 
   async bulkInsertChunks(repositoryId: string, chunks: any[], startIndex: number): Promise<void> {
     if (chunks.length === 0) return;
