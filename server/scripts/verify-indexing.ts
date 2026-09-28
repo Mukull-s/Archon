@@ -470,7 +470,72 @@ async function main() {
     assert(tiny.includes('e-'), 'tiny magnitudes keep scientific notation (not silently zeroed)');
   }
 
-  // ── 10. Before/after: the exact regression scenario ───────────────────────
+  // ── 10. Binary COPY payload encoding (pure) ──────────────────────────────
+
+  section('Binary COPY payload encoding');
+  {
+    const { buildCopyPayload } = require('../src/services/vector.service');
+
+    const repoId = 'repo-123';
+    const vec = Array.from({ length: 512 }, () => Math.random() * 2 - 1);
+    const rows = [
+      { id: 'id-1', filePath: 'a/b.ts', content: 'héllo ✓', startLine: 2, endLine: 9, symbolName: 'fn:x', embedding: vec },
+      { id: 'id-2', filePath: 'c/d.ts', content: '', startLine: 1, endLine: 1, symbolName: null, embedding: vec },
+    ];
+    const buf = buildCopyPayload(repoId, rows, 100);
+
+    // Header: signature + flags(0) + extension length(0)
+    const sig = Buffer.from([0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff, 0x0d, 0x0a, 0x00]);
+    assert(buf.subarray(0, 11).equals(sig), 'COPY signature is correct');
+    assert(buf.readInt32BE(11) === 0, 'COPY flags are zero');
+    assert(buf.readInt32BE(15) === 0, 'COPY extension length is zero');
+
+    // Walk the rows.
+    let off = 19;
+    const parsedRows: any[] = [];
+    while (true) {
+      const fieldCount = buf.readInt16BE(off); off += 2;
+      if (fieldCount === -1) break; // trailer
+      assert(fieldCount === 9, 'row declares 9 fields', `${fieldCount}`);
+      const fields: any[] = [];
+      for (let f = 0; f < fieldCount; f++) {
+        const len = buf.readInt32BE(off); off += 4;
+        if (len === -1) { fields.push(null); continue; }
+        const data = buf.subarray(off, off + len); off += len;
+        fields.push(data);
+      }
+      parsedRows.push(fields);
+    }
+
+    assert(parsedRows.length === 2, 'payload contains exactly 2 rows', `${parsedRows.length}`);
+    assert(off === buf.length, 'no trailing bytes after trailer');
+
+    const r0 = parsedRows[0];
+    assert(r0[0].toString('utf8') === 'id-1', 'row0 id decodes');
+    assert(r0[1].toString('utf8') === repoId, 'row0 repositoryId decodes');
+    assert(r0[2].toString('utf8') === 'a/b.ts', 'row0 filePath decodes');
+    assert(r0[3].readInt32BE(0) === 100, 'row0 chunkIndex = startIndex (100)');
+    assert(r0[4].toString('utf8') === 'héllo ✓', 'row0 unicode content decodes');
+    assert(r0[5].readInt32BE(0) === 2 && r0[6].readInt32BE(0) === 9, 'row0 line numbers decode');
+    assert(r0[7].toString('utf8') === 'fn:x', 'row0 symbolName decodes');
+
+    // Vector: int16 dim, int16 unused, dim float4 BE
+    const vb = r0[8];
+    assert(vb.readInt16BE(0) === 512, 'vector dimension prefix is 512');
+    assert(vb.readInt16BE(2) === 0, 'vector unused field is 0');
+    assert(vb.length === 4 + 512 * 4, 'vector byte length = 4 + 512*4');
+    let vecOk = true;
+    for (let i = 0; i < 512; i++) {
+      if (vb.readFloatBE(4 + i * 4) !== Math.fround(vec[i])) { vecOk = false; break; }
+    }
+    assert(vecOk, 'every vector component is the exact float32, big-endian');
+
+    assert(parsedRows[1][7] === null, 'row1 null symbolName encodes as -1 length');
+    assert(parsedRows[1][3].readInt32BE(0) === 101, 'row1 chunkIndex = startIndex+1 (101)');
+    assert(parsedRows[1][4].length === 0, 'row1 empty content encodes as zero-length, not NULL');
+  }
+
+  // ── 11. Before/after: the exact regression scenario ───────────────────────
 
   section('Regression: 128-count batching vs token-aware batching');
   {
