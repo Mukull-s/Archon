@@ -1,34 +1,19 @@
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
-import { prisma } from '../config';
+import { from as copyFrom } from 'pg-copy-streams';
+import { prisma, pgPool } from '../config';
 import { embeddingService, EmbeddingMetricsTracker } from './embedding.service';
 
 /**
- * Serializes an embedding to pgvector's text literal.
- *
- * pgvector stores `vector` columns as float32, so we first round to float32
- * (`Math.fround`) and then emit the *shortest* decimal string that round-trips
- * back to that exact float32. This is bit-for-bit lossless against what the
- * database stores, while cutting the wire payload ~1.8x versus emitting JS's
- * full double precision (which pgvector discards anyway).
+ * PostgreSQL binary COPY signature: "PGCOPY\n" + 0xFF + "\r\n" + "\0".
  */
-export function toVectorLiteral(embedding: number[]): string {
-  const parts = new Array<string>(embedding.length);
-  for (let i = 0; i < embedding.length; i++) {
-    const y = Math.fround(embedding[i]);
-    if (!Number.isFinite(y) || y === 0) {
-      parts[i] = '0';
-      continue;
-    }
-    // Shortest precision (1..9 significant digits) that round-trips to this float32.
-    let s = y.toPrecision(9);
-    for (let p = 1; p < 9; p++) {
-      const candidate = y.toPrecision(p);
-      if (Math.fround(Number(candidate)) === y) { s = candidate; break; }
-    }
-    parts[i] = s;
-  }
-  return `[${parts.join(',')}]`;
+const COPY_BINARY_SIGNATURE = Buffer.from([
+  0x50, 0x47, 0x43, 0x4f, 0x50, 0x59, 0x0a, 0xff, 0x0d, 0x0a, 0x00,
+]);
+
+/** INSERT mode: 'copy' (binary COPY, default) or 'insert' (parameterized SQL). */
+function readInsertMode(): 'copy' | 'insert' {
+  return (process.env.EMBEDDING_INSERT_MODE || 'copy').toLowerCase() === 'insert' ? 'insert' : 'copy';
 }
 
 class VectorService {
