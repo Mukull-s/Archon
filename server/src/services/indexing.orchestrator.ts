@@ -64,7 +64,7 @@ export function parseRepositorySummary(raw: string): Record<string, any> {
 export async function performVectorIndexing(
   id: string,
   force = false,
-  options?: { zipPath?: string; isNewAnalysis?: boolean; userId?: string }
+  options?: { zipPath?: string; isNewAnalysis?: boolean; userId?: string; recordReindex?: boolean }
 ): Promise<void> {
   function heapMB() { return Math.round(process.memoryUsage().heapUsed / 1024 / 1024); }
   function logStage(stage: string, durationMs?: number) {
@@ -323,7 +323,6 @@ export async function performVectorIndexing(
 
     const filesToEmbed = scannedFiles.filter(f => changedOrDeletedFiles.has(f.path));
     console.log(`[Indexing] ${scannedFiles.length} total files | ${filesToEmbed.length} changed/new (need embedding) | ${scannedFiles.length - filesToEmbed.length} unchanged`);
-
     if (changedOrDeletedFiles.size > 0 && !force) {
       await prisma.codeChunk.deleteMany({
         where: {
@@ -360,7 +359,9 @@ export async function performVectorIndexing(
     await persistStage('Embedding 0%', { stage: 'embed', chunksTotal: 0 });
 
     // Summary generation runs in parallel with embeddings so it adds no serial
-    // latency, but it is a required gate for completion.
+    // latency, but it is a required gate for completion. On an incremental
+    // re-scan with no changed files, the existing summary is reused so a
+    // no-op re-scan stays cheap.
     let summaryJson: Record<string, any> | null = null;
     let summaryError: any = null;
     const existingSummary = (repoRow as any).aiSummary as Record<string, any> | null;
@@ -584,7 +585,7 @@ export async function performVectorIndexing(
     if (complete && repoRow.userId) {
       if (options?.isNewAnalysis) {
         await entitlementService.recordCodebaseAnalysis(repoRow.userId);
-      } else if (force) {
+      } else if (options?.recordReindex || force) {
         await entitlementService.recordReindex(repoRow.userId, id);
       }
     }
@@ -651,6 +652,7 @@ queueService.registerHandler('VECTOR_INDEX', async (job) => {
   await performVectorIndexing(job.repositoryId, job.payload.force ?? false, {
     zipPath: job.payload.zipPath,
     isNewAnalysis: job.payload.isNewAnalysis ?? false,
+    recordReindex: job.payload.recordReindex ?? false,
     userId: job.userId
   });
 });
