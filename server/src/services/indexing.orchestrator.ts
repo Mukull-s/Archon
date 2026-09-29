@@ -142,17 +142,11 @@ export async function performVectorIndexing(
     }
 
     // ── Stage 0: Commit SHA early-exit ────────────────────────────────────
+    let latestSha: string | undefined;
     if (!force && repoRow.indexingStatus === 'completed' && repoRow.owner && !repoRow.isLocal) {
       try {
-        const token = getPlaintextToken(repoRow.user?.githubToken) || process.env.GITHUB_FALLBACK_TOKEN;
-        const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        const shaRes = await (await import('axios')).default.get(
-          `https://api.github.com/repos/${repoRow.owner}/${repoRow.name}/commits?per_page=1`,
-          { headers, timeout: 8000 }
-        );
-        const latestSha: string = shaRes.data?.[0]?.sha ?? '';
-        const storedSha: string = (repoRow as any).commitSha ?? '';
+        latestSha = await fetchLatestCommitSha(repoRow.owner, repoRow.name, repoRow.user?.githubToken);
+        const storedSha: string = repoRow.commitSha ?? '';
         if (latestSha && storedSha && latestSha === storedSha) {
           console.log(`[Indexing] Repo ${id} is already up-to-date (SHA: ${latestSha.slice(0, 8)}). Skipping.`);
           await prisma.repository.update({
@@ -163,7 +157,6 @@ export async function performVectorIndexing(
         }
         if (latestSha) {
           await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Downloading' } });
-          (repoRow as any)._latestSha = latestSha;
         }
       } catch (shaErr: any) {
         console.warn(`[Indexing] Could not fetch commit SHA (non-fatal): ${shaErr.message}`);
@@ -576,7 +569,6 @@ export async function performVectorIndexing(
     else if (batchesResolved !== totalBatches) failureReasons.push(`${totalBatches - batchesResolved} batch(es) missing`);
     if (!summaryPresent) failureReasons.push(`summary generation failed${summaryError ? ` (${summaryError.message || summaryError})` : ''}`);
 
-    const latestSha = (repoRow as any)._latestSha;
     const embedMetrics = embedTracker.getMetrics();
     const indexingStats = {
       stage: complete ? 'done' : 'failed',
@@ -609,6 +601,9 @@ export async function performVectorIndexing(
             indexingStatus: 'completed',
             indexingProgress: 'Completed',
             indexingStats: indexingStats as any,
+            // Only stamp the indexed SHA on success: a failed run must not
+            // cause the next non-forced scan to early-exit as "up to date".
+            ...(latestSha ? { commitSha: latestSha } : {}),
             ...(summaryJson ? { aiSummary: summaryJson as any } : {})
           }
         : {
@@ -624,12 +619,6 @@ export async function performVectorIndexing(
       } else if (options?.recordReindex || force) {
         await entitlementService.recordReindex(repoRow.userId, id);
       }
-    }
-
-    if (latestSha) {
-      try {
-        await prisma.$executeRaw`UPDATE "Repository" SET "commitSha" = ${latestSha} WHERE id = ${id}`;
-      } catch {}
     }
 
     const totalTime = Date.now() - startTime;
