@@ -39,6 +39,42 @@ export function cleanString(val: string): string {
 }
 
 /**
+ * Fetches the latest commit SHA for a GitHub repository.
+ *
+ * Mirrors `downloadGithubRepo`: prefers the user's token, but retries with the
+ * server fallback token when the user token is expired/revoked (401). Without
+ * this, the commitSha early-exit silently never works for users whose GitHub
+ * token has lapsed.
+ */
+export async function fetchLatestCommitSha(
+  owner: string,
+  repo: string,
+  encryptedUserToken?: string | null
+): Promise<string> {
+  const axios = (await import('axios')).default;
+  const url = `https://api.github.com/repos/${owner}/${repo}/commits?per_page=1`;
+  const userToken = getPlaintextToken(encryptedUserToken) || undefined;
+  const fallbackToken = process.env.GITHUB_FALLBACK_TOKEN;
+
+  const attempt = async (token?: string): Promise<string> => {
+    const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await axios.get(url, { headers, timeout: 8000 });
+    return res.data?.[0]?.sha ?? '';
+  };
+
+  try {
+    return await attempt(userToken);
+  } catch (err: any) {
+    if (err?.response?.status === 401 && fallbackToken && userToken !== fallbackToken) {
+      console.warn('[Indexing] User token rejected for commit SHA; retrying with GITHUB_FALLBACK_TOKEN...');
+      return await attempt(fallbackToken);
+    }
+    throw err;
+  }
+}
+
+/**
  * Parses the LLM's repository-summary response.
  *
  * The model is instructed to return raw JSON; if it returns fenced or prose
