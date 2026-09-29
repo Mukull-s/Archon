@@ -152,8 +152,12 @@ export async function scanPublicRepo(req: Request, res: Response, next: NextFunc
     }
 
     const enqueued = await queueService.enqueue(repository.id, userId, {
-      force: isReindex,
-      isNewAnalysis: !isReindex
+      // Incremental by default: unchanged files are skipped via their content
+      // hash, so re-scanning an unchanged repo is nearly instant. A genuine
+      // rebuild (retry after failure) still passes force:true explicitly.
+      force: false,
+      isNewAnalysis: !isReindex,
+      recordReindex: isReindex
     });
 
     res.status(202).json({
@@ -457,8 +461,11 @@ export async function buildVectorIndex(req: Request, res: Response, next: NextFu
     });
 
     const enqueued = await queueService.enqueue(id as string, userId, {
-      force: true,
-      isNewAnalysis: false
+      // Honor an explicit rebuild request; otherwise re-index incrementally so
+      // unchanged files are not re-embedded.
+      force: force === true,
+      isNewAnalysis: false,
+      recordReindex: true
     });
 
     res.status(202).json({

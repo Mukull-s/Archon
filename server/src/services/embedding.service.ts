@@ -1,5 +1,5 @@
 import { VoyageAIClient } from 'voyageai';
-import { env } from '../config';
+import { env, MAX_CONCURRENT_EMBEDDINGS } from '../config';
 import { AsyncSemaphore } from './concurrency';
 import {
   TokenBatchOptions,
@@ -104,7 +104,7 @@ export class EmbeddingService implements IEmbeddingService {
   private backoffUntil = 0;
   private readonly batchOptions: TokenBatchOptions = readBatchOptionsFromEnv();
 
-  constructor(clientOverride?: VoyageAIClient, maxConcurrency = 2) {
+  constructor(clientOverride?: VoyageAIClient, maxConcurrency = MAX_CONCURRENT_EMBEDDINGS) {
     if (clientOverride) {
       this.client = clientOverride;
     } else {
@@ -121,10 +121,10 @@ export class EmbeddingService implements IEmbeddingService {
       });
     }
 
-    const concurrency = readPositiveIntEnv(
-      'VOYAGE_MAX_CONCURRENCY',
-      readPositiveIntEnv('EMBEDDING_CONCURRENCY', maxConcurrency)
-    );
+    // Outbound concurrency: explicit VOYAGE_MAX_CONCURRENCY wins, otherwise the
+    // shared EMBEDDING_CONCURRENCY setting (default 3). This keeps the
+    // embedding semaphore and the orchestrator's pipeline limiter in sync.
+    const concurrency = readPositiveIntEnv('VOYAGE_MAX_CONCURRENCY', maxConcurrency);
     this.baseConcurrency = concurrency;
     this.semaphore = new AsyncSemaphore(concurrency);
 

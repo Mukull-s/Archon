@@ -5,6 +5,8 @@ export interface IndexingJobPayload {
   force?: boolean;
   zipPath?: string;
   isNewAnalysis?: boolean;
+  /** Record a re-index entitlement even when not force-rebuilding (incremental). */
+  recordReindex?: boolean;
 }
 
 export type JobHandler = (job: {

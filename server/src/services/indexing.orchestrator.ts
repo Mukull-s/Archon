@@ -39,6 +39,42 @@ export function cleanString(val: string): string {
 }
 
 /**
+ * Fetches the latest commit SHA for a GitHub repository.
+ *
+ * Mirrors `downloadGithubRepo`: prefers the user's token, but retries with the
+ * server fallback token when the user token is expired/revoked (401). Without
+ * this, the commitSha early-exit silently never works for users whose GitHub
+ * token has lapsed.
+ */
+export async function fetchLatestCommitSha(
+  owner: string,
+  repo: string,
+  encryptedUserToken?: string | null
+): Promise<string> {
+  const axios = (await import('axios')).default;
+  const url = `https://api.github.com/repos/${owner}/${repo}/commits?per_page=1`;
+  const userToken = getPlaintextToken(encryptedUserToken) || undefined;
+  const fallbackToken = process.env.GITHUB_FALLBACK_TOKEN;
+
+  const attempt = async (token?: string): Promise<string> => {
+    const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await axios.get(url, { headers, timeout: 8000 });
+    return res.data?.[0]?.sha ?? '';
+  };
+
+  try {
+    return await attempt(userToken);
+  } catch (err: any) {
+    if (err?.response?.status === 401 && fallbackToken && userToken !== fallbackToken) {
+      console.warn('[Indexing] User token rejected for commit SHA; retrying with GITHUB_FALLBACK_TOKEN...');
+      return await attempt(fallbackToken);
+    }
+    throw err;
+  }
+}
+
+/**
  * Parses the LLM's repository-summary response.
  *
  * The model is instructed to return raw JSON; if it returns fenced or prose
@@ -64,7 +100,7 @@ export function parseRepositorySummary(raw: string): Record<string, any> {
 export async function performVectorIndexing(
   id: string,
   force = false,
-  options?: { zipPath?: string; isNewAnalysis?: boolean; userId?: string }
+  options?: { zipPath?: string; isNewAnalysis?: boolean; userId?: string; recordReindex?: boolean }
 ): Promise<void> {
   function heapMB() { return Math.round(process.memoryUsage().heapUsed / 1024 / 1024); }
   function logStage(stage: string, durationMs?: number) {
@@ -106,17 +142,11 @@ export async function performVectorIndexing(
     }
 
     // ── Stage 0: Commit SHA early-exit ────────────────────────────────────
+    let latestSha: string | undefined;
     if (!force && repoRow.indexingStatus === 'completed' && repoRow.owner && !repoRow.isLocal) {
       try {
-        const token = getPlaintextToken(repoRow.user?.githubToken) || process.env.GITHUB_FALLBACK_TOKEN;
-        const headers: Record<string, string> = { 'User-Agent': 'Archon-Intelligence-Platform' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        const shaRes = await (await import('axios')).default.get(
-          `https://api.github.com/repos/${repoRow.owner}/${repoRow.name}/commits?per_page=1`,
-          { headers, timeout: 8000 }
-        );
-        const latestSha: string = shaRes.data?.[0]?.sha ?? '';
-        const storedSha: string = (repoRow as any).commitSha ?? '';
+        latestSha = await fetchLatestCommitSha(repoRow.owner, repoRow.name, repoRow.user?.githubToken);
+        const storedSha: string = repoRow.commitSha ?? '';
         if (latestSha && storedSha && latestSha === storedSha) {
           console.log(`[Indexing] Repo ${id} is already up-to-date (SHA: ${latestSha.slice(0, 8)}). Skipping.`);
           await prisma.repository.update({
@@ -127,7 +157,6 @@ export async function performVectorIndexing(
         }
         if (latestSha) {
           await prisma.repository.update({ where: { id }, data: { indexingProgress: 'Downloading' } });
-          (repoRow as any)._latestSha = latestSha;
         }
       } catch (shaErr: any) {
         console.warn(`[Indexing] Could not fetch commit SHA (non-fatal): ${shaErr.message}`);
@@ -323,7 +352,6 @@ export async function performVectorIndexing(
 
     const filesToEmbed = scannedFiles.filter(f => changedOrDeletedFiles.has(f.path));
     console.log(`[Indexing] ${scannedFiles.length} total files | ${filesToEmbed.length} changed/new (need embedding) | ${scannedFiles.length - filesToEmbed.length} unchanged`);
-
     if (changedOrDeletedFiles.size > 0 && !force) {
       await prisma.codeChunk.deleteMany({
         where: {
@@ -360,25 +388,30 @@ export async function performVectorIndexing(
     await persistStage('Embedding 0%', { stage: 'embed', chunksTotal: 0 });
 
     // Summary generation runs in parallel with embeddings so it adds no serial
-    // latency, but it is a required gate for completion.
+    // latency, but it is a required gate for completion. On an incremental
+    // re-scan with no changed files, the existing summary is reused so a
+    // no-op re-scan stays cheap.
     let summaryJson: Record<string, any> | null = null;
     let summaryError: any = null;
-    const summaryPromise = (async () => {
-      try {
-        const fileTree = buildFileTreeString(scannedFiles);
-        const raw = await llmService.generateRepositorySummary({
-          name: repoRow.name,
-          framework,
-          languages: Array.from(languages),
-          fileCount: scannedFiles.length,
-          totalSize,
-          fileTree
-        });
-        summaryJson = parseRepositorySummary(raw);
-      } catch (err) {
-        summaryError = err;
-      }
-    })();
+    const existingSummary = (repoRow as any).aiSummary as Record<string, any> | null;
+    const summaryPromise = (filesToEmbed.length === 0 && existingSummary)
+      ? (async () => { summaryJson = existingSummary; })()
+      : (async () => {
+          try {
+            const fileTree = buildFileTreeString(scannedFiles);
+            const raw = await llmService.generateRepositorySummary({
+              name: repoRow.name,
+              framework,
+              languages: Array.from(languages),
+              fileCount: scannedFiles.length,
+              totalSize,
+              fileTree
+            });
+            summaryJson = parseRepositorySummary(raw);
+          } catch (err) {
+            summaryError = err;
+          }
+        })();
     const embedTracker = embeddingService.createTracker();
     const unchangedChunksCount = force ? 0 : await prisma.codeChunk.count({ where: { repositoryId: id } });
     let totalChunksProcessed = 0;
@@ -536,7 +569,6 @@ export async function performVectorIndexing(
     else if (batchesResolved !== totalBatches) failureReasons.push(`${totalBatches - batchesResolved} batch(es) missing`);
     if (!summaryPresent) failureReasons.push(`summary generation failed${summaryError ? ` (${summaryError.message || summaryError})` : ''}`);
 
-    const latestSha = (repoRow as any)._latestSha;
     const embedMetrics = embedTracker.getMetrics();
     const indexingStats = {
       stage: complete ? 'done' : 'failed',
@@ -569,6 +601,9 @@ export async function performVectorIndexing(
             indexingStatus: 'completed',
             indexingProgress: 'Completed',
             indexingStats: indexingStats as any,
+            // Only stamp the indexed SHA on success: a failed run must not
+            // cause the next non-forced scan to early-exit as "up to date".
+            ...(latestSha ? { commitSha: latestSha } : {}),
             ...(summaryJson ? { aiSummary: summaryJson as any } : {})
           }
         : {
@@ -581,15 +616,9 @@ export async function performVectorIndexing(
     if (complete && repoRow.userId) {
       if (options?.isNewAnalysis) {
         await entitlementService.recordCodebaseAnalysis(repoRow.userId);
-      } else if (force) {
+      } else if (options?.recordReindex || force) {
         await entitlementService.recordReindex(repoRow.userId, id);
       }
-    }
-
-    if (latestSha) {
-      try {
-        await prisma.$executeRaw`UPDATE "Repository" SET "commitSha" = ${latestSha} WHERE id = ${id}`;
-      } catch {}
     }
 
     const totalTime = Date.now() - startTime;
@@ -648,6 +677,7 @@ queueService.registerHandler('VECTOR_INDEX', async (job) => {
   await performVectorIndexing(job.repositoryId, job.payload.force ?? false, {
     zipPath: job.payload.zipPath,
     isNewAnalysis: job.payload.isNewAnalysis ?? false,
+    recordReindex: job.payload.recordReindex ?? false,
     userId: job.userId
   });
 });

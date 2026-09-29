@@ -69,6 +69,7 @@ model Repository {
   indexingProgress String   @default("")
   indexingStats   Json?
   aiSummary       Json?
+  commitSha       String?  // last indexed commit, for up-to-date early exit
   reindexCount    Int      @default(0)
   isArchived      Boolean  @default(false)
   
@@ -80,7 +81,7 @@ model Repository {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   
-  @@index([userId])
+  @@index([userId, updatedAt])
 }
 
 model CodeChunk {
@@ -99,7 +100,8 @@ model CodeChunk {
   
   createdAt    DateTime @default(now())
 
-  @@index([repositoryId])
+  // Supports incremental invalidation/deletion scoped to a repo + file.
+  @@index([repositoryId, filePath])
 }
 
 model ChatMessage {
@@ -111,7 +113,8 @@ model ChatMessage {
   modelUsed    String?  // e.g. "qwen/qwen3-coder:free"
   createdAt    DateTime @default(now())
 
-  @@index([repositoryId])
+  // Supports ordered chat-history retrieval scoped to a repo.
+  @@index([repositoryId, createdAt])
 }
 
 model IndexingJob {
