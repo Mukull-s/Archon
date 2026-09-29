@@ -2,7 +2,7 @@ import { createApp } from './app';
 import { env } from './config';
 import { logger } from './utils';
 import './services/embedding.service';
-import { ensureDatabaseSchema } from './services/schema.service';
+import { ensureDatabaseSchema, ensureIndexes } from './services/schema.service';
 
 
 import { queueService } from './services/queue.service';
@@ -31,6 +31,12 @@ async function bootstrap() {
       logger.info('Durable PostgreSQL indexing queue worker started.');
     }).catch(err => {
       logger.error('Failed to initialize indexing queue worker:', { error: err.message });
+    });
+
+    // Index reconciliation is performance-only, so it runs after the server is
+    // already accepting traffic and never blocks boot.
+    ensureIndexes().catch(err => {
+      logger.warn('Failed to reconcile database indexes', { error: err.message });
     });
   });
 
