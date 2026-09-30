@@ -12,6 +12,16 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_USER_URL = 'https://www.googleapis.com/oauth2/v3/userinfo';
 
 export class AuthService {
+  // Lazily-computed bcrypt hash used only to equalize login timing for
+  // non-existent / OAuth-only accounts. Never matches any real password.
+  private dummyHashPromise: Promise<string> | null = null;
+
+  private getDummyHash(): Promise<string> {
+    if (!this.dummyHashPromise) {
+      this.dummyHashPromise = bcrypt.hash(crypto.randomBytes(24).toString('hex'), 12);
+    }
+    return this.dummyHashPromise;
+  }
 
   // ─────────────────────────────────────────────
   // EMAIL / PASSWORD
@@ -47,22 +57,22 @@ export class AuthService {
   }
 
   async login(input: LoginInput): Promise<{ user: AuthUser; token: string }> {
+    // Normalized failure: unknown email, OAuth-only account, and wrong password
+    // all return the SAME 401 + message. Returning 404 for an unknown email is a
+    // user-enumeration oracle, and naming the provider leaks account existence.
+    const INVALID = 'Invalid email or password';
     const user = await prisma.user.findUnique({ where: { email: input.email } });
 
-    if (!user) {
-      throw new AppError('This email is not registered. Please sign up first.', 404);
-    }
-
-    if (!user.passwordHash) {
-      throw new AppError(
-        `This account uses ${user.provider} login. Please sign in with ${user.provider}.`,
-        401
-      );
+    if (!user || !user.passwordHash) {
+      // Equalize response time with the real bcrypt path so timing does not
+      // reveal whether the account exists.
+      await bcrypt.compare(input.password, await this.getDummyHash()).catch(() => {});
+      throw new AppError(INVALID, 401);
     }
 
     const isValid = await bcrypt.compare(input.password, user.passwordHash);
     if (!isValid) {
-      throw new AppError('Invalid email or password', 401);
+      throw new AppError(INVALID, 401);
     }
 
     const token = this.generateJWT(user.id, user.email, 'email');
@@ -86,16 +96,85 @@ export class AuthService {
   }
 
   // ─────────────────────────────────────────────
+  // OAUTH STATE (CSRF) — signed, time-limited
+  // ─────────────────────────────────────────────
+
+  private oauthStateSecret(): string {
+    return env.OAUTH_STATE_SECRET || env.JWT_SECRET;
+  }
+
+  private signStatePayload(payload: string): string {
+    return crypto.createHmac('sha256', this.oauthStateSecret()).update(payload).digest('hex');
+  }
+
+  /**
+   * Builds `${provider}:${nonce}:${issuedAt}:${hmac}`.
+   * `nonce` carries the client's CSRF token so the SPA can additionally bind the
+   * state to its own session (defense in depth). The HMAC makes the state
+   * unforgeable and the timestamp bounds its lifetime.
+   */
+  createOAuthState(provider: string, nonce?: string): string {
+    const n = nonce && nonce.trim() ? nonce.trim() : crypto.randomBytes(16).toString('hex');
+    const issuedAt = Date.now().toString();
+    const payload = `${provider}:${n}:${issuedAt}`;
+    return `${payload}:${this.signStatePayload(payload)}`;
+  }
+
+  /**
+   * Verifies a state returned by the OAuth provider. Throws 403 on any problem:
+   * missing, malformed, bad signature, expired, or wrong provider.
+   */
+  verifyOAuthState(
+    state: unknown,
+    expectedProvider?: string,
+    ttlMs: number = env.OAUTH_STATE_TTL_MS
+  ): { provider: string; nonce: string } {
+    if (!state || typeof state !== 'string') {
+      throw new AppError('Missing OAuth state parameter', 403, 'OAUTH_STATE_INVALID');
+    }
+    const parts = state.split(':');
+    if (parts.length !== 4) {
+      throw new AppError('Malformed OAuth state parameter', 403, 'OAUTH_STATE_INVALID');
+    }
+    const [provider, nonce, issuedAt, signature] = parts;
+    if (!provider || !nonce || !issuedAt || !signature) {
+      throw new AppError('Malformed OAuth state parameter', 403, 'OAUTH_STATE_INVALID');
+    }
+
+    const expected = this.signStatePayload(`${provider}:${nonce}:${issuedAt}`);
+    const provided = Buffer.from(signature, 'utf8');
+    const computed = Buffer.from(expected, 'utf8');
+    if (provided.length !== computed.length || !crypto.timingSafeEqual(provided, computed)) {
+      throw new AppError('Invalid OAuth state signature', 403, 'OAUTH_STATE_INVALID');
+    }
+
+    const issuedAtMs = parseInt(issuedAt, 10);
+    if (!Number.isFinite(issuedAtMs) || Date.now() - issuedAtMs > ttlMs) {
+      throw new AppError('Expired OAuth state parameter', 403, 'OAUTH_STATE_EXPIRED');
+    }
+
+    if (expectedProvider && provider !== expectedProvider) {
+      throw new AppError('OAuth state provider mismatch', 403, 'OAUTH_STATE_INVALID');
+    }
+
+    return { provider, nonce };
+  }
+
+  // ─────────────────────────────────────────────
   // GITHUB OAUTH
   // ─────────────────────────────────────────────
 
   getGitHubAuthUrl(csrfToken?: string): string {
+    const state = this.createOAuthState('github', csrfToken);
     const params = new URLSearchParams({
       client_id: env.GITHUB_CLIENT_ID,
       redirect_uri: `${env.CLIENT_URL}/auth/callback`,
-      scope: 'read:user user:email repo',
+      // Least privilege: read the user's profile + verified email only.
+      // Public repo ingestion needs no elevated scope; private repos would
+      // require an explicit, disclosed opt-in (not granted by default).
+      scope: 'read:user user:email',
       prompt: 'login',
-      ...(csrfToken ? { state: `github:${csrfToken}` } : {}),
+      state,
     });
     return `https://github.com/login/oauth/authorize?${params.toString()}`;
   }
@@ -183,6 +262,7 @@ export class AuthService {
     if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
       throw new AppError('Google OAuth is not configured on this server.', 501);
     }
+    const state = this.createOAuthState('google', csrfToken);
     const params = new URLSearchParams({
       client_id: env.GOOGLE_CLIENT_ID,
       redirect_uri: `${env.CLIENT_URL}/auth/callback`,
@@ -190,7 +270,7 @@ export class AuthService {
       scope: 'openid email profile',
       access_type: 'offline',
       prompt: 'select_account',
-      ...(csrfToken ? { state: `google:${csrfToken}` } : {}),
+      state,
     });
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
