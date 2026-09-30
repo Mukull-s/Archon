@@ -11,7 +11,8 @@
     "db:ensure": "ts-node --transpile-only scripts/db-ensure.ts",
     "verify:indexing": "ts-node --transpile-only scripts/verify-indexing.ts",
     "verify:gateway": "ts-node --transpile-only scripts/verify-gateway.ts",
-    "verify:indexes": "ts-node --transpile-only scripts/verify-indexes.ts"
+    "verify:indexes": "ts-node --transpile-only scripts/verify-indexes.ts",
+    "verify:phase1": "ts-node --transpile-only scripts/verify-phase1-security.ts"
   },
   "keywords": [
     "archon",
