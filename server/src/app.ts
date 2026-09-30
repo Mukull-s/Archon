@@ -25,8 +25,12 @@ export function createApp(): express.Application {
 
   app.use(cors({
     origin: (origin, callback) => {
+      // Non-browser clients (curl, server-to-server) send no Origin header.
       if (!origin) return callback(null, true);
-      
+
+      // Explicit allowlist ONLY. A pattern like `*.vercel.app` combined with
+      // `credentials: true` would let any Vercel deployment make credentialed
+      // requests, so it must never be used here.
       const allowedOrigins = [
         'http://localhost:5173',
         'http://localhost:5174',
@@ -34,12 +38,12 @@ export function createApp(): express.Application {
         'https://archondev.vercel.app',
         'https://www.archondev.vercel.app',
         env.CLIENT_URL
-      ];
+      ].filter(Boolean);
 
-      const normalizedOrigins = allowedOrigins.map(o => o.replace(/\/$/, ''));
+      const normalizedOrigins = new Set(allowedOrigins.map(o => String(o).replace(/\/$/, '')));
       const normalizedOrigin = origin.replace(/\/$/, '');
 
-      if (normalizedOrigins.includes(normalizedOrigin) || normalizedOrigin.endsWith('.vercel.app')) {
+      if (normalizedOrigins.has(normalizedOrigin)) {
         callback(null, true);
       } else {
         callback(null, false);
