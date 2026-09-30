@@ -4,11 +4,47 @@ import { repoController } from '../controllers';
 import multer from 'multer';
 import os from 'os';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { AppError } from '../utils';
 
 const router = Router();
 
-// Configure multer for temp file uploads
-const upload = multer({ dest: os.tmpdir() });
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
+const ZIP_MIME_TYPES = new Set([
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip',
+  'multipart/x-zip',
+  'application/octet-stream',
+]);
+
+// Temp file uploads: bounded in size/count and restricted to ZIP archives.
+const upload = multer({
+  dest: os.tmpdir(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const isZipName = /\.zip$/i.test(file.originalname || '');
+    const isZipMime = ZIP_MIME_TYPES.has((file.mimetype || '').toLowerCase());
+    if (isZipName || isZipMime) return cb(null, true);
+    cb(new AppError('Only .zip archives are accepted.', 400, 'UNSUPPORTED_FILE_TYPE'));
+  },
+});
+
+/**
+ * Wraps multer so its errors surface as clean 400s instead of 500s
+ * (e.g. the size limit, or a rejected file type).
+ */
+const uploadZip = (req: any, res: any, next: any) => {
+  upload.single('file')(req, res, (err: any) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Uploaded ZIP exceeds the 15MB limit.'
+        : `Upload rejected: ${err.message}`;
+      return next(new AppError(message, 400, 'UPLOAD_REJECTED'));
+    }
+    next(err);
+  });
+};
 
 export const userOrIpKeyGenerator = (req: any): string => {
   if (req.user?.userId) {
@@ -50,7 +86,7 @@ const impactLimiter = rateLimit({
 
 // Scan/Ingest endpoints
 router.post('/scan-url', requireAuth, heavyLimiter, repoController.scanPublicRepo);
-router.post('/scan-upload', requireAuth, heavyLimiter, upload.single('file'), repoController.scanLocalZip);
+router.post('/scan-upload', requireAuth, heavyLimiter, uploadZip, repoController.scanLocalZip);
 
 // Management & details endpoints
 router.get('/', requireAuth, repoController.listUserRepos);
