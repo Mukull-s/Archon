@@ -42,6 +42,13 @@ const envSchema = z.object({
 
   // Encryption (falls back to JWT_SECRET if unset)
   GITHUB_TOKEN_ENCRYPTION_KEY: z.string().default(''),
+
+  // OAuth CSRF state signing (falls back to JWT_SECRET if unset)
+  OAUTH_STATE_SECRET: z.string().default(''),
+  OAUTH_STATE_TTL_MS: z.coerce.number().default(10 * 60 * 1000),
+
+  // Self-service plan changes. Disabled unless explicitly enabled (dev only).
+  ALLOW_PLAN_SELF_SERVICE: z.string().default('false'),
 });
 
 export type Env = z.infer<typeof envSchema>;
