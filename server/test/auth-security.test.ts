@@ -59,8 +59,39 @@ async function runAuthSecurityTests() {
   assert.equal(getPlaintextToken(undefined), null, 'undefined token returns null');
   console.log('   [PASS] Test 4: Backward compatibility verified for legacy and null tokens.\n');
 
+  // --- Test 5: GitHub OAuth scope is least-privilege ---
+  console.log('-> Running Test 5: GitHub OAuth URL requests minimal scope (no `repo`)');
+  process.env.GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'test_client_id';
+  const ghUrl = authService.getGitHubAuthUrl('nonce-123');
+  const ghScope = new URL(ghUrl).searchParams.get('scope') || '';
+  assert.equal(ghScope, 'read:user user:email', 'GitHub OAuth scope must be read:user user:email');
+  assert.equal(/\brepo\b/.test(ghScope), false, 'GitHub OAuth scope must NOT include `repo`');
+  console.log('   [PASS] Test 5: GitHub OAuth scope is read:user user:email (no repo).\n');
+
+  // --- Test 6: OAuth state is signed and verified ---
+  console.log('-> Running Test 6: OAuth state HMAC signing + verification');
+  const state = authService.createOAuthState('github', 'nonce-abc');
+  const verified = authService.verifyOAuthState(state, 'github');
+  assert.equal(verified.provider, 'github');
+  assert.equal(verified.nonce, 'nonce-abc', 'state must carry the client nonce');
+
+  // Missing state must be rejected (this is the previously-exploitable case).
+  assert.throws(() => authService.verifyOAuthState(undefined, 'github'), (e: any) => e.statusCode === 403);
+  assert.throws(() => authService.verifyOAuthState('', 'github'), (e: any) => e.statusCode === 403);
+  // Tampered signature / payload.
+  assert.throws(() => authService.verifyOAuthState(state.slice(0, -1) + 'x', 'github'), (e: any) => e.statusCode === 403);
+  assert.throws(() => authService.verifyOAuthState('github:nonce-abc:1:deadbeef', 'github'), (e: any) => e.statusCode === 403);
+  // Provider mismatch.
+  assert.throws(() => authService.verifyOAuthState(state, 'google'), (e: any) => e.statusCode === 403);
+  // Expired.
+  assert.throws(
+    () => authService.verifyOAuthState(state, 'github', -1),
+    (e: any) => e.statusCode === 403 && e.code === 'OAUTH_STATE_EXPIRED'
+  );
+  console.log('   [PASS] Test 6: OAuth state verified; missing/tampered/mismatched/expired all 403.\n');
+
   console.log('====================================================');
-  console.log('ALL 4 AUTH & TOKEN SECURITY TESTS PASSED!');
+  console.log('ALL 6 AUTH & TOKEN SECURITY TESTS PASSED!');
   console.log('====================================================');
 }
 

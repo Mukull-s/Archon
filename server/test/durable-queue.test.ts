@@ -53,6 +53,7 @@ async function runDurableQueueTests() {
     findFirst: async ({ where }: any) => {
       for (const job of jobsDb.values()) {
         if (where.repositoryId && job.repositoryId !== where.repositoryId) continue;
+        if (where.userId && job.userId !== where.userId) continue;
         if (where.status?.in && !where.status.in.includes(job.status)) continue;
         return job;
       }
@@ -158,6 +159,17 @@ async function runDurableQueueTests() {
     assert.equal(res2.isDuplicate, true, 'isDuplicate flag must be true');
     console.log('   [PASS] Test 2: Idempotent queueing prevented duplicate job creation.\n');
 
+    // --- Test 2b: Cross-user dedup isolation ---
+    console.log('-> Running Test 2b: Dedup is scoped per user (no cross-user suppression)');
+    const resCross = await queue.enqueue('repo-alpha', 'user-bob', { force: false });
+    assert.notEqual(resCross.jobId, res1.jobId, 'Different user must NOT be deduped against another user\u2019s job');
+    assert.equal(resCross.isDuplicate, false, 'Cross-user enqueue must create a distinct job');
+    assert.equal(jobsDb.get(resCross.jobId)?.userId, 'user-bob', 'New job belongs to the requesting user');
+    console.log('   [PASS] Test 2b: Cross-user enqueue created an isolated job (no leak/suppression).\n');
+
+    // Clean up the extra job so later claim tests target res1 deterministically.
+    jobsDb.delete(resCross.jobId);
+
     // --- Test 3: Transactional Claiming with SKIP LOCKED ---
     console.log('-> Running Test 3: Claim job atomically using FOR UPDATE SKIP LOCKED');
     const claimed = await queue.claimJob('worker-node-1', 30000);
@@ -239,7 +251,7 @@ async function runDurableQueueTests() {
     console.log('   [PASS] Test 8: Completed job updated cleanly in database.\n');
 
     console.log('====================================================');
-    console.log('ALL 8 DURABLE QUEUE TESTS PASSED CLEANLY!');
+    console.log('ALL 9 DURABLE QUEUE TESTS PASSED CLEANLY!');
     console.log('====================================================');
   } finally {
     // Restore mocks
