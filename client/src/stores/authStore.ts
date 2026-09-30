@@ -27,7 +27,7 @@ interface AuthState {
   verifyEmailCode: (email: string, code: string) => Promise<void>;
   loginWithEmail: (email: string, password: string) => Promise<void>;
   loginWithOAuth: (provider: 'github' | 'google', mode: 'login' | 'signup') => Promise<void>;
-  handleOAuthCallback: (provider: string, code: string, email?: string, name?: string) => Promise<void>;
+  handleOAuthCallback: (provider: string, code: string, email?: string, name?: string, state?: string) => Promise<void>;
   fetchUser: (silent?: boolean) => Promise<void>;
   logout: () => void;
   hydrate: () => void;
@@ -234,11 +234,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  handleOAuthCallback: async (provider, code, email, name) => {
+  handleOAuthCallback: async (provider, code, email, name, state) => {
     set({ isLoading: true });
     try {
       const mode = localStorage.getItem('auth_oauth_mode') || 'login';
-      const { data } = await api.post('/auth/oauth/callback', { provider, code, mode, email, name });
+      const { data } = await api.post('/auth/oauth/callback', { provider, code, mode, email, name, state });
       const { token, user } = data.data;
 
       localStorage.setItem('archon_token', token);

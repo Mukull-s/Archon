@@ -29,11 +29,17 @@ export default function AuthCallback() {
       return
     }
 
-    // CSRF Token Validation
+    // CSRF Token Validation (defense in depth; the server enforces this too).
     const storedCsrf = localStorage.getItem('oauth_csrf_token')
     const [providerFromState, csrfToken] = (state || '').split(':')
 
-    if (storedCsrf && csrfToken && csrfToken !== storedCsrf) {
+    // Fail closed: a missing state or nonce must NOT be treated as "valid".
+    if (!state || !providerFromState || !csrfToken || !storedCsrf) {
+      setError('Security verification failed. Missing OAuth state.')
+      toast.error('OAuth security check failed. Missing state.')
+      return
+    }
+    if (csrfToken !== storedCsrf) {
       setError('Security verification failed. OAuth CSRF token mismatch.')
       toast.error('OAuth security check failed. CSRF mismatch.')
       return
@@ -42,11 +48,11 @@ export default function AuthCallback() {
     // Clear CSRF token once validated
     localStorage.removeItem('oauth_csrf_token')
 
-    const provider = providerFromState || (window.location.href.includes('google') ? 'google' : 'github')
+    const provider = providerFromState
     const isPopup = window.opener !== null || window.name === 'google_auth' || window.name === 'github_auth' || window.innerWidth < 650
 
-    // Exchange OAuth code directly
-    handleOAuthCallback(provider, code, email, name)
+    // Exchange OAuth code directly (state is re-verified server-side)
+    handleOAuthCallback(provider, code, email, name, state)
       .then(() => {
         setSuccess(true)
         const target = localStorage.getItem('auth_redirect_url') || '/'
