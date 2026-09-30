@@ -89,10 +89,13 @@ export class QueueService {
     payload: IndexingJobPayload = {},
     jobType = 'VECTOR_INDEX'
   ): Promise<{ jobId: string; status: string; isDuplicate: boolean }> {
-    // Check for existing pending or active jobs for this repository
+    // Check for existing pending or active jobs for this repository, scoped to
+    // the caller. Omitting `userId` would let one user's enqueue be deduped
+    // against (and observe) another user's job — an ownership-boundary leak.
     const existingJob = await prisma.indexingJob.findFirst({
       where: {
         repositoryId,
+        userId,
         status: { in: ['pending', 'processing'] }
       },
       orderBy: { createdAt: 'desc' }
