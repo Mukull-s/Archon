@@ -4,13 +4,24 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/Archonlogo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Archon — Your AI Codebase Co-Pilot</title>
-    <meta name="description" content="Paste a GitHub link. Archon ingests the entire repository, builds a knowledge graph, and becomes an expert you can ask anything." />
 
-    <!-- Google Fonts — Clean & Premium -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <title>Archon — codebase intelligence that cites its sources</title>
+    <meta
+      name="description"
+      content="Archon reads a repository with a deterministic AST engine, resolves the import graph, and answers with file-and-line evidence. When it cannot prove an answer, it declines."
+    />
+
+    <!--
+      Fonts are self-hosted (see client/public/fonts and the @font-face rules in
+      src/index.css). This block used to pull Space Grotesk, Inter and JetBrains
+      Mono from Google Fonts — three families the product does not use, fetched
+      over the network on every page load, and one of them (Inter) is explicitly
+      rejected by the design direction. Removing the request removes a blocking
+      third-party round trip before first paint.
+    -->
+
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f4f1e9" />
   </head>
   <body>
     <div id="root"></div>
