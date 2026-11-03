@@ -32,13 +32,13 @@ export const DOC_ARTICLES: Record<string, ArticleContent> = {
     ],
     body: (
       <>
-        <h2 id="problem" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="problem" >
           The Problem It Solves
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           When software engineers clone an unfamiliar codebase or join a new engineering team, they frequently spend days reading through configuration files, deciphering module imports, tracing control flow from API entry points, and asking teammates where specific logic resides.
         </p>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Traditional documentation is usually out-of-date, and generic AI tools often guess without understanding actual repository architecture. Archon replaces guesswork with verified static analysis combined with semantic search.
         </p>
 
@@ -46,35 +46,35 @@ export const DOC_ARTICLES: Record<string, ArticleContent> = {
           Archon is designed for developers, architects, and technical reviewers who need to understand complex codebases quickly and accurately.
         </DocCallout>
 
-        <h2 id="inputs" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="inputs" >
           Supported Ingestion Inputs
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon accepts two primary methods to analyze a codebase:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px', marginBottom: '20px' }}>
-          <li><strong style={{ color: '#fff' }}>GitHub Repositories:</strong> Provide the URL of any public or authorized repository (e.g., <code>https://github.com/owner/repo</code>).</li>
-          <li><strong style={{ color: '#fff' }}>Local Project Archives:</strong> Upload a <code>.zip</code> file of your project from disk for quick local analysis.</li>
+        <ul >
+          <li><strong >GitHub Repositories:</strong> Provide the URL of any public or authorized repository (e.g., <code>https://github.com/owner/repo</code>).</li>
+          <li><strong >Local Project Archives:</strong> Upload a <code>.zip</code> file of your project from disk for quick local analysis.</li>
         </ul>
 
-        <h2 id="outputs" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="outputs" >
           What Archon Generates
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Once analyzed, Archon generates an interactive multi-view workspace containing:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px', marginBottom: '20px' }}>
-          <li><strong style={{ color: '#fff' }}>Repository Overview:</strong> Framework classification, language distribution ratios, total lines of code, and auto-detected entry points.</li>
-          <li><strong style={{ color: '#fff' }}>Architecture Decomposition:</strong> Separation into architectural layers (Controllers, Services, Models, Utilities, UI).</li>
-          <li><strong style={{ color: '#fff' }}>Interactive Dependency Graph:</strong> File-to-file import relationships with circular dependency detection.</li>
-          <li><strong style={{ color: '#fff' }}>Trace Flow Chains:</strong> Visual execution paths demonstrating how data flows from entry routes down through business logic.</li>
-          <li><strong style={{ color: '#fff' }}>Codebase AI Assistant:</strong> Context-grounded technical Q&amp;A with cited file references.</li>
+        <ul >
+          <li><strong >Repository Overview:</strong> Framework classification, language distribution ratios, total lines of code, and auto-detected entry points.</li>
+          <li><strong >Architecture Decomposition:</strong> Separation into architectural layers (Controllers, Services, Models, Utilities, UI).</li>
+          <li><strong >Interactive Dependency Graph:</strong> File-to-file import relationships with circular dependency detection.</li>
+          <li><strong >Trace Flow Chains:</strong> Visual execution paths demonstrating how data flows from entry routes down through business logic.</li>
+          <li><strong >Codebase AI Assistant:</strong> Context-grounded technical Q&amp;A with cited file references.</li>
         </ul>
 
-        <h2 id="philosophy" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="philosophy" >
           Core Engineering Philosophy
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon prioritizes <em>deterministic analysis first</em>, then layers AI on top. The system computes concrete dependencies and call relationships through compiler parsing, then provides this verified context to the AI model to guarantee reliable, hallucination-free explanations.
         </p>
       </>
@@ -93,66 +93,61 @@ export const DOC_ARTICLES: Record<string, ArticleContent> = {
     ],
     body: (
       <>
-        <h2 id="mental-model" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="mental-model" >
           The Mental Model
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Many AI developer tools treat code simply as plain text. However, software projects are structured, hierarchical, and deeply interconnected.
         </p>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon models your codebase as an interconnected graph of symbols and dependencies. Before generating answers, Archon parses source code into an Abstract Syntax Tree (AST), identifies functions and classes, and maps out import connections.
         </p>
 
         <IndexingPipelineDiagram />
 
-        <h2 id="pipeline-stages" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="pipeline-stages" >
           The Analysis Workflow
         </h2>
-        <ol style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px', marginBottom: '20px' }}>
-          <li><strong style={{ color: '#fff' }}>Ingestion &amp; Filtering:</strong> Archon reads your project archive and excludes non-source directories (such as lockfiles, build outputs, and node dependencies).</li>
-          <li><strong style={{ color: '#fff' }}>AST Parsing:</strong> Source files are parsed at the compiler level to extract functions, classes, exports, and import declarations.</li>
-          <li><strong style={{ color: '#fff' }}>Dependency Graphing:</strong> Module imports are resolved into a directed graph, automatically identifying circular import chains.</li>
-          <li><strong style={{ color: '#fff' }}>Semantic Vectorization:</strong> Code is organized along logical symbol boundaries and converted into code-specialized embeddings.</li>
-          <li><strong style={{ color: '#fff' }}>Interactive Workspace:</strong> The resulting knowledge base is loaded into an interactive visual workspace for rapid exploration.</li>
+        <ol >
+          <li><strong >Ingestion &amp; Filtering:</strong> Archon reads your project archive and excludes non-source directories (such as lockfiles, build outputs, and node dependencies).</li>
+          <li><strong >AST Parsing:</strong> Source files are parsed at the compiler level to extract functions, classes, exports, and import declarations.</li>
+          <li><strong >Dependency Graphing:</strong> Module imports are resolved into a directed graph, automatically identifying circular import chains.</li>
+          <li><strong >Semantic Vectorization:</strong> Code is organized along logical symbol boundaries and converted into code-specialized embeddings.</li>
+          <li><strong >Interactive Workspace:</strong> The resulting knowledge base is loaded into an interactive visual workspace for rapid exploration.</li>
         </ol>
 
-        <h2 id="deterministic-vs-probabilistic" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="deterministic-vs-probabilistic" >
           Static Verification + AI Assistance
         </h2>
-        <div style={{
-          overflowX: 'auto',
-          margin: '20px 0',
-          border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: '8px',
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+        <div >
+          <table >
             <thead>
-              <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                <th style={{ padding: '12px 16px', color: '#fff' }}>Capability</th>
-                <th style={{ padding: '12px 16px', color: '#fff' }}>Methodology</th>
-                <th style={{ padding: '12px 16px', color: '#fff' }}>Advantage</th>
+              <tr >
+                <th >Capability</th>
+                <th >Methodology</th>
+                <th >Advantage</th>
               </tr>
             </thead>
-            <tbody style={{ color: '#a1a1aa' }}>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Imports &amp; Cycles</td>
-                <td style={{ padding: '12px 16px' }}>Compiler AST + Graph Algorithms</td>
-                <td style={{ padding: '12px 16px', color: '#4ade80' }}>100% Deterministic &amp; Exact</td>
+            <tbody >
+              <tr >
+                <td >Imports &amp; Cycles</td>
+                <td >Compiler AST + Graph Algorithms</td>
+                <td >100% Deterministic &amp; Exact</td>
               </tr>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Impact &amp; Risk</td>
-                <td style={{ padding: '12px 16px' }}>Centrality &amp; Dependency Traversal</td>
-                <td style={{ padding: '12px 16px', color: '#4ade80' }}>Calculated Blast Radius</td>
+              <tr >
+                <td >Impact &amp; Risk</td>
+                <td >Centrality &amp; Dependency Traversal</td>
+                <td >Calculated Blast Radius</td>
               </tr>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Code Retrieval</td>
-                <td style={{ padding: '12px 16px' }}>Code-specialized Semantic Vectors</td>
-                <td style={{ padding: '12px 16px', color: '#60a5fa' }}>Sub-second Technical Search</td>
+              <tr >
+                <td >Code Retrieval</td>
+                <td >Code-specialized Semantic Vectors</td>
+                <td >Sub-second Technical Search</td>
               </tr>
               <tr>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Technical Q&amp;A</td>
-                <td style={{ padding: '12px 16px' }}>Context-grounded AI synthesis</td>
-                <td style={{ padding: '12px 16px', color: '#c084fc' }}>Accurate answers cited to files</td>
+                <td >Technical Q&amp;A</td>
+                <td >Context-grounded AI synthesis</td>
+                <td >Accurate answers cited to files</td>
               </tr>
             </tbody>
           </table>
@@ -175,49 +170,49 @@ export const DOC_ARTICLES: Record<string, ArticleContent> = {
     ],
     body: (
       <>
-        <h2 id="step-1" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="step-1" >
           1. Access Archon
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Open the Archon web application in your browser.
         </p>
 
-        <h2 id="step-2" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="step-2" >
           2. Authenticate
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Click <strong>Get Started</strong> or <strong>Sign In</strong>. You can sign in using GitHub OAuth, Google OAuth, or standard email verification.
         </p>
 
-        <h2 id="step-3" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="step-3" >
           3. Provide Your Repository
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Paste the URL of any GitHub repository into the input field:
         </p>
         <DocCodeBlock
-          language="text"
-          code="https://github.com/expressjs/express"
-          filename="repository-input"
+ language="text"
+ code="https://github.com/expressjs/express"
+ filename="repository-input"
         />
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Alternatively, click <strong>Upload ZIP</strong> to select a project archive from your computer.
         </p>
 
-        <h2 id="step-4" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="step-4" >
           4. Automatic Analysis
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon will automatically extract files, generate the dependency graph, parse syntax symbols, and create the vector search index. For standard projects, this takes 15–30 seconds.
         </p>
 
-        <h2 id="step-5" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="step-5" >
           5. Explore Your Workspace
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Once processing completes, your interactive workspace opens:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px' }}>
+        <ul >
           <li>Review the <strong>Overview</strong> tab for framework, size, and entry points.</li>
           <li>Check the <strong>Dependency Graph</strong> to visualize architecture.</li>
           <li>Use <strong>AI Chat</strong> to ask specific questions about the code.</li>
@@ -238,31 +233,31 @@ export const DOC_ARTICLES: Record<string, ArticleContent> = {
     ],
     body: (
       <>
-        <h2 id="url-formats" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="url-formats" >
           Supported URL Formats
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           You can paste GitHub repository links in any standard format:
         </p>
         <DocCodeBlock
-          language="text"
-          code={`https://github.com/owner/repo
+ language="text"
+ code={`https://github.com/owner/repo
 https://github.com/owner/repo.git
 github.com/owner/repo
 owner/repo`}
         />
 
-        <h2 id="how-it-connects" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="how-it-connects" >
           How Archon Connects
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon accesses repository source files at the default branch without pulling extraneous git history. This ensures that analysis starts quickly without large download overheads.
         </p>
 
-        <h2 id="rate-limits" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="rate-limits" >
           Rate Limits &amp; Authentication
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Signing in with your GitHub account grants higher API rate limits and enables seamless access to repositories you have permission to view.
         </p>
       </>
@@ -281,35 +276,35 @@ owner/repo`}
     ],
     body: (
       <>
-        <h2 id="preparing-zip" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="preparing-zip" >
           Preparing Your ZIP Archive
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           You can upload any local project by compressing the root folder into a standard <code>.zip</code> file.
         </p>
         <DocCodeBlock
-          language="bash"
-          code="# Example: Zip project folder excluding dependencies
+ language="bash"
+ code="# Example: Zip project folder excluding dependencies
 zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
         />
 
-        <h2 id="exclusions" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="exclusions" >
           Automatic Directory Exclusions
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon automatically ignores common dependency and build folders during processing:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px', marginBottom: '16px' }}>
+        <ul >
           <li>Dependency folders: <code>node_modules</code></li>
           <li>Version control: <code>.git</code></li>
           <li>Build &amp; cache outputs: <code>dist</code>, <code>build</code>, <code>.next</code>, <code>out</code>, <code>coverage</code></li>
           <li>Lockfiles: <code>package-lock.json</code>, <code>yarn.lock</code>, <code>pnpm-lock.yaml</code></li>
         </ul>
 
-        <h2 id="guidelines" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="guidelines" >
           Size Guidelines
         </h2>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px' }}>
+        <ul >
           <li>Maximum archive size: 15 MB uncompressed.</li>
           <li>Maximum file count: up to 400 source files per workspace.</li>
           <li>Non-code binary files (images, videos, compiled binaries) are automatically skipped.</li>
@@ -330,13 +325,13 @@ zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
     ],
     body: (
       <>
-        <h2 id="workspace-layout" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="workspace-layout" >
           The Workspace Layout
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Each repository workspace provides dedicated panels designed for different engineering tasks:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px', marginBottom: '20px' }}>
+        <ul >
           <li><strong>Overview:</strong> Tech stack breakdown, lines of code, and architectural summary.</li>
           <li><strong>Architecture:</strong> Layered view showing separation between Controllers, Services, and Data layers.</li>
           <li><strong>Graph:</strong> Interactive force-directed module dependency visualization.</li>
@@ -344,22 +339,22 @@ zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
           <li><strong>AI Chat:</strong> Intelligent assistant with direct source file citations.</li>
         </ul>
 
-        <h2 id="confidence-metrics" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="confidence-metrics" >
           Confidence Metrics
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           The workspace calculates an empirical Confidence Score based on static verification:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px' }}>
+        <ul >
           <li>AST resolution rate (percentage of source files parsed).</li>
           <li>Dependency resolution density (percentage of module imports successfully resolved).</li>
           <li>Test suite detection (presence of matching test or spec files).</li>
         </ul>
 
-        <h2 id="entry-points" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="entry-points" >
           Entry Points
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon highlights primary application roots and routing files, serving as starting points for trace flow analysis.
         </p>
       </>
@@ -378,24 +373,24 @@ zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
     ],
     body: (
       <>
-        <h2 id="inventory" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="inventory" >
           Codebase Metrics
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           The Overview panel gives you an immediate high-level summary of the project size, total scanned files, and primary architecture patterns.
         </p>
 
-        <h2 id="stack-detection" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="stack-detection" >
           Tech Stack &amp; Frameworks
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon inspects project manifests and import signatures to identify frameworks and key libraries (e.g., React, Express, Next.js, FastAPI, Prisma, Tailwind).
         </p>
 
-        <h2 id="loc-breakdown" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="loc-breakdown" >
           Language Distribution
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           View lines of code and percentage breakdown by programming language across the repository.
         </p>
       </>
@@ -414,15 +409,15 @@ zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
     ],
     body: (
       <>
-        <h2 id="layered-model" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="layered-model" >
           Layered Architecture Model
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Modern software projects generally follow a multi-tier separation of concerns:
         </p>
         <DocCodeBlock
-          language="text"
-          code={`[ Entry Points / Routes ] ➔ (HTTP & API endpoints)
+ language="text"
+ code={`[ Entry Points / Routes ] ➔ (HTTP & API endpoints)
           ↓
 [ Controllers / Handlers ] ➔ (Validation & request flow)
           ↓
@@ -430,21 +425,21 @@ zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
           ↓
 [ Models / Persistence ] ➔ (Database schemas & entities)`}
         />
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon categorizes files into these architectural tiers to help you verify that layer boundaries and architectural guidelines are respected.
         </p>
 
-        <h2 id="domain-modules" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="domain-modules" >
           Module Grouping
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Related files that belong to common functional domains are grouped together, making system modularity clear.
         </p>
 
-        <h2 id="use-cases" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="use-cases" >
           When to Use Architecture View
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Ideal for technical onboarding, architectural audits, and verifying that separation of concerns is maintained.
         </p>
       </>
@@ -463,34 +458,34 @@ zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
     ],
     body: (
       <>
-        <h2 id="nodes-edges" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="nodes-edges" >
           Nodes and Edges
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           The Dependency Graph represents every scanned file as an interactive node:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px', marginBottom: '16px' }}>
-          <li><strong style={{ color: '#fff' }}>Nodes:</strong> Individual source files. Nodes are sized proportionally to how many other files depend on them.</li>
-          <li><strong style={{ color: '#fff' }}>Edges:</strong> Directed connections showing import and usage relationships between modules.</li>
+        <ul >
+          <li><strong >Nodes:</strong> Individual source files. Nodes are sized proportionally to how many other files depend on them.</li>
+          <li><strong >Edges:</strong> Directed connections showing import and usage relationships between modules.</li>
         </ul>
 
-        <h2 id="circular-loops" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="circular-loops" >
           Circular Dependency Detection
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Circular dependencies occur when modules directly or indirectly import each other. These can cause unexpected runtime behavior and bundler complications.
         </p>
 
         <TarjanSCCDiagram />
 
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon flags circular import chains in red on the graph and catalogs them in the workspace panel for review.
         </p>
 
-        <h2 id="centrality" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="centrality" >
           High-Impact Modules
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Files with high incoming dependency counts (e.g. shared utilities, database connections, authentication middleware) represent critical paths where modifications require extra care.
         </p>
       </>
@@ -509,19 +504,19 @@ zip -r my-project.zip ./my-project -x '*/node_modules/*' -x '*/.git/*'"
     ],
     body: (
       <>
-        <h2 id="tracing-concept" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="tracing-concept" >
           Execution Path Tracing
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Trace Flow connects root entry points down through downstream functions, helping you follow how requests and data move through the codebase without stepping through a debugger.
         </p>
 
-        <h2 id="example-trace" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="example-trace" >
           Example Workflow Chain
         </h2>
         <DocCodeBlock
-          language="text"
-          code={`POST /api/orders
+ language="text"
+ code={`POST /api/orders
   ↓
 src/routes/order.routes.ts [Route Definition]
   ↓
@@ -532,10 +527,10 @@ src/services/order.service.ts [Domain Business Logic]
 src/models/order.model.ts [Database Persistence]`}
         />
 
-        <h2 id="dead-code" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="dead-code" >
           Unlinked File Detection
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Files that are never imported across the project and are not entry points or configuration files are flagged as potential dead code.
         </p>
       </>
@@ -554,26 +549,26 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="risk-formula" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="risk-formula" >
           The Risk Model
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon quantifies the impact of modifying any file by evaluating its position in the dependency hierarchy:
         </p>
 
         <RiskScoreFormulaDiagram />
 
-        <h2 id="blast-radius" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="blast-radius" >
           Downstream Blast Radius
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Measures how deep the chain of downstream dependents extends. If file A is used by B, which is used by C, modifying A has a blast radius depth of 2.
         </p>
 
-        <h2 id="in-degree" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="in-degree" >
           Module Centrality
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Direct consumer count. A shared helper or configuration file imported by 25 files has high centrality; any signature change could affect all 25 consumers.
         </p>
       </>
@@ -592,24 +587,24 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="grounded-answers" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="grounded-answers" >
           Context-Grounded Answers
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           When you ask questions in AI Chat, Archon retrieves relevant code snippets and structural context from your repository to answer with precision, avoiding the generic hallucinations common in general-purpose AI tools.
         </p>
 
-        <h2 id="file-citations" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="file-citations" >
           Clickable File Citations
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Whenever the assistant references a specific file in its answer, it renders as a clickable badge so you can inspect the file immediately in your workspace.
         </p>
 
-        <h2 id="sample-queries" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="sample-queries" >
           Useful Query Patterns
         </h2>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px' }}>
+        <ul >
           <li>&ldquo;Where is user session validation handled in the application?&rdquo;</li>
           <li>&ldquo;How does the project configure database connections and connection pooling?&rdquo;</li>
           <li>&ldquo;Trace what happens when a checkout request is processed.&rdquo;</li>
@@ -631,24 +626,24 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="switching-workspaces" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="switching-workspaces" >
           Switching Workspaces
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Your analyzed projects remain saved in your account. You can quickly switch between projects using the repository switcher dropdown in the navigation header or by visiting <strong>My Repositories</strong>.
         </p>
 
-        <h2 id="refreshing-index" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="refreshing-index" >
           Re-Indexing Repositories
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           When new commits are pushed upstream to GitHub, click <strong>Re-index</strong> in the repository header to refresh the dependency graph, symbols, and search index.
         </p>
 
-        <h2 id="managing-storage" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="managing-storage" >
           Workspace Management
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           You can remove old workspaces whenever they are no longer needed. Deleting a workspace removes all cached files and embeddings associated with that project.
         </p>
       </>
@@ -667,26 +662,26 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="pipeline-overview" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="pipeline-overview" >
           Pipeline Architecture
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon coordinates a multi-stage analysis pipeline that progresses through clear stages:
         </p>
 
         <IndexingPipelineDiagram />
 
-        <h2 id="data-sanitization" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="data-sanitization" >
           Data Sanitization &amp; Preparation
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Before parsing, Archon removes non-essential files (such as compiled assets, temporary test runs, and third-party dependencies) to ensure that the resulting workspace focuses purely on the actual application code.
         </p>
 
-        <h2 id="performance" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="performance" >
           Analysis Speed &amp; Throughput
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           By processing files concurrently and using targeted AST extraction rather than complete compiler build steps, typical repositories finish processing in 15 to 45 seconds.
         </p>
       </>
@@ -705,25 +700,25 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="why-ast" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="why-ast" >
           Why Syntax Trees?
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Simple text search and regular expressions cannot reliably distinguish between a real function declaration, a commented-out snippet, or a variable name inside a string literal.
         </p>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           An Abstract Syntax Tree (AST) represents source code the way a compiler understands it: as structured nodes of declarations, parameters, imports, and calls.
         </p>
 
         <ASTDecompositionDiagram />
 
-        <h2 id="symbol-extraction" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="symbol-extraction" >
           Symbol Extraction
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon traverses the syntax tree of each file to catalog:
         </p>
-        <ul style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.8, paddingLeft: '20px' }}>
+        <ul >
           <li>Import and export declarations (both ESM and CommonJS).</li>
           <li>Function signatures and arrow function assignments.</li>
           <li>Classes, methods, and interface definitions.</li>
@@ -744,20 +739,20 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="path-resolution" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="path-resolution" >
           Module Path Resolution
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Codebases employ various import styles: relative paths (<code>./utils</code>), parent traversal (<code>../../config</code>), and path aliases (<code>@/components</code>).
         </p>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon normalizes import targets against the repository file set, constructing a unified module relationship map.
         </p>
 
-        <h2 id="cycle-detection" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="cycle-detection" >
           Circular Import Detection
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon checks the dependency graph for cycles. When two or more modules depend on each other in a loop, Archon highlights them to alert engineers to potential initialization bugs.
         </p>
       </>
@@ -775,17 +770,17 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="boundary-chunking" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="boundary-chunking" >
           Boundary-Aware Chunking
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Splitting code by an arbitrary line count often separates functions from their signatures. Archon segments code along natural syntax boundaries (such as complete functions, classes, or logical code blocks) to maintain technical context.
         </p>
 
-        <h2 id="context-preservation" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="context-preservation" >
           Context Preservation
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Each code chunk retains file context, line boundaries, and symbol metadata so that search queries match the full intent of the code.
         </p>
       </>
@@ -803,17 +798,17 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="embeddings-concept" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="embeddings-concept" >
           Code Vector Representations
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon uses embeddings tailored specifically for code syntax and technical queries. Unlike general conversational models, code embeddings understand programming concepts such as interfaces, error handling, and API endpoints.
         </p>
 
-        <h2 id="instant-retrieval" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="instant-retrieval" >
           Fast Similarity Matching
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Code vectors are indexed to enable rapid cosine similarity search, matching developer questions to relevant source files in milliseconds.
         </p>
       </>
@@ -831,19 +826,19 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="rag-architecture" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="rag-architecture" >
           The Retrieval Flow
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon connects user queries with real repository data using Retrieval-Augmented Generation (RAG):
         </p>
 
         <RAGArchitectureDiagram />
 
-        <h2 id="evidence-grounding" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="evidence-grounding" >
           Evidence-Grounded Explanations
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           By pairing the query with retrieved code snippets and verified import relationships, the AI model produces clear, referenced explanations tied directly to your codebase.
         </p>
       </>
@@ -861,55 +856,50 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="guidelines-table" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="guidelines-table" >
           Repository Size &amp; File Guidelines
         </h2>
-        <div style={{
-          overflowX: 'auto',
-          margin: '20px 0',
-          border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: '8px',
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+        <div >
+          <table >
             <thead>
-              <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                <th style={{ padding: '12px 16px', color: '#fff' }}>Metric</th>
-                <th style={{ padding: '12px 16px', color: '#fff' }}>Supported Limit</th>
-                <th style={{ padding: '12px 16px', color: '#fff' }}>Purpose</th>
+              <tr >
+                <th >Metric</th>
+                <th >Supported Limit</th>
+                <th >Purpose</th>
               </tr>
             </thead>
-            <tbody style={{ color: '#a1a1aa' }}>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Repository Files</td>
-                <td style={{ padding: '12px 16px' }}>Up to 400 source files</td>
-                <td style={{ padding: '12px 16px' }}>Ensures rapid processing under 45 seconds</td>
+            <tbody >
+              <tr >
+                <td >Repository Files</td>
+                <td >Up to 400 source files</td>
+                <td >Ensures rapid processing under 45 seconds</td>
               </tr>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Uncompressed Project Size</td>
-                <td style={{ padding: '12px 16px' }}>Up to 15 MB</td>
-                <td style={{ padding: '12px 16px' }}>Optimized for fast uploads and indexing</td>
+              <tr >
+                <td >Uncompressed Project Size</td>
+                <td >Up to 15 MB</td>
+                <td >Optimized for fast uploads and indexing</td>
               </tr>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Single File Size</td>
-                <td style={{ padding: '12px 16px' }}>Up to 1 MB per file</td>
-                <td style={{ padding: '12px 16px' }}>Excludes large minified bundles</td>
+              <tr >
+                <td >Single File Size</td>
+                <td >Up to 1 MB per file</td>
+                <td >Excludes large minified bundles</td>
               </tr>
               <tr>
-                <td style={{ padding: '12px 16px', color: '#f4f4f5', fontWeight: 500 }}>Vector Index Capacity</td>
-                <td style={{ padding: '12px 16px' }}>Up to 2,000 code chunks</td>
-                <td style={{ padding: '12px 16px' }}>Provides thorough codebase coverage</td>
+                <td >Vector Index Capacity</td>
+                <td >Up to 2,000 code chunks</td>
+                <td >Provides thorough codebase coverage</td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <h2 id="supported-languages" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="supported-languages" >
           Supported Languages
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           <strong>Deep AST Analysis &amp; Module Resolution:</strong> TypeScript (<code>.ts</code>, <code>.tsx</code>), JavaScript (<code>.js</code>, <code>.jsx</code>, <code>.mjs</code>).
         </p>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           <strong>Vector Search &amp; AI Q&amp;A:</strong> Python, Go, Rust, Java, C/C++, SQL, Markdown, JSON, YAML, and HTML/CSS.
         </p>
       </>
@@ -929,31 +919,31 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="read-only" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="read-only" >
           Read-Only Repository Access
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Archon performs read-only analysis. It never creates commits, writes branches, or alters your GitHub repositories.
         </p>
 
-        <h2 id="ephemeral" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="ephemeral" >
           Ephemeral Processing
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Uploaded archives are unpacked in isolated temporary workspaces solely to parse code structures and generate search vectors. Temporary files are removed as soon as processing concludes.
         </p>
 
-        <h2 id="no-ai-training" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="no-ai-training" >
           Zero AI Training on Your Code
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Your code is never used to train public or foundational AI models. Inference requests use commercial APIs with zero-data-retention agreements for API calls.
         </p>
 
-        <h2 id="user-isolation" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="user-isolation" >
           Account Data Isolation
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           Your workspaces and indexed codebases belong exclusively to your user account. Access controls ensure that other users cannot view or query your repositories.
         </p>
       </>
@@ -972,24 +962,24 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="size-limits" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="size-limits" >
           Repository Size Exceeded
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           If an upload is flagged as exceeding file limits, ensure that dependency folders (<code>node_modules</code>) and build artifacts (<code>dist</code>, <code>build</code>) are excluded before creating your ZIP archive.
         </p>
 
-        <h2 id="rate-limits" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="rate-limits" >
           GitHub Rate Limits
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           If you encounter a rate limit message when connecting a public repository, sign in using <strong>Continue with GitHub</strong> on the login page to attach authenticated credentials.
         </p>
 
-        <h2 id="query-tips" style={{ fontSize: '20px', fontWeight: 600, color: '#fff', margin: '32px 0 12px' }}>
+        <h2 id="query-tips" >
           Getting the Most from AI Chat
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '16px' }}>
+        <p >
           For the most accurate answers, ask specific technical questions referencing module names or behaviors (for example, <em>&ldquo;Explain how authentication middleware verifies JWT tokens&rdquo;</em>).
         </p>
       </>
@@ -1009,31 +999,31 @@ src/models/order.model.ts [Database Persistence]`}
     ],
     body: (
       <>
-        <h2 id="faq-1" style={{ fontSize: '18px', fontWeight: 600, color: '#fff', margin: '28px 0 8px' }}>
+        <h2 id="faq-1" >
           Does Archon modify my repository?
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '24px' }}>
+        <p >
           No. Archon operates strictly in read-only mode and never pushes changes or alters your repository files.
         </p>
 
-        <h2 id="faq-2" style={{ fontSize: '18px', fontWeight: 600, color: '#fff', margin: '28px 0 8px' }}>
+        <h2 id="faq-2" >
           Can I analyze private repositories?
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '24px' }}>
+        <p >
           Yes. When you sign in with GitHub OAuth with authorized repo permissions, Archon can access private repositories in your account. You can also upload a local ZIP archive directly.
         </p>
 
-        <h2 id="faq-3" style={{ fontSize: '18px', fontWeight: 600, color: '#fff', margin: '28px 0 8px' }}>
+        <h2 id="faq-3" >
           How fast is repository analysis?
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '24px' }}>
+        <p >
           For typical repositories with up to 400 source files, the entire ingestion, AST extraction, dependency resolution, and search indexing completes in 15 to 45 seconds.
         </p>
 
-        <h2 id="faq-4" style={{ fontSize: '18px', fontWeight: 600, color: '#fff', margin: '28px 0 8px' }}>
+        <h2 id="faq-4" >
           How does Archon detect circular dependencies?
         </h2>
-        <p style={{ color: '#a1a1aa', fontSize: '15px', lineHeight: 1.7, marginBottom: '24px' }}>
+        <p >
           Archon performs graph cycle analysis across resolved import paths to identify any mutual dependencies that form a loop, highlighting them directly on the dependency graph.
         </p>
       </>
