@@ -6,6 +6,17 @@ interface DocCodeBlockProps {
   filename?: string;
 }
 
+/**
+ * Code blocks.
+ *
+ * Code is always printed on the plate, never on paper — it is the one thing in
+ * the system that is a surface rather than a statement. So the block reuses the
+ * Explorer's `.viewer` shell and sits its header on `.viewer__tabs`, which keeps
+ * a README snippet and the product's own code viewer reading as one material.
+ *
+ * The copy affordance is a plate-side ghost button: emerald when the copy
+ * landed, the plate's muted ink when it has not.
+ */
 export default function DocCodeBlock({ language = 'typescript', code, filename }: DocCodeBlockProps) {
   const [copied, setCopied] = useState(false);
 
@@ -20,71 +31,38 @@ export default function DocCodeBlock({ language = 'typescript', code, filename }
   };
 
   return (
-    <div style={{
-      margin: '20px 0',
-      borderRadius: '8px',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-      background: '#0d0d11',
-      overflow: 'hidden',
-    }}>
+    <div className="viewer my-5 rounded-[4px] border border-plate-3">
       {/* Header bar */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '8px 16px',
-        background: 'rgba(255, 255, 255, 0.02)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-        fontSize: '12px',
-        color: '#a1a1aa',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{
-            color: '#71717a',
-            textTransform: 'uppercase',
-            fontSize: '11px',
-            fontWeight: 600,
-            letterSpacing: '0.04em'
-          }}>
-            {language}
-          </span>
+      <div className="viewer__tabs justify-between">
+        <div className="flex min-w-0 items-center">
+          <span className="vtab border-r-0">{language}</span>
           {filename && (
             <>
-              <span style={{ color: '#3f3f46' }}>/</span>
-              <span style={{ color: '#e4e4e7', fontFamily: 'monospace' }}>{filename}</span>
+              <span className="font-mono text-[11px] text-[#4f545e]">/</span>
+              <span className="ml-2 truncate font-mono text-[11px] text-[#e6e9ee]">{filename}</span>
             </>
           )}
         </div>
 
         <button
           onClick={handleCopy}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            background: 'transparent',
-            border: 'none',
-            color: copied ? '#4ade80' : '#a1a1aa',
-            cursor: 'pointer',
-            fontSize: '12px',
-            padding: '3px 8px',
-            borderRadius: '4px',
-            transition: 'all 0.15s ease',
-          }}
+          className={`mr-3 flex items-center gap-1.5 rounded-[3px] border border-transparent px-2 py-1 font-mono text-[11px] transition-colors ${
+            copied ? 'text-mint' : 'text-[#82868f] hover:border-plate-3 hover:text-[#c8cdd6]'
+          }`}
           title="Copy code to clipboard"
         >
           {copied ? (
             <>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
+                <polyline points="20 6 9 17 4 12" />
               </svg>
               <span>Copied</span>
             </>
           ) : (
             <>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
               <span>Copy</span>
             </>
@@ -93,15 +71,8 @@ export default function DocCodeBlock({ language = 'typescript', code, filename }
       </div>
 
       {/* Code body */}
-      <div style={{
-        padding: '16px',
-        overflowX: 'auto',
-        fontSize: '13px',
-        lineHeight: 1.6,
-        color: '#e4e4e7',
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-      }}>
-        <pre style={{ margin: 0 }}>
+      <div className="vcode px-4">
+        <pre className="m-0">
           <code>{code.trim()}</code>
         </pre>
       </div>
