@@ -17,6 +17,15 @@ interface SearchResult {
   type: 'page' | 'section';
 }
 
+/**
+ * The documentation search palette.
+ *
+ * A plate dropped onto a dimmed sheet — the same material as the code viewer,
+ * because a command palette is a tool, not a page. Selection is marked in the
+ * engine's emerald rather than a glow, so the active row is legible without
+ * being lit. An empty result says so in plain words; nothing is invented to
+ * fill the list.
+ */
 export default function DocSearchModal({ isOpen, onClose, onSelectPage }: DocSearchModalProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -114,43 +123,17 @@ export default function DocSearchModal({ isOpen, onClose, onSelectPage }: DocSea
   return (
     <div
       onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        background: 'rgba(0, 0, 0, 0.75)',
-        backdropFilter: 'blur(6px)',
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        paddingTop: '15vh',
-        fontFamily: 'var(--font-sans, system-ui, sans-serif)',
-      }}
+      className="fixed inset-0 z-[9999] flex items-start justify-center bg-black/75 pt-[15vh] backdrop-blur-[6px]"
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: '560px',
-          background: '#121217',
-          border: '1px solid rgba(255, 255, 255, 0.12)',
-          borderRadius: '12px',
-          boxShadow: '0 20px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(176, 38, 255, 0.15)',
-          overflow: 'hidden',
-        }}
+        className="panel panel--plate w-full max-w-[560px] shadow-[0_20px_40px_rgba(0,0,0,0.6)]"
       >
         {/* Search Input Bar */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          padding: '14px 18px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          background: 'rgba(255, 255, 255, 0.02)',
-        }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" strokeWidth="2">
-            <circle cx="11" cy="11" r="8"/>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        <div className="flex items-center gap-3 border-b border-[#2b2e36] px-4 py-3.5">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-none text-[#82868f]">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
             ref={inputRef}
@@ -158,32 +141,17 @@ export default function DocSearchModal({ isOpen, onClose, onSelectPage }: DocSea
             value={query}
             onChange={e => { setQuery(e.target.value); setSelectedIndex(0); }}
             placeholder="Search documentation (e.g., AST, Tarjan, limits, RAG)..."
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: '#fff',
-              fontSize: '15px',
-              fontFamily: 'inherit',
-            }}
+            className="min-w-0 flex-1 border-none bg-transparent font-sans text-[15px] text-[#e6e9ee] outline-none placeholder:text-[#82868f]"
           />
-          <span style={{
-            fontSize: '11px',
-            color: '#71717a',
-            padding: '2px 6px',
-            borderRadius: '4px',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            fontFamily: 'monospace',
-          }}>
+          <span className="flex-none rounded-[3px] border border-[#31353e] px-1.5 py-0.5 font-mono text-[11px] text-[#82868f]">
             ESC
           </span>
         </div>
 
         {/* Results List */}
-        <div style={{ maxHeight: '360px', overflowY: 'auto', padding: '8px' }}>
+        <div className="max-h-[360px] overflow-y-auto p-2">
           {results.length === 0 ? (
-            <div style={{ padding: '32px 16px', textAlign: 'center', color: '#71717a', fontSize: '14px' }}>
+            <div className="px-4 py-8 text-center text-[14px] text-[#82868f]">
               No matching documentation pages found for &ldquo;{query}&rdquo;
             </div>
           ) : (
@@ -197,44 +165,21 @@ export default function DocSearchModal({ isOpen, onClose, onSelectPage }: DocSea
                     onClose();
                   }}
                   onMouseEnter={() => setSelectedIndex(idx)}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    background: isSelected ? 'rgba(176, 38, 255, 0.12)' : 'transparent',
-                    border: isSelected ? '1px solid rgba(176, 38, 255, 0.25)' : '1px solid transparent',
-                    cursor: 'pointer',
-                    transition: 'all 0.1s ease',
-                    marginBottom: '4px',
-                  }}
+                  className={`mb-1 cursor-pointer rounded-[3px] border px-3.5 py-2.5 transition-colors ${
+                    isSelected
+                      ? 'border-emerald/25 bg-emerald/[0.12]'
+                      : 'border-transparent'
+                  }`}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{
-                      fontSize: '13px',
-                      fontWeight: 600,
-                      color: isSelected ? '#fff' : '#e4e4e7',
-                    }}>
+                  <div className="mb-1 flex items-center justify-between gap-3">
+                    <span className={`text-[13px] font-semibold ${isSelected ? 'text-[#f4f1e9]' : 'text-[#e6e9ee]'}`}>
                       {res.title}
                     </span>
-                    <span style={{
-                      fontSize: '11px',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      color: '#a1a1aa',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.03em',
-                    }}>
+                    <span className="flex-none rounded-[3px] border border-[#31353e] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-[#82868f]">
                       {res.category}
                     </span>
                   </div>
-                  <div style={{
-                    fontSize: '12px',
-                    color: isSelected ? '#d4d4d8' : '#71717a',
-                    lineHeight: 1.4,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}>
+                  <div className={`truncate text-[12px] leading-[1.4] ${isSelected ? 'text-[#c8cdd6]' : 'text-[#82868f]'}`}>
                     {res.matchedText}
                   </div>
                 </div>
@@ -244,19 +189,10 @@ export default function DocSearchModal({ isOpen, onClose, onSelectPage }: DocSea
         </div>
 
         {/* Footer shortcuts */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '10px 16px',
-          borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-          background: 'rgba(255, 255, 255, 0.01)',
-          fontSize: '11px',
-          color: '#71717a',
-        }}>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <span><kbd style={{ fontFamily: 'monospace', color: '#a1a1aa' }}>↑↓</kbd> to navigate</span>
-            <span><kbd style={{ fontFamily: 'monospace', color: '#a1a1aa' }}>↵</kbd> to select</span>
+        <div className="flex items-center justify-between border-t border-[#2b2e36] px-4 py-2.5 font-mono text-[11px] text-[#82868f]">
+          <div className="flex gap-3">
+            <span><kbd className="text-[#a8adb6]">↑↓</kbd> to navigate</span>
+            <span><kbd className="text-[#a8adb6]">↵</kbd> to select</span>
           </div>
           <span>Archon Docs Index</span>
         </div>
