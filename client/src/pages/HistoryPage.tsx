@@ -1,872 +1,607 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
-import Navbar from '../components/Navbar';
-import Footer from '../components/sections/Footer';
-import api from '../lib/api';
-import { Button, Badge, Input, Modal, Spinner } from '../components/ui/DesignSystem';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Substrate } from '../components/site/Substrate'
+import { SiteHeader } from '../components/site/SiteHeader'
+import SiteFooter from '../components/site/SiteFooter'
+import api from '../lib/api'
+
+/**
+ * Repository hub.
+ *
+ * The page after sign-in: every codebase you have indexed, what state each is
+ * in, and the four things you can do to one (open, re-index, archive, remove).
+ *
+ * Everything shown is read from `GET /repos`. The four numbers across the top
+ * are computed from that same response, so they can never disagree with the
+ * table below them — and when you have no repositories the page says so
+ * instead of showing four zeroes.
+ */
 
 interface RepoSummary {
-  id: string;
-  name: string;
-  owner: string | null;
-  isLocal: boolean;
-  framework: string | null;
-  languages: string[];
-  fileCount: number;
-  totalSize: number;
-  confidence: number;
-  indexingStatus: string;
-  isArchived?: boolean;
-  reindexCount?: number;
-  createdAt: string;
+  id: string
+  name: string
+  owner: string | null
+  isLocal: boolean
+  framework: string | null
+  languages: string[]
+  fileCount: number
+  totalSize: number
+  confidence: number
+  indexingStatus: string
+  isArchived?: boolean
+  reindexCount?: number
+  createdAt: string
 }
 
-type FilterType = 'all' | 'github' | 'local' | 'high-confidence';
-type ViewMode = 'table' | 'cards';
+type FilterType = 'all' | 'github' | 'local' | 'high-confidence'
+
+/** Map the engine's status strings onto something a person reads. */
+function statusMeta(status: string): { label: string; cls: string } {
+  switch (status) {
+    case 'completed':
+      return { label: 'Indexed', cls: 'st st--ok' }
+    case 'indexing':
+      return { label: 'Indexing', cls: 'st st--live' }
+    case 'structural-ready':
+      return { label: 'Embedding', cls: 'st st--live' }
+    case 'failed':
+      return { label: 'Failed', cls: 'st st--risk' }
+    default:
+      return { label: status || 'Unknown', cls: 'st st--idle' }
+  }
+}
+
+/** Confidence as a band, so the number carries a judgement with it. */
+function confidenceBand(score: number): { label: string; cls: string } {
+  if (score >= 80) return { label: 'High', cls: 'text-emerald' }
+  if (score >= 60) return { label: 'Moderate', cls: 'text-amber' }
+  if (score > 0) return { label: 'Partial', cls: 'text-sig' }
+  return { label: '—', cls: 'text-ink-3' }
+}
+
+function formatSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 KB'
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
+ * Relative time for anything recent, an explicit date past a week.
+ *
+ * Two deliberate choices:
+ *  - `en-GB` rather than the browser default, so the format is the same for
+ *    every reader. `toLocaleDateString(undefined, …)` renders `Nov 3, 2026`
+ *    on a US machine and `3 Nov 2026` on a UK one, which makes screenshots and
+ *    support conversations disagree about what the app showed.
+ *  - "6d ago" rather than a date for the last week, because "when did I index
+ *    this" is a relative question most of the time.
+ */
+function formatRelativeTime(dateStr: string): string {
+  try {
+    const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
+    if (diff < 60) return 'just now'
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+    if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`
+    return new Date(dateStr).toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    })
+  } catch {
+    return dateStr
+  }
+}
 
 export default function HistoryPage() {
-  const navigate = useNavigate();
-  const [repos, setRepos] = useState<RepoSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
-  
-  // Deletion modal state
-  const [repoToDelete, setRepoToDelete] = useState<RepoSummary | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const navigate = useNavigate()
+  const [repos, setRepos] = useState<RepoSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeFilter, setActiveFilter] = useState<FilterType>('all')
 
-  const fetchRepos = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const { data } = await api.get('/repos');
-      setRepos(data.data || []);
-    } catch (err: any) {
-      console.error('Failed to load repositories:', err);
-      const errMsg = err.response?.data?.error?.message || 'Failed to connect to Codebase Registry. Please verify your connection.';
-      setError(errMsg);
-      toast.error(errMsg);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [repoToDelete, setRepoToDelete] = useState<RepoSummary | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  /** False once the component unmounts, so late fetches stop setting state. */
+  const aliveRef = useRef(true)
 
   useEffect(() => {
-    window.scrollTo(0, 0);
-    fetchRepos();
-  }, [fetchRepos]);
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
+
+
+  const fetchRepos = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { data } = await api.get('/repos')
+      if (!aliveRef.current) return
+      setRepos(data.data || [])
+    } catch (err: unknown) {
+      if (!aliveRef.current) return
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message || 'Could not reach the repository registry.'
+      setError(msg)
+      toast.error(msg)
+    } finally {
+      if (aliveRef.current) setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    // Deferred a tick so the fetch (and its `setLoading`) lands after the first
+    // paint rather than forcing a second synchronous render during mount.
+    const t = setTimeout(fetchRepos, 0)
+    return () => clearTimeout(t)
+  }, [fetchRepos])
 
   const handleDelete = async () => {
-    if (!repoToDelete || isDeleting) return;
-    setIsDeleting(true);
+    if (!repoToDelete || isDeleting) return
+    setIsDeleting(true)
     try {
-      await api.delete(`/repos/${repoToDelete.id}`);
-      toast.success(`Repository "${repoToDelete.name}" purged from registry.`);
-      setRepos((prev) => prev.filter((r) => r.id !== repoToDelete.id));
-      setRepoToDelete(null);
-    } catch (err: any) {
-      console.error('Failed to delete repository:', err);
-      const errMsg = err.response?.data?.error?.message || 'Failed to purge repository. Please try again.';
-      toast.error(errMsg);
+      await api.delete(`/repos/${repoToDelete.id}`)
+      toast.success(`Removed ${repoToDelete.owner ? `${repoToDelete.owner}/` : ''}${repoToDelete.name}.`)
+      setRepos((prev) => prev.filter((r) => r.id !== repoToDelete.id))
+      setRepoToDelete(null)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message || 'Could not remove that repository.'
+      toast.error(msg)
     } finally {
-      setIsDeleting(false);
+      setIsDeleting(false)
     }
-  };
+  }
 
-  const handleArchive = async (repoId: string, repoName: string) => {
+  const handleArchive = async (repo: RepoSummary) => {
+    if (busyId) return
+    setBusyId(repo.id)
     try {
-      await api.post(`/repos/${repoId}/archive`);
-      toast.success(`Repository "${repoName}" archived. Active slot freed.`);
-      fetchRepos();
-    } catch (err: any) {
-      const errMsg = err.response?.data?.error?.message || 'Failed to archive repository.';
-      toast.error(errMsg);
+      await api.post(`/repos/${repo.id}/archive`)
+      toast.success(`Archived. One active slot freed.`)
+      await fetchRepos()
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message || 'Could not archive that repository.'
+      toast.error(msg)
+    } finally {
+      setBusyId(null)
     }
-  };
+  }
 
-  const handleUnarchive = async (repoId: string, repoName: string) => {
+  const handleUnarchive = async (repo: RepoSummary) => {
+    if (busyId) return
+    setBusyId(repo.id)
     try {
-      await api.post(`/repos/${repoId}/unarchive`);
-      toast.success(`Repository "${repoName}" activated.`);
-      fetchRepos();
-    } catch (err: any) {
-      const errMsg = err.response?.data?.error?.message || 'Active limit reached. Archive other repos or upgrade to Pro.';
-      toast.error(errMsg);
+      await api.post(`/repos/${repo.id}/unarchive`)
+      toast.success('Reactivated.')
+      await fetchRepos()
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message || 'Active limit reached. Archive another repository first.'
+      toast.error(msg)
+    } finally {
+      setBusyId(null)
     }
-  };
+  }
 
-  const formatSize = (bytes: number) => {
-    if (!bytes || bytes <= 0) return '0 KB';
-    if (bytes < 1024 * 1024) {
-      return `${(bytes / 1024).toFixed(1)} KB`;
-    }
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const formatRelativeTime = (dateStr: string) => {
-    try {
-      const now = new Date();
-      const date = new Date(dateStr);
-      const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-      if (diffInSeconds < 60) return 'Just now';
-      if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
-      if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
-      if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
-      return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-    } catch {
-      return dateStr;
-    }
-  };
-
-  // Telemetry aggregates
+  /* All four header figures come from the same array the table renders, so the
+     summary and the list can never disagree. */
   const telemetry = useMemo(() => {
-    const totalCount = repos.length;
-    const activeCount = repos.filter((r) => !r.isArchived).length;
-    const archivedCount = repos.filter((r) => r.isArchived).length;
-    const totalFiles = repos.reduce((acc, r) => acc + (r.fileCount || 0), 0);
-    const totalBytes = repos.reduce((acc, r) => acc + (r.totalSize || 0), 0);
-    const validConf = repos.filter((r) => r.confidence > 0);
-    const avgConfidence = validConf.length > 0
-      ? Math.round(validConf.reduce((acc, r) => acc + r.confidence, 0) / validConf.length)
-      : 0;
-
+    const active = repos.filter((r) => !r.isArchived)
+    const archived = repos.filter((r) => r.isArchived)
+    const withConfidence = repos.filter((r) => r.confidence > 0)
     return {
-      totalCount,
-      activeCount,
-      archivedCount,
-      totalFiles,
-      totalSize: formatSize(totalBytes),
-      avgConfidence,
-    };
-  }, [repos]);
+      activeCount: active.length,
+      archivedCount: archived.length,
+      totalFiles: repos.reduce((sum, r) => sum + (r.fileCount || 0), 0),
+      totalSize: formatSize(repos.reduce((sum, r) => sum + (r.totalSize || 0), 0)),
+      avgConfidence:
+        withConfidence.length > 0
+          ? Math.round(withConfidence.reduce((s, r) => s + r.confidence, 0) / withConfidence.length)
+          : 0,
+    }
+  }, [repos])
 
-  // Filtered & Searched repos
   const filteredRepos = useMemo(() => {
     return repos.filter((r) => {
-      // 1. Search filter
-      const q = searchQuery.toLowerCase().trim();
+      const q = searchQuery.toLowerCase().trim()
       if (q) {
-        const matchesName = r.name.toLowerCase().includes(q);
-        const matchesOwner = r.owner ? r.owner.toLowerCase().includes(q) : false;
-        const matchesFramework = r.framework ? r.framework.toLowerCase().includes(q) : false;
-        const matchesLang = Array.isArray(r.languages) && r.languages.some((l) => l.toLowerCase().includes(q));
-        if (!matchesName && !matchesOwner && !matchesFramework && !matchesLang) {
-          return false;
-        }
+        const hay = [r.name, r.owner ?? '', r.framework ?? '', ...(r.languages ?? [])]
+          .join(' ')
+          .toLowerCase()
+        if (!hay.includes(q)) return false
       }
+      if (activeFilter === 'github') return !r.isLocal
+      if (activeFilter === 'local') return r.isLocal
+      if (activeFilter === 'high-confidence') return r.confidence >= 80
+      return true
+    })
+  }, [repos, searchQuery, activeFilter])
 
-      // 2. Type filter
-      if (activeFilter === 'github') return !r.isLocal;
-      if (activeFilter === 'local') return r.isLocal;
-      if (activeFilter === 'high-confidence') return r.confidence >= 80;
+  const FILTERS: Array<{ id: FilterType; label: string; count: number }> = [
+    { id: 'all', label: 'All', count: repos.length },
+    { id: 'github', label: 'From GitHub', count: repos.filter((r) => !r.isLocal).length },
+    { id: 'local', label: 'Local archives', count: repos.filter((r) => r.isLocal).length },
+    { id: 'high-confidence', label: 'High confidence', count: repos.filter((r) => r.confidence >= 80).length },
+  ]
 
-      return true;
-    });
-  }, [repos, searchQuery, activeFilter]);
+  const repoLabel = (r: RepoSummary) => (r.owner ? `${r.owner}/${r.name}` : r.name)
 
   return (
-    <div className="min-h-screen bg-bg-base text-text-primary flex flex-col font-sans">
-      <Navbar />
+    <div className="relative min-h-[100dvh] bg-paper text-ink">
+      <Substrate />
+      <div className="relative z-[1]">
+        <SiteHeader />
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 pt-28 pb-16">
-        {/* Top Header & Command Title */}
-        <div className="flex items-start justify-between flex-wrap gap-5 mb-8">
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-elevated border border-border-subtle mb-3">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                Codebase Registry
-              </span>
+        <main className="mx-auto w-full max-w-site px-6 pb-24 pt-14 md:px-10 lg:px-14">
+          {/* ── header ───────────────────────────────────────────────────── */}
+          <div className="flex flex-wrap items-end justify-between gap-6">
+            <div className="max-w-[62ch]">
+              <div className="eyebrow">Repositories</div>
+              <h1 className="mt-4 text-[38px] font-semibold leading-[1.06] tracking-[-0.038em] md:text-[44px]">
+                Every codebase you have <em className="font-serif italic font-normal text-emerald">indexed</em>.
+              </h1>
+              <p className="mt-4 text-[14.5px] leading-[1.65] text-ink-2">
+                Open one to explore it, re-index it after it moves, or archive it to free an active
+                slot. Removing is permanent and takes the index with it.
+              </p>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight text-text-primary mb-2 leading-tight">
-              Repositories & Workspaces
-            </h1>
-            <p className="text-sm text-text-muted max-w-2xl leading-relaxed m-0">
-              Centralized intelligence index of parsed repositories, AST dependency models, and live architecture workspaces.
-            </p>
+            <button type="button" onClick={() => navigate('/')} className="abtn abtn--solid">
+              Index a repository
+              <span aria-hidden="true">→</span>
+            </button>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button
-              variant="primary"
-              size="md"
-              onClick={() => navigate('/')}
-              icon={
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
+          {/* ── summary ──────────────────────────────────────────────────── */}
+          {!loading && !error && repos.length > 0 && (
+            <div className="kmetrics mt-9">
+              <div className="kmetric">
+                <div className="k">Active</div>
+                <div className="v">
+                  {telemetry.activeCount}
+                  <small>of {repos.length}</small>
+                </div>
+                <div className="sub">
+                  {telemetry.archivedCount > 0
+                    ? `${telemetry.archivedCount} archived`
+                    : 'nothing archived'}
+                </div>
+              </div>
+              <div className="kmetric">
+                <div className="k">Files across all</div>
+                <div className="v">{telemetry.totalFiles.toLocaleString()}</div>
+                <div className="sub">parsed into syntax trees</div>
+              </div>
+              <div className="kmetric">
+                <div className="k">Total index size</div>
+                <div className="v">{telemetry.totalSize}</div>
+                <div className="sub">stored repository data</div>
+              </div>
+              <div className="kmetric">
+                <div className="k">Mean confidence</div>
+                <div className="v">
+                  {repos.some((r) => r.confidence > 0) ? telemetry.avgConfidence : '—'}
+                  {repos.some((r) => r.confidence > 0) && <small>/ 100</small>}
+                </div>
+                <div className="sub">deterministic score</div>
+              </div>
+            </div>
+          )}
+
+          {/* ── controls ─────────────────────────────────────────────────── */}
+          {!loading && !error && repos.length > 0 && (
+            <div className="mt-7 flex flex-wrap items-center gap-3">
+              <div className="flex min-w-[240px] flex-1 items-center gap-2 border border-rule-strong bg-paper-2 px-3 py-2">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-none text-ink-3" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
                 </svg>
-              }
-            >
-              Index New Codebase
-            </Button>
-          </div>
-        </div>
-
-        {/* Telemetry Overview Strip */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 mb-8">
-          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-              Active Codebases
-            </span>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-text-primary font-mono">
-                {telemetry.activeCount}
-              </span>
-              <span className="text-xs text-text-muted">
-                active ({telemetry.archivedCount} archived)
-              </span>
-            </div>
-          </div>
-
-          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-              Indexed Files
-            </span>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-text-primary font-mono">
-                {telemetry.totalFiles.toLocaleString()}
-              </span>
-              <span className="text-xs text-text-muted">AST nodes</span>
-            </div>
-          </div>
-
-          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-              Registry Volume
-            </span>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-text-primary font-mono">
-                {telemetry.totalSize}
-              </span>
-              <span className="text-xs text-text-muted">source payload</span>
-            </div>
-          </div>
-
-          <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-4 sm:p-5 flex flex-col gap-1 shadow-sm">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-              Mean Graph Health
-            </span>
-            <div className="flex items-baseline gap-2">
-              <span
-                className={`text-2xl font-bold font-mono ${
-                  telemetry.avgConfidence >= 80 ? 'text-status-success' : 'text-status-warning'
-                }`}
-              >
-                {telemetry.avgConfidence > 0 ? `${telemetry.avgConfidence}%` : 'N/A'}
-              </span>
-              <span className="text-xs text-text-muted">confidence</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Command Control Bar: Search + Filter Pills + View Switcher */}
-        <div className="bg-surface-base/70 border border-border-subtle rounded-xl p-3 sm:px-4 mb-6 flex items-center justify-between flex-wrap gap-3.5 backdrop-blur-md shadow-sm">
-          {/* Search Box */}
-          <div className="relative flex-1 min-w-[260px] max-w-[420px]">
-            <Input
-              type="text"
-              placeholder="Filter by repository name, framework, or language..."
-              aria-label="Filter repositories by name, framework, or language"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              leftIcon={
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <circle cx="11" cy="11" r="8" />
-                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-              }
-              rightIcon={
-                searchQuery ? (
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filter by name, owner, language or framework"
+                  className="min-w-0 flex-1 border-0 bg-transparent font-mono text-[11.5px] text-ink outline-none placeholder:text-ink-3"
+                />
+                {searchQuery && (
                   <button
+                    type="button"
                     onClick={() => setSearchQuery('')}
-                    aria-label="Clear search input"
-                    className="text-text-muted hover:text-text-primary text-xs p-1 cursor-pointer transition-colors"
+                    aria-label="Clear search"
+                    className="flex-none font-mono text-[10px] text-ink-3 hover:text-ink"
                   >
                     ✕
                   </button>
-                ) : undefined
-              }
-            />
-          </div>
+                )}
+              </div>
 
-          {/* Filter Pills */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <button
-              onClick={() => setActiveFilter('all')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer ${
-                activeFilter === 'all'
-                  ? 'bg-surface-elevated text-text-primary border-border-default shadow-xs'
-                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
-              }`}
-            >
-              All Codebases ({repos.length})
-            </button>
-            <button
-              onClick={() => setActiveFilter('github')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-                activeFilter === 'github'
-                  ? 'bg-surface-elevated text-text-primary border-border-default shadow-xs'
-                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
-              }`}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-              </svg>
-              GitHub Sync
-            </button>
-            <button
-              onClick={() => setActiveFilter('local')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-                activeFilter === 'local'
-                  ? 'bg-surface-elevated text-text-primary border-border-default shadow-xs'
-                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
-              }`}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </svg>
-              Local ZIPs
-            </button>
-            <button
-              onClick={() => setActiveFilter('high-confidence')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all cursor-pointer ${
-                activeFilter === 'high-confidence'
-                  ? 'bg-status-success/15 text-status-success border-status-success/30 shadow-xs'
-                  : 'bg-surface-base/40 text-text-muted hover:text-text-primary border-border-subtle/60'
-              }`}
-            >
-              High Confidence (≥80%)
-            </button>
-          </div>
-
-          {/* View Mode Toggle */}
-          <div role="group" aria-label="Layout view selector" className="flex items-center bg-surface-base/60 rounded-lg p-1 border border-border-subtle">
-            <button
-              onClick={() => setViewMode('table')}
-              aria-label="Switch to table view"
-              aria-pressed={viewMode === 'table'}
-              className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                viewMode === 'table'
-                  ? 'bg-surface-elevated text-text-primary shadow-xs'
-                  : 'text-text-muted hover:text-text-primary bg-transparent'
-              }`}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <line x1="3" y1="6" x2="21" y2="6" />
-                <line x1="3" y1="12" x2="21" y2="12" />
-                <line x1="3" y1="18" x2="21" y2="18" />
-              </svg>
-              <span>Table</span>
-            </button>
-            <button
-              onClick={() => setViewMode('cards')}
-              aria-label="Switch to card view"
-              aria-pressed={viewMode === 'cards'}
-              className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                viewMode === 'cards'
-                  ? 'bg-surface-elevated text-text-primary shadow-xs'
-                  : 'text-text-muted hover:text-text-primary bg-transparent'
-              }`}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-              </svg>
-              <span>Cards</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Dynamic Content: Loading / Error / Empty / Table / Cards */}
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 bg-surface-base/40 rounded-xl border border-border-subtle/50 text-center">
-            <Spinner size="lg" className="mb-4 text-accent" />
-            <span className="text-[13px] font-medium text-text-secondary">Querying Codebase Registry...</span>
-            <span className="text-[11px] text-text-muted mt-1">Loading AST graph models and repository summaries</span>
-          </div>
-        ) : error ? (
-          /* Error State */
-          <div className="text-center p-8 sm:p-12 bg-status-error/5 border border-status-error/20 rounded-xl">
-            <div className="w-12 h-12 rounded-xl bg-status-error/10 flex items-center justify-center mx-auto mb-4 text-status-error">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => setActiveFilter(f.id)}
+                    className={`rounded-[3px] border px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.13em] transition-colors ${
+                      activeFilter === f.id
+                        ? 'border-forest bg-forest text-[#f0f6f2]'
+                        : 'border-rule-strong bg-paper-2 text-ink-2 hover:border-ink-3 hover:text-ink'
+                    }`}
+                  >
+                    {f.label}
+                    <span className="ml-1.5 opacity-60">{f.count}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-            <h3 className="text-[17px] font-semibold text-text-primary mb-2">
-              Registry Connection Failed
-            </h3>
-            <p className="text-[13px] text-text-muted max-w-md mx-auto mb-5 leading-relaxed">
-              {error}
-            </p>
-            <Button variant="secondary" size="md" onClick={fetchRepos}>
-              Retry Connection
-            </Button>
-          </div>
-        ) : filteredRepos.length === 0 ? (
-          /* Empty State */
-          <div className="text-center p-12 sm:p-16 bg-surface-base/30 border border-dashed border-border-default rounded-xl">
-            <div className="w-12 h-12 rounded-xl bg-surface-elevated border border-border-subtle flex items-center justify-center mx-auto mb-4 text-text-muted">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-                <circle cx="12" cy="9" r="2" />
-                <path d="M12 11v4" />
-              </svg>
-            </div>
+          )}
 
-            <h3 className="text-[17px] font-semibold text-text-primary mb-2">
-              {searchQuery || activeFilter !== 'all' ? 'No matching codebases found' : 'No Codebases Indexed Yet'}
-            </h3>
-            <p className="text-[13px] text-text-muted max-w-md mx-auto mb-6 leading-relaxed">
-              {searchQuery || activeFilter !== 'all'
-                ? 'No repositories in your registry match the active criteria. Try broadening your search or resetting filters.'
-                : 'Archon indexes your codebase into high-fidelity AST dependency graphs, architectural blast-radius traces, and cognitive reasoning maps.'}
-            </p>
-
-            {searchQuery || activeFilter !== 'all' ? (
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={() => {
-                  setSearchQuery('');
-                  setActiveFilter('all');
-                }}
-              >
-                Reset All Filters
-              </Button>
-            ) : (
-              <Button
-                variant="primary"
-                size="md"
-                onClick={() => navigate('/')}
-              >
-                Index Your First Codebase
-              </Button>
-            )}
-          </div>
-        ) : viewMode === 'table' ? (
-          /* ========================================================================= */
-          /* TABLE VIEW: Dense, startup command-center registry                        */
-          /* ========================================================================= */
-          <div className="bg-surface-base/50 border border-border-subtle rounded-xl overflow-hidden backdrop-blur-md shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-left min-w-[860px]">
-                <thead>
-                  <tr className="border-b border-border-subtle bg-surface-base/60">
-                    <th scope="col" className="py-3 px-5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                      Repository & Source
-                    </th>
-                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                      Architecture
-                    </th>
-                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                      AST Health
-                    </th>
-                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                      Footprint
-                    </th>
-                    <th scope="col" className="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                      Indexed
-                    </th>
-                    <th scope="col" className="py-3 px-5 text-[11px] font-semibold uppercase tracking-wider text-text-muted text-right">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border-subtle/50">
-                  {filteredRepos.map((repo) => (
-                    <tr
-                      key={repo.id}
-                      className="hover:bg-surface-elevated/40 transition-colors duration-150"
-                    >
-                      {/* Repo & Source */}
-                      <td className="py-3.5 px-5">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-md bg-surface-elevated border border-border-subtle flex items-center justify-center text-text-secondary flex-shrink-0">
-                            {repo.isLocal ? (
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="17 8 12 3 7 8" />
-                                <line x1="12" y1="3" x2="12" y2="15" />
-                              </svg>
-                            ) : (
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-                              </svg>
-                            )}
-                          </div>
-
-                          <div>
-                            <Link
-                              to={`/dashboard/${repo.id}`}
-                              className="text-text-primary hover:text-accent text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors no-underline"
-                            >
-                              <span>{repo.owner ? `${repo.owner}/${repo.name}` : repo.name}</span>
-                            </Link>
-                            <div className="flex items-center gap-2 mt-1">
-                              <Badge
-                                variant={
-                                  repo.indexingStatus === 'completed'
-                                    ? 'success'
-                                    : repo.indexingStatus === 'structural-ready'
-                                    ? 'info'
-                                    : repo.indexingStatus === 'indexing'
-                                    ? 'info'
-                                    : 'danger'
-                                }
-                                showDot
-                              >
-                                {repo.indexingStatus === 'completed'
-                                  ? 'Indexed'
-                                  : repo.indexingStatus === 'structural-ready'
-                                  ? 'Indexed (partial)'
-                                  : repo.indexingStatus}
-                              </Badge>
-                              <Badge variant={repo.isArchived ? 'neutral' : 'purple'}>
-                                {repo.isArchived ? 'Archived' : 'Active'}
-                              </Badge>
-                              <span className="text-[11px] text-text-muted font-mono">
-                                {repo.isLocal ? 'local-zip' : 'github'}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Architecture */}
-                      <td className="py-3.5 px-4">
-                        <div className="flex flex-col gap-1">
-                          <span className="text-xs font-medium text-text-secondary">
-                            {repo.framework || 'General Project'}
-                          </span>
-                          {Array.isArray(repo.languages) && repo.languages.length > 0 && (
-                            <div className="flex gap-1 flex-wrap">
-                              {repo.languages.slice(0, 3).map((lang) => (
-                                <span
-                                  key={lang}
-                                  className="text-[10px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted font-mono"
-                                >
-                                  {lang}
-                                </span>
-                              ))}
-                              {repo.languages.length > 3 && (
-                                <span className="text-[10px] text-text-muted">
-                                  +{repo.languages.length - 3}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* AST Health */}
-                      <td className="py-3.5 px-4">
-                        {repo.confidence > 0 ? (
-                          <div className="flex items-center gap-2">
-                            <div className="w-11 h-1 rounded-full bg-surface-elevated overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${
-                                  repo.confidence >= 80 ? 'bg-status-success' : 'bg-status-warning'
-                                }`}
-                                style={{ width: `${repo.confidence}%` }}
-                              />
-                            </div>
-                            <span
-                              className={`text-xs font-semibold font-mono ${
-                                repo.confidence >= 80 ? 'text-status-success' : 'text-status-warning'
-                              }`}
-                            >
-                              {repo.confidence}%
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-text-muted font-mono">–</span>
-                        )}
-                      </td>
-
-                      {/* Footprint */}
-                      <td className="py-3.5 px-4">
-                        <div className="flex flex-col gap-0.5 font-mono">
-                          <span className="text-xs text-text-primary">
-                            {repo.fileCount.toLocaleString()} files
-                          </span>
-                          <span className="text-[11px] text-text-muted">
-                            {formatSize(repo.totalSize)}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Indexed At */}
-                      <td className="py-3.5 px-4">
-                        <span className="text-xs text-text-muted whitespace-nowrap">
-                          {formatRelativeTime(repo.createdAt)}
-                        </span>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="py-3.5 px-5 text-right">
-                        <div className="inline-flex items-center gap-2 justify-end">
-                          <Link
-                            to={`/dashboard/${repo.id}`}
-                            className="px-3 py-1.5 rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-border-subtle hover:border-border-default text-text-primary text-xs font-medium inline-flex items-center gap-1.5 transition-colors no-underline"
-                          >
-                            <span>Launch</span>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                              <line x1="5" y1="12" x2="19" y2="12" />
-                              <polyline points="12 5 19 12 12 19" />
-                            </svg>
-                          </Link>
-
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => repo.isArchived ? handleUnarchive(repo.id, repo.name) : handleArchive(repo.id, repo.name)}
-                            title={repo.isArchived ? `Activate ${repo.name} (uses 1 active slot)` : `Archive ${repo.name} (frees 1 active slot)`}
-                            aria-label={repo.isArchived ? `Activate repository ${repo.name}` : `Archive repository ${repo.name}`}
-                            className={repo.isArchived ? 'text-accent hover:text-accent-hover' : 'text-text-muted hover:text-text-primary'}
-                          >
-                            {repo.isArchived ? 'Activate' : 'Archive'}
-                          </Button>
-
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setRepoToDelete(repo)}
-                            title={`Purge ${repo.name} from registry`}
-                            aria-label={`Delete repository ${repo.name}`}
-                            className="text-text-muted hover:text-status-error hover:bg-status-error/10"
-                            icon={
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                              </svg>
-                            }
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : (
-          /* ========================================================================= */
-          /* CARDS VIEW: Modern telemetry architecture cards                           */
-          /* ========================================================================= */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredRepos.map((repo) => (
-              <div
-                key={repo.id}
-                className="bg-surface-base/50 hover:bg-surface-base/80 border border-border-subtle hover:border-border-default rounded-xl p-5 flex flex-col justify-between transition-all duration-200 backdrop-blur-md shadow-sm hover:shadow-md hover:-translate-y-0.5"
-              >
-                <div>
-                  {/* Top Bar: Source badge + Status pill + timestamp */}
-                  <div className="flex items-center justify-between mb-3.5 gap-2">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/[0.04] border border-border-subtle text-text-primary inline-flex items-center gap-1.5">
-                        {repo.isLocal ? (
-                          <>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                              <polyline points="17 8 12 3 7 8" />
-                              <line x1="12" y1="3" x2="12" y2="15" />
-                            </svg>
-                            ZIP
-                          </>
-                        ) : (
-                          <>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-                            </svg>
-                            GitHub
-                          </>
-                        )}
-                      </span>
-                      <Badge
-                        variant={
-                          repo.indexingStatus === 'completed'
-                            ? 'success'
-                            : repo.indexingStatus === 'structural-ready'
-                            ? 'info'
-                            : repo.indexingStatus === 'indexing'
-                            ? 'info'
-                            : 'danger'
-                        }
-                        showDot
-                      >
-                        {repo.indexingStatus === 'completed'
-                          ? 'Indexed'
-                          : repo.indexingStatus === 'structural-ready'
-                          ? 'Indexed (partial)'
-                          : repo.indexingStatus}
-                      </Badge>
-                      <Badge variant={repo.isArchived ? 'neutral' : 'purple'}>
-                        {repo.isArchived ? 'Archived' : 'Active'}
-                      </Badge>
-                    </div>
-
-                    <span className="text-[11px] text-text-muted">
-                      {formatRelativeTime(repo.createdAt)}
-                    </span>
-                  </div>
-
-                  {/* Title */}
-                  <h3 className="text-[15px] font-semibold text-text-primary mb-1.5 break-words">
-                    <Link
-                      to={`/dashboard/${repo.id}`}
-                      className="text-text-primary hover:text-accent transition-colors no-underline"
-                    >
-                      {repo.owner ? `${repo.owner}/${repo.name}` : repo.name}
-                    </Link>
-                  </h3>
-
-                  {/* Framework & Language Chips */}
-                  <div className="flex items-center gap-1.5 flex-wrap mb-4">
-                    <span className="text-xs font-medium text-text-secondary">
-                      {repo.framework || 'General Project'}
-                    </span>
-                    {Array.isArray(repo.languages) && repo.languages.length > 0 && (
-                      <>
-                        <span className="text-text-muted">•</span>
-                        {repo.languages.slice(0, 3).map((lang) => (
-                          <span
-                            key={lang}
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted font-mono"
-                          >
-                            {lang}
-                          </span>
-                        ))}
-                      </>
-                    )}
-                  </div>
-
-                  {/* Metric Strip */}
-                  <div className="grid grid-cols-3 gap-2 bg-surface-base/40 border border-border-subtle/50 rounded-lg p-2.5 mb-4">
-                    <div>
-                      <span className="text-[10px] text-text-muted uppercase block">Files</span>
-                      <span className="text-[13px] font-semibold text-text-primary font-mono">
-                        {repo.fileCount.toLocaleString()}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-text-muted uppercase block">Payload</span>
-                      <span className="text-[13px] font-semibold text-text-primary font-mono">
-                        {formatSize(repo.totalSize)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-text-muted uppercase block">Confidence</span>
-                      <span
-                        className={`text-[13px] font-semibold font-mono ${
-                          repo.confidence >= 80 ? 'text-status-success' : 'text-status-warning'
-                        }`}
-                      >
-                        {repo.confidence > 0 ? `${repo.confidence}%` : '–'}
-                      </span>
-                    </div>
-                  </div>
+          {/* ── the list ─────────────────────────────────────────────────── */}
+          <div className="mt-6">
+            {loading ? (
+              <div className="panel">
+                <div className="panel__head">
+                  <div className="t">Reading registry</div>
                 </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-2 pt-3.5 border-t border-border-subtle/50">
-                  <Link
-                    to={`/dashboard/${repo.id}`}
-                    className="flex-1 text-center py-2 px-3 text-xs font-semibold rounded-md bg-accent hover:bg-accent-hover text-white inline-flex items-center justify-center gap-1.5 transition-colors no-underline shadow-xs"
-                  >
-                    <span>Launch Workspace</span>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                      <polyline points="12 5 19 12 12 19" />
-                    </svg>
-                  </Link>
-
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => repo.isArchived ? handleUnarchive(repo.id, repo.name) : handleArchive(repo.id, repo.name)}
-                    title={repo.isArchived ? `Activate ${repo.name} (uses 1 active slot)` : `Archive ${repo.name} (frees 1 active slot)`}
-                    aria-label={repo.isArchived ? `Activate repository ${repo.name}` : `Archive repository ${repo.name}`}
-                    className={repo.isArchived ? 'text-accent hover:text-accent-hover' : 'text-text-muted hover:text-text-primary'}
-                  >
-                    {repo.isArchived ? 'Activate' : 'Archive'}
-                  </Button>
-
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => setRepoToDelete(repo)}
-                    aria-label={`Delete repository ${repo.name}`}
-                    title={`Delete repository ${repo.name}`}
-                    icon={
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      </svg>
-                    }
-                  />
+                <div className="flex flex-col">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="flex items-center gap-5 border-b border-rule-2 px-4 py-4 last:border-b-0">
+                      <span className="h-2 w-2 shrink-0 animate-pulse-dot rounded-full bg-rule-strong" />
+                      <span className="h-2.5 w-40 animate-pulse-dot rounded-full bg-rule-2" />
+                      <span className="h-2.5 w-24 animate-pulse-dot rounded-full bg-rule-2" />
+                      <span className="ml-auto h-2.5 w-16 animate-pulse-dot rounded-full bg-rule-2" />
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
+            ) : error ? (
+              <div className="panel mx-auto max-w-[560px]">
+                <div className="panel__head">
+                  <div className="t">Registry unavailable</div>
+                </div>
+                <div className="panel__body">
+                  <p className="text-[13px] leading-[1.65] text-ink-2">{error}</p>
+                  <button type="button" onClick={fetchRepos} className="abtn abtn--ghost mt-4">
+                    Try again
+                  </button>
+                </div>
+              </div>
+            ) : repos.length === 0 ? (
+              /* Empty state: says what to do, not just that there is nothing. */
+              <div className="panel">
+                <div className="panel__body flex flex-col items-start gap-4 px-8 py-12">
+                  <div className="eyebrow">Nothing indexed yet</div>
+                  <h2 className="max-w-[42ch] text-[22px] font-semibold leading-[1.2] tracking-[-0.03em]">
+                    Paste a public GitHub URL and Archon will read every file in it.
+                  </h2>
+                  <p className="max-w-[56ch] text-[13.5px] leading-[1.65] text-ink-2">
+                    Parsing, graph resolution and embedding run in the background. The repository
+                    appears here the moment the index completes — you can watch the five stages on
+                    the analyse page.
+                  </p>
+                  <button type="button" onClick={() => navigate('/')} className="abtn abtn--solid mt-1">
+                    Index your first repository
+                    <span aria-hidden="true">→</span>
+                  </button>
+                </div>
+              </div>
+            ) : filteredRepos.length === 0 ? (
+              <div className="panel">
+                <div className="panel__body flex items-center justify-between gap-4">
+                  <p className="font-mono text-[11px] text-ink-2">
+                    No repository matches that filter.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('')
+                      setActiveFilter('all')
+                    }}
+                    className="abtn abtn--ghost !py-1.5"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="panel">
+                {/* column headers — hidden on small screens */}
+                <div className="hidden grid-cols-[minmax(0,2.2fr)_1fr_0.8fr_0.9fr_auto] gap-5 border-b border-rule bg-paper-3 px-4 py-2.5 md:grid">
+                  {['Repository', 'Indexed state', 'Files', 'Size', ''].map((h, i) => (
+                    <span
+                      key={h + i}
+                      className={`font-mono text-[8.5px] uppercase tracking-[0.16em] text-ink-3 ${
+                        i >= 2 && i <= 3 ? 'text-right' : ''
+                      }`}
+                    >
+                      {h}
+                    </span>
+                  ))}
+                </div>
+
+                {filteredRepos.map((repo) => {
+                  const status = statusMeta(repo.indexingStatus)
+                  const conf = confidenceBand(repo.confidence)
+                  const busy = busyId === repo.id
+
+                  return (
+                    <div
+                      key={repo.id}
+                      className="grid grid-cols-1 items-center gap-4 border-b border-rule-2 px-4 py-3.5 transition-colors last:border-b-0 hover:bg-paper-3 md:grid-cols-[minmax(0,2.2fr)_1fr_0.8fr_0.9fr_auto] md:gap-5"
+                    >
+                      {/* identity */}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="grid h-5 w-5 flex-none place-items-center rounded-[2px] border border-rule bg-paper-3 font-mono text-[7px] font-bold uppercase text-ink-2"
+                            aria-hidden="true"
+                          >
+                            {repo.isLocal ? 'zip' : 'gh'}
+                          </span>
+                          <span className="truncate font-mono text-[12px] font-medium text-ink">
+                            {repoLabel(repo)}
+                          </span>
+                          {repo.isArchived && (
+                            <span className="flex-none font-mono text-[8.5px] uppercase tracking-[0.13em] text-ink-3">
+                              archived
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 pl-7 font-mono text-[9.5px] text-ink-3">
+                          {repo.framework && <span>{repo.framework}</span>}
+                          {Array.isArray(repo.languages) && repo.languages.length > 0 && (
+                            <span>{repo.languages.join(' · ')}</span>
+                          )}
+                          <span>{formatRelativeTime(repo.createdAt)}</span>
+                        </div>
+                      </div>
+
+                      {/* state + confidence */}
+                      <div className="flex items-center gap-3">
+                        <span className={status.cls}>
+                          <i />
+                          {status.label}
+                        </span>
+                        {repo.confidence > 0 && (
+                          <span className={`font-mono text-[11px] ${conf.cls}`}>
+                            {repo.confidence}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* files */}
+                      <div className="font-mono text-[11px] text-ink-2 md:text-right">
+                        {repo.fileCount ? repo.fileCount.toLocaleString() : '—'}
+                      </div>
+
+                      {/* size */}
+                      <div className="font-mono text-[11px] text-ink-2 md:text-right">
+                        {formatSize(repo.totalSize)}
+                      </div>
+
+                      {/* actions */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/dashboard/${repo.id}`)}
+                          className="rounded-[3px] border-[1.5px] border-forest bg-forest px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-[#f0f6f2] transition-colors hover:border-[#0c2a23] hover:bg-[#0c2a23]"
+                        >
+                          Open
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => (repo.isArchived ? handleUnarchive(repo) : handleArchive(repo))}
+                          className="rounded-[3px] border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-2 transition-colors hover:border-ink-3 hover:text-ink disabled:opacity-40"
+                        >
+                          {busy ? '…' : repo.isArchived ? 'Activate' : 'Archive'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRepoToDelete(repo)}
+                          className="rounded-[3px] border border-rule-strong px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-3 transition-colors hover:border-sig hover:text-sig"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+
+                <div className="border-t border-rule bg-paper-3 px-4 py-2.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-3">
+                  Showing {filteredRepos.length} of {repos.length}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </main>
 
-      {/* Confirmation Modal for Permanent Codebase Purge */}
-      <Modal
-        isOpen={Boolean(repoToDelete)}
-        onClose={() => !isDeleting && setRepoToDelete(null)}
-        title="Purge Codebase from Registry"
-        description="Irreversible architectural model removal"
-        maxWidth="md"
-      >
-        {repoToDelete && (
-          <div className="space-y-4 pt-1">
-            <p className="text-[13px] text-text-muted leading-relaxed m-0">
-              Are you sure you want to permanently purge{' '}
-              <strong className="text-text-primary font-semibold">
-                {repoToDelete.owner ? `${repoToDelete.owner}/${repoToDelete.name}` : repoToDelete.name}
-              </strong>
-              ? All indexed AST dependency nodes, vector embeddings, and workspace traces will be completely erased.
-            </p>
+          {/* ── what each action does ────────────────────────────────────── */}
+          {!loading && !error && repos.length > 0 && (
+            <div className="mt-8 grid grid-cols-1 gap-6 border-t border-rule pt-7 md:grid-cols-3">
+              {[
+                { k: 'Archive', v: 'Keeps the index on disk but frees its active slot, so another repository can be indexed at your plan limit.' },
+                { k: 'Remove', v: 'Deletes the repository, its parsed syntax trees and its vector index. This cannot be undone.' },
+                { k: 'Confidence', v: 'The share of the codebase the engine could resolve from syntax and imports. A low score means it read less, not that it guessed more.' },
+              ].map((c) => (
+                <div key={c.k}>
+                  <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-ink-3">{c.k}</div>
+                  <p className="mt-2 text-[12.5px] leading-[1.65] text-ink-2">{c.v}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </main>
 
-            <div className="flex items-center justify-end gap-2.5 pt-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="md"
-                disabled={isDeleting}
-                onClick={() => setRepoToDelete(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                size="md"
-                disabled={isDeleting}
-                isLoading={isDeleting}
-                onClick={handleDelete}
-              >
-                Purge Codebase
-              </Button>
+        <SiteFooter />
+      </div>
+
+      {/* ── remove confirmation ──────────────────────────────────────────────
+          A destructive action gets a real gate, and the gate names the thing it
+          is about to destroy rather than asking a generic "are you sure". */}
+      {repoToDelete && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-[rgba(21,22,26,.42)] px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-title"
+        >
+          <div className="w-full max-w-[440px] border border-ink bg-paper-2 shadow-dossier">
+            <div className="border-b border-rule px-5 py-3">
+              <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-sig">
+                Permanent
+              </div>
+            </div>
+            <div className="px-5 py-5">
+              <h2 id="remove-title" className="text-[17px] font-semibold tracking-[-0.02em]">
+                Remove {repoLabel(repoToDelete)}?
+              </h2>
+              <p className="mt-2.5 text-[13px] leading-[1.6] text-ink-2">
+                Its parsed syntax trees, dependency graph and vector index are deleted with it.
+                You would need to index the repository again from scratch.
+              </p>
+
+              <div className="mt-5 rounded-[3px] border border-rule bg-paper-3 px-3.5 py-3 font-mono text-[10.5px] text-ink-2">
+                <div className="flex justify-between py-0.5">
+                  <span className="text-ink-3">Files indexed</span>
+                  <span>{repoToDelete.fileCount?.toLocaleString() ?? '—'}</span>
+                </div>
+                <div className="flex justify-between py-0.5">
+                  <span className="text-ink-3">Index size</span>
+                  <span>{formatSize(repoToDelete.totalSize)}</span>
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setRepoToDelete(null)}
+                  disabled={isDeleting}
+                  className="abtn abtn--ghost"
+                >
+                  Keep it
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="abtn !border-sig !bg-sig !text-[#fff4f2] hover:!bg-[#c53a24]"
+                >
+                  {isDeleting ? 'Removing…' : 'Remove permanently'}
+                </button>
+              </div>
             </div>
           </div>
-        )}
-      </Modal>
-
-      <Footer />
+        </div>
+      )}
     </div>
-  );
+  )
 }
