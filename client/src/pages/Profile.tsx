@@ -1,921 +1,668 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
-import Navbar from '../components/Navbar';
-import Footer from '../components/sections/Footer';
-import { useAuthStore } from '../stores/authStore';
-import api from '../lib/api';
-import { Button, Card, Badge, FormField, Input, Modal, Spinner } from '../components/ui/DesignSystem';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Substrate } from '../components/site/Substrate'
+import { SiteHeader } from '../components/site/SiteHeader'
+import SiteFooter from '../components/site/SiteFooter'
+import { useAuthStore } from '../stores/authStore'
+import api from '../lib/api'
 
-interface Repo {
-  id: string;
-  name: string;
-  repoUrl: string;
-  branch: string;
-  status: string;
-  isArchived?: boolean;
-  fileCount?: number;
-  createdAt: string;
+/**
+ * Account.
+ *
+ * Organised by what someone came here to do, not by which endpoint the data
+ * came from. There are three jobs on this page and they are in order:
+ *
+ *   1. Am I near a limit?      → the capacity meters
+ *   2. Change something about me → display name, password
+ *   3. Where is my work?        → the repositories, linked out
+ *
+ * No tabs. Tabs hide two thirds of a page this short and make the reader click
+ * to find out whether the thing they want is even here. Everything is on one
+ * scroll instead, separated by rules, with the headings numbered so the order
+ * is legible from the top.
+ *
+ * ── what is deliberately absent ──────────────────────────────────────────
+ * The old settings page offered "default branch", "auto re-index on push" and
+ * "telemetry". The server has no fields for any of them — `PATCH /auth/profile`
+ * accepts a name and an avatar URL and nothing else — so they were written to
+ * localStorage and read by nothing. A control that does nothing is worse than
+ * a control that is missing, so they are gone, and the third section says why.
+ */
+
+interface UsageLimits {
+  displayName?: string
+  name?: string
+  lifetimeAnalyses?: number
+  maxActiveCodebases?: number
+  maxFilesPerRepo?: number
+  maxRepoSizeBytes?: number
+  monthlyAiQuestions?: number
+  monthlyReindexes?: number
 }
-
+interface UsageCounters {
+  lifetimeAnalysesUsed?: number
+  activeCodebases?: number
+  monthlyAiQuestionsUsed?: number
+  monthlyReindexesUsed?: number
+}
 interface UsageData {
-  plan: 'free' | 'pro';
-  limits: {
-    name: string;
-    displayName: string;
-    priceMonthly: number;
-    period: string;
-    tagline: string;
-    lifetimeAnalyses: number;
-    maxActiveCodebases: number;
-    maxFilesPerRepo: number;
-    maxRepoSizeBytes: number;
-    monthlyAiQuestions: number;
-    monthlyReindexes: number;
-    basicArchitecture: boolean;
-    dependencyGraph: boolean;
-    traceFlow: boolean;
-    onboarding: boolean;
-    basicRag: boolean;
-    advancedAnalysis: boolean;
-    fullHistory: boolean;
-    priorityIndexing: boolean;
-  };
-  usage: {
-    lifetimeAnalysesUsed: number;
-    activeCodebases: number;
-    totalCodebases: number;
-    monthlyAiQuestionsUsed: number;
-    monthlyReindexesUsed: number;
-    usagePeriodStart: string;
-  };
+  plan?: string
+  limits?: UsageLimits
+  usage?: UsageCounters
+}
+interface RepoRow {
+  id: string
+  name: string
+  owner: string | null
+  isLocal: boolean
+  fileCount: number
+  confidence: number
+  indexingStatus: string
+  isArchived?: boolean
 }
 
-type TabType = 'entitlements' | 'codebases' | 'account';
-
-export default function ProfilePage() {
-  const { user, logout, fetchUser } = useAuthStore();
-  const navigate = useNavigate();
-
-  const [activeTab, setActiveTab] = useState<TabType>('entitlements');
-
-  // Usage telemetry state
-  const [usageData, setUsageData] = useState<UsageData | null>(null);
-  const [loadingUsage, setLoadingUsage] = useState(true);
-
-  // Repositories state
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [reposLoading, setReposLoading] = useState(true);
-
-  // Profile edit state
-  const [name, setName] = useState(user?.name || '');
-  const [profileSaving, setProfileSaving] = useState(false);
-
-  // Password state
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [pwSaving, setPwSaving] = useState(false);
-
-  // Upgrade modal state
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [upgrading, setUpgrading] = useState(false);
-
-  const fetchUsageMetrics = useCallback(async () => {
-    setLoadingUsage(true);
-    try {
-      const { data } = await api.get('/auth/usage');
-      if (data.success && data.data) {
-        setUsageData(data.data);
-      }
-    } catch (err) {
-      console.error('Failed to load usage metrics:', err);
-    } finally {
-      setLoadingUsage(false);
-    }
-  }, []);
-
-  const fetchRepositories = useCallback(async () => {
-    setReposLoading(true);
-    try {
-      const { data } = await api.get('/repos');
-      const list = Array.isArray(data.data?.repos)
-        ? data.data.repos
-        : Array.isArray(data.data)
-        ? data.data
-        : [];
-      setRepos(list);
-    } catch {
-      setRepos([]);
-    } finally {
-      setReposLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    window.scrollTo(0, 0);
-    if (!user) {
-      navigate('/auth');
-      return;
-    }
-    setName(user.name || '');
-    fetchUsageMetrics();
-    fetchRepositories();
-  }, [user, navigate, fetchUsageMetrics, fetchRepositories]);
-
-  const handleSaveProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) {
-      toast.error('Name cannot be empty.');
-      return;
-    }
-    setProfileSaving(true);
-    try {
-      await api.patch('/auth/profile', { name: name.trim() });
-      await fetchUser();
-      toast.success('Profile updated successfully.');
-    } catch (err: any) {
-      toast.error(err.response?.data?.error?.message || 'Failed to update profile.');
-    } finally {
-      setProfileSaving(false);
-    }
-  };
-
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPassword || newPassword.length < 8) {
-      toast.error('New password must be at least 8 characters.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast.error('Passwords do not match.');
-      return;
-    }
-    setPwSaving(true);
-    try {
-      await api.post('/auth/change-password', { currentPassword, newPassword });
-      toast.success('Password updated successfully.');
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-    } catch (err: any) {
-      toast.error(err.response?.data?.error?.message || 'Failed to change password.');
-    } finally {
-      setPwSaving(false);
-    }
-  };
-
-  const handleUpgradeToArchitect = async () => {
-    setUpgrading(true);
-    try {
-      await api.post('/auth/upgrade', { plan: 'pro' });
-      await fetchUser();
-      await fetchUsageMetrics();
-      toast.success('Welcome to Archon Architect! 10 active codebases and 500 AI questions/mo unlocked.');
-      setShowUpgradeModal(false);
-    } catch (err: any) {
-      toast.error(err.response?.data?.error?.message || 'Failed to upgrade plan.');
-    } finally {
-      setUpgrading(false);
-    }
-  };
-
-  const handleCopyAccountId = () => {
-    if (user?.id) {
-      navigator.clipboard.writeText(user.id);
-      toast.success('Account ID copied to clipboard');
-    }
-  };
-
-  const isArchitect = usageData?.plan === 'pro' || user?.plan === 'pro';
-  const tierDisplayName = isArchitect ? 'Architect' : 'Explorer';
-
-  const joinedDate = user?.createdAt
-    ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : '—';
-
-  const providerName = user?.provider === 'github' ? 'GitHub' : user?.provider === 'google' ? 'Google' : 'Email Auth';
-
-  return (
-    <div className="min-h-screen bg-bg-base text-text-primary flex flex-col">
-      <Navbar />
-
-      <main className="flex-1 max-w-[1080px] mx-auto w-full px-6 pt-[120px] pb-[70px]">
-
-        {/* ── COMMAND HEADER ── */}
-        <section className="relative overflow-hidden rounded-[20px] p-7 sm:p-9 mb-8 border border-white/[0.08] shadow-[0_20px_50px_rgba(0,0,0,0.4)] bg-[radial-gradient(ellipse_70%_50%_at_50%_-20%,rgba(176,38,255,0.12)_0%,rgba(15,12,23,0.6)_100%)]">
-          {/* Subtle top edge glow */}
-          <div className="absolute top-0 left-[10%] right-[10%] h-px bg-gradient-to-r from-transparent via-[#b026ff]/60 to-transparent pointer-events-none" />
-
-          <div className="flex items-center justify-between flex-wrap gap-6">
-            {/* Identity badge */}
-            <div className="flex items-center gap-5">
-              <div
-                className={`w-[74px] h-[74px] rounded-[18px] border-2 border-[#b026ff]/40 shadow-[0_0_24px_rgba(176,38,255,0.25)] flex items-center justify-center overflow-hidden shrink-0 text-[28px] font-extrabold text-white ${
-                  user?.avatarUrl ? 'bg-transparent' : 'bg-gradient-to-br from-[#b026ff] to-[#6366f1]'
-                }`}
-              >
-                {user?.avatarUrl ? (
-                  <img src={user.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                ) : (
-                  (user?.name?.[0] || user?.email?.[0] || '?').toUpperCase()
-                )}
-              </div>
-
-              <div>
-                <div className="flex items-center gap-2.5 mb-1">
-                  <h1 className="text-[24px] font-extrabold tracking-[-0.03em] text-white m-0">
-                    {user?.name || user?.email?.split('@')[0] || 'Developer'}
-                  </h1>
-
-                  {/* Tier pill */}
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tracking-[0.08em] uppercase ${
-                      isArchitect
-                        ? 'bg-gradient-to-r from-[#b026ff]/25 to-[#6366f1]/25 border border-[#b026ff]/50 text-[#e879f9]'
-                        : 'bg-white/[0.06] border border-white/[0.12] text-text-secondary'
-                    }`}
-                  >
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        isArchitect ? 'bg-status-success shadow-[0_0_8px_#22c55e]' : 'bg-text-muted'
-                      }`}
-                    />
-                    {tierDisplayName}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-3.5 text-[13px] text-text-muted">
-                  <span>{user?.email}</span>
-                  <span className="opacity-30">•</span>
-                  <span>{providerName}</span>
-                  <span className="opacity-30">•</span>
-                  <span>Joined {joinedDate}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Header Action Buttons */}
-            <div className="flex items-center gap-3">
-              {!isArchitect ? (
-                <button
-                  type="button"
-                  onClick={() => setShowUpgradeModal(true)}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] bg-gradient-to-r from-[#b026ff] to-[#6366f1] text-white text-[13px] font-semibold cursor-pointer shadow-[0_4px_20px_rgba(176,38,255,0.35)] hover:brightness-110 active:scale-[0.98] transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b026ff] focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
-                >
-                  <span>✦ Upgrade to Architect</span>
-                  <span className="text-[11px] opacity-85">$7.99/mo</span>
-                </button>
-              ) : (
-                <div className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-status-success/10 border border-status-success/30 text-status-success text-[12px] font-semibold">
-                  <span>✓</span>
-                  <span>Architect Subscription Active</span>
-                </div>
-              )}
-
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => { logout(); navigate('/'); }}
-                className="text-text-muted hover:text-text-primary"
-              >
-                Sign Out
-              </Button>
-            </div>
-          </div>
-        </section>
-
-        {/* ── HIGH-DENSITY NAVIGATION TABS ── */}
-        <div role="tablist" className="flex gap-1.5 border-b border-border-subtle mb-8 overflow-x-auto scrollbar-none">
-          {([
-            { id: 'entitlements', label: 'Plan & Telemetry Quotas', badge: tierDisplayName },
-            { id: 'codebases', label: 'Codebase Registry', count: repos.length },
-            { id: 'account', label: 'Account Security' },
-          ] as const).map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => setActiveTab(tab.id)}
-                className={`bg-transparent border-none border-b-2 py-3 px-5 text-[13px] font-semibold cursor-pointer inline-flex items-center gap-2 transition-all -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b026ff] rounded-t-sm whitespace-nowrap ${
-                  isActive
-                    ? 'border-b-[#b026ff] text-text-primary'
-                    : 'border-b-transparent text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                <span>{tab.label}</span>
-                {'badge' in tab && (
-                  <span
-                    className={`text-[10px] px-2 py-0.5 rounded-full ${
-                      isArchitect
-                        ? 'bg-[#b026ff]/20 text-[#e879f9] border border-[#b026ff]/30'
-                        : 'bg-white/[0.06] text-text-muted border border-white/[0.08]'
-                    }`}
-                  >
-                    {tab.badge}
-                  </span>
-                )}
-                {'count' in tab && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/[0.06] text-text-muted">
-                    {tab.count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ── TAB 1: PLAN & TELEMETRY QUOTAS ── */}
-        {activeTab === 'entitlements' && (
-          <div className="flex flex-col gap-7">
-
-            {/* Plan Status Banner */}
-            <div
-              className={`border rounded-2xl p-6 sm:p-7 flex items-center justify-between flex-wrap gap-5 ${
-                isArchitect
-                  ? 'bg-gradient-to-br from-[#b026ff]/[0.08] to-[#6366f1]/[0.04] border-[#b026ff]/25'
-                  : 'bg-surface-base/60 border-border-subtle'
-              }`}
-            >
-              <div>
-                <div className="flex items-center gap-2.5 mb-1.5">
-                  <span
-                    className={`text-[11px] font-bold tracking-[0.1em] uppercase ${
-                      isArchitect ? 'text-[#d946ef]' : 'text-text-muted'
-                    }`}
-                  >
-                    {isArchitect ? 'Active Production Subscription' : 'Base Engineering Plan'}
-                  </span>
-                  <span className="text-[13px] text-text-muted">•</span>
-                  <span className="text-[13px] font-semibold text-text-primary">
-                    {isArchitect ? '$7.99 / month' : '$0 forever'}
-                  </span>
-                </div>
-
-                <h2 className="text-[20px] font-extrabold tracking-[-0.02em] text-text-primary m-0 mb-1.5">
-                  {isArchitect
-                    ? 'Continuous Codebase Intelligence & Living Architecture Maps'
-                    : 'Deep Architecture Exploration for Individual Developers'}
-                </h2>
-                <p className="text-[13px] text-text-secondary m-0 max-w-[640px] leading-relaxed">
-                  {isArchitect
-                    ? 'Your account maintains active AST indexes for up to 10 repositories with deep Blast Radius change impact simulations.'
-                    : 'Analyze standalone codebases and inspect dependency hierarchies with authoritative AST parsing at zero friction.'}
-                </p>
-              </div>
-
-              {!isArchitect ? (
-                <Button
-                  variant="primary"
-                  size="md"
-                  onClick={() => setShowUpgradeModal(true)}
-                  className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 shadow-[0_4px_18px_rgba(176,38,255,0.3)] text-white whitespace-nowrap"
-                >
-                  Upgrade to Architect ($7.99/mo) →
-                </Button>
-              ) : (
-                <div className="text-right">
-                  <div className="text-[12px] text-text-muted">Renewal / Reset Cycle</div>
-                  <div className="text-[13px] font-semibold text-status-success mt-0.5">
-                    Active & In Good Standing
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 4 Bento Quota Gauges */}
-            <div>
-              <div className="flex justify-between items-baseline mb-4">
-                <h3 className="text-[15px] font-bold tracking-[-0.01em] text-text-primary m-0">
-                  Real-Time Resource & Operation Quotas
-                </h3>
-                <span className="text-[12px] text-text-muted">
-                  Authoritative engine telemetry
-                </span>
-              </div>
-
-              {loadingUsage ? (
-                <div className="py-12 text-center text-text-muted text-[13px] bg-surface-base/60 rounded-xl border border-border-subtle flex items-center justify-center gap-2.5">
-                  <Spinner size="sm" />
-                  <span>Querying live entitlement meters...</span>
-                </div>
-              ) : (
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] gap-4">
-                  {/* Gauge 1: Lifetime Analyses */}
-                  <TelemetryCard
-                    label="Codebase Analyses"
-                    used={usageData?.usage.lifetimeAnalysesUsed ?? 0}
-                    limit={usageData?.limits.lifetimeAnalyses ?? 2}
-                    isUnlimited={isArchitect}
-                    unit={isArchitect ? "runs" : "lifetime passes"}
-                    hint={isArchitect ? "Unlimited full repository indexing passes" : "2 free full repository passes included"}
-                  />
-
-                  {/* Gauge 2: Active Codebases */}
-                  <TelemetryCard
-                    label="Active Codebases"
-                    used={usageData?.usage.activeCodebases ?? 0}
-                    limit={usageData?.limits.maxActiveCodebases ?? 1}
-                    unit="simultaneous"
-                    hint="Retains live vector embeddings & AST graph"
-                  />
-
-                  {/* Gauge 3: AI Questions */}
-                  <TelemetryCard
-                    label="AI Reasoning Queries"
-                    used={usageData?.usage.monthlyAiQuestionsUsed ?? 0}
-                    limit={usageData?.limits.monthlyAiQuestions ?? 10}
-                    unit="queries / month"
-                    hint="Deep graph traversals & codebase RAG queries"
-                  />
-
-                  {/* Gauge 4: Monthly Re-indexes */}
-                  <TelemetryCard
-                    label="Codebase Re-indexes"
-                    used={usageData?.usage.monthlyReindexesUsed ?? 0}
-                    limit={usageData?.limits.monthlyReindexes ?? 1}
-                    unit={isArchitect ? "re-indexes / mo" : "re-index / codebase"}
-                    hint={isArchitect ? "30 monthly incremental resynchronizations" : "1 resynchronization per repository"}
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Architecture Capability Matrix */}
-            <div className="bg-surface-base/60 border border-border-subtle rounded-2xl p-6 sm:p-7">
-              <h3 className="text-[15px] font-bold text-text-primary m-0 mb-4">
-                Entitlement Capabilities & Processing Ceilings
-              </h3>
-
-              <div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-4">
-                <CapabilityItem
-                  label="Repository Size Ceiling"
-                  value={isArchitect ? "50 MB" : "15 MB"}
-                  subtext={isArchitect ? "50 MB max uncompressed source" : "15 MB max uncompressed source"}
-                />
-                <CapabilityItem
-                  label="File Count Ceiling"
-                  value={isArchitect ? "2,000 files" : "400 files"}
-                  subtext={isArchitect ? "Scales to large production monoliths" : "Suited for focused libraries/services"}
-                />
-                <CapabilityItem
-                  label="Blast Radius Simulation"
-                  value={isArchitect ? "Enabled ✦" : "Architect Only"}
-                  highlight={isArchitect}
-                  subtext="Simulates cross-module impact of PR changes"
-                />
-                <CapabilityItem
-                  label="Indexing Pipeline"
-                  value={isArchitect ? "Priority Queue" : "Standard Queue"}
-                  highlight={isArchitect}
-                  subtext="Fast-path worker allocation for new commits"
-                />
-              </div>
-
-              {!isArchitect && (
-                <div className="mt-5 pt-4 border-t border-border-subtle/80 flex justify-between items-center flex-wrap gap-3">
-                  <div className="text-[13px] text-text-secondary">
-                    Need to index larger repositories or simulate blast radius impacts?
-                  </div>
-                  <Link
-                    to="/pricing"
-                    className="text-[13px] text-[#c084fc] hover:underline font-semibold no-underline transition-colors"
-                  >
-                    Compare full plan specifications →
-                  </Link>
-                </div>
-              )}
-            </div>
-
-          </div>
-        )}
-
-        {/* ── TAB 2: CODEBASE REGISTRY ── */}
-        {activeTab === 'codebases' && (
-          <div className="flex flex-col gap-5">
-            {/* Header with shortcut to History */}
-            <div className="flex justify-between items-center">
-              <div>
-                <h3 className="text-[16px] font-bold text-text-primary m-0">
-                  Active & Archived Codebases
-                </h3>
-                <p className="text-[13px] text-text-muted mt-0.5 mb-0">
-                  {usageData?.usage.activeCodebases ?? 0} of {usageData?.limits.maxActiveCodebases ?? 1} active slots utilized.
-                </p>
-              </div>
-
-              <Link
-                to="/history"
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-elevated hover:bg-surface-elevated/80 border border-border-subtle text-text-primary text-[12px] font-semibold no-underline transition-colors"
-              >
-                Open Full Registry →
-              </Link>
-            </div>
-
-            {reposLoading ? (
-              <div className="py-10 text-center text-text-muted text-[13px] flex items-center justify-center gap-2.5">
-                <Spinner size="md" />
-                <span>Loading registered repositories...</span>
-              </div>
-            ) : repos.length === 0 ? (
-              <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-12 text-center">
-                <div className="text-[32px] mb-3 opacity-40">📂</div>
-                <h4 className="text-[16px] font-bold text-text-primary m-0 mb-1.5">
-                  No Codebases Registered Yet
-                </h4>
-                <p className="text-[13px] text-text-muted max-w-[380px] mx-auto mb-5">
-                  Analyze a GitHub repository or upload a ZIP archive to generate your first architecture map.
-                </p>
-                <Link
-                  to="/"
-                  className="inline-block px-5 py-2.5 rounded-lg bg-gradient-to-r from-[#b026ff] to-[#6366f1] text-white text-[13px] font-semibold no-underline shadow-[0_4px_16px_rgba(176,38,255,0.3)] hover:brightness-110 transition-all"
-                >
-                  Analyze New Repository
-                </Link>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2.5">
-                {repos.map((repo) => {
-                  const isArchived = Boolean(repo.isArchived);
-                  return (
-                    <div
-                      key={repo.id}
-                      className="flex items-center justify-between p-3.5 sm:p-5 rounded-xl bg-surface-base/80 border border-border-subtle hover:border-border-default transition-colors"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-[14px] font-semibold text-text-primary">
-                            {repo.name}
-                          </span>
-                          {isArchived ? (
-                            <Badge variant="neutral">
-                              Archived
-                            </Badge>
-                          ) : (
-                            <Badge variant="success" showDot>
-                              Active Slot
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="text-[12px] text-text-muted mt-1">
-                          Branch: <span className="text-text-secondary">{repo.branch || 'main'}</span>
-                          {repo.fileCount ? ` • ${repo.fileCount} files` : ''}
-                          {` • Indexed ${new Date(repo.createdAt).toLocaleDateString()}`}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2.5">
-                        <Link
-                          to={`/dashboard/${repo.id}`}
-                          className="px-3.5 py-1.5 rounded-md bg-white/[0.06] hover:bg-white/[0.1] border border-border-subtle text-text-primary text-[12px] font-medium no-underline transition-colors"
-                        >
-                          Open Graph →
-                        </Link>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── TAB 3: ACCOUNT SECURITY ── */}
-        {activeTab === 'account' && (
-          <div className="max-w-[640px] flex flex-col gap-6">
-            {/* Account Identifier & Details Card */}
-            <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4">
-              <div>
-                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
-                  Account Details
-                </h3>
-                <p className="text-[13px] text-text-muted m-0">
-                  Unique workspace identifier and federated identity status.
-                </p>
-              </div>
-
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-lg bg-surface-elevated/40 border border-border-subtle/70">
-                <div className="min-w-0">
-                  <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
-                    Account ID
-                  </div>
-                  <div className="text-[13px] font-mono text-text-secondary truncate select-all">
-                    {user?.id || 'Unknown'}
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleCopyAccountId}
-                  className="shrink-0 text-xs"
-                >
-                  Copy ID
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div className="p-3 rounded-lg bg-surface-elevated/40 border border-border-subtle/70">
-                  <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
-                    Auth Method
-                  </div>
-                  <div className="text-[13px] font-medium text-text-primary capitalize">
-                    {providerName}
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-surface-elevated/40 border border-border-subtle/70">
-                  <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
-                    Account Status
-                  </div>
-                  <div className="text-[13px] font-medium text-text-primary flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-status-success animate-pulse" />
-                    Active ({isArchitect ? 'Architect' : 'Explorer'})
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Display Name Edit */}
-            <form
-              onSubmit={handleSaveProfile}
-              className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4.5"
-            >
-              <div>
-                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
-                  Display Identity
-                </h3>
-                <p className="text-[13px] text-text-muted m-0">
-                  Manage the public name visible in shared architecture graphs and team views.
-                </p>
-              </div>
-
-              <FormField id="profile-name" label="Full Name">
-                <Input
-                  id="profile-name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Your Name"
-                />
-              </FormField>
-
-              <FormField id="profile-email" label="Primary Email">
-                <Input
-                  id="profile-email"
-                  type="email"
-                  disabled
-                  value={user?.email || ''}
-                />
-              </FormField>
-
-              <div>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="md"
-                  disabled={profileSaving}
-                  isLoading={profileSaving}
-                  className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 text-white"
-                >
-                  {profileSaving ? 'Saving Changes...' : 'Save Profile Changes'}
-                </Button>
-              </div>
-            </form>
-
-            {/* Password Management */}
-            {user?.provider === 'email' ? (
-              <form
-                onSubmit={handleChangePassword}
-                className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7 flex flex-col gap-4.5"
-              >
-                <div>
-                  <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1">
-                    Change Password
-                  </h3>
-                  <p className="text-[13px] text-text-muted m-0">
-                    Enter your existing password to set a new 8+ character password.
-                  </p>
-                </div>
-
-                <FormField id="current-password" label="Current Password" required>
-                  <Input
-                    id="current-password"
-                    type="password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    required
-                  />
-                </FormField>
-
-                <FormField id="new-password" label="New Password" helperText="Must be at least 8 characters" required>
-                  <Input
-                    id="new-password"
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="At least 8 characters"
-                    required
-                  />
-                </FormField>
-
-                <FormField id="confirm-password" label="Confirm New Password" required>
-                  <Input
-                    id="confirm-password"
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                  />
-                </FormField>
-
-                <div>
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="md"
-                    disabled={pwSaving}
-                    isLoading={pwSaving}
-                    className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 text-white"
-                  >
-                    {pwSaving ? 'Updating...' : 'Update Password'}
-                  </Button>
-                </div>
-              </form>
-            ) : (
-              <div className="bg-surface-base/60 border border-border-subtle rounded-xl p-6 sm:p-7">
-                <h3 className="text-[15px] font-bold text-text-primary m-0 mb-1.5">
-                  Federated Identity
-                </h3>
-                <p className="text-[13px] text-text-muted m-0 leading-relaxed">
-                  You are authenticated via <strong className="text-text-primary">{providerName}</strong>. Security tokens and password policies are governed directly by your OAuth provider.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-      </main>
-
-      {/* ── UPGRADE TO ARCHITECT MODAL ── */}
-      <Modal
-        isOpen={showUpgradeModal}
-        onClose={() => !upgrading && setShowUpgradeModal(false)}
-        title="Upgrade to Archon Architect"
-        description="$7.99 / month — Instant entitlement activation"
-        maxWidth="md"
-        className="border-[#b026ff]/30 shadow-[0_20px_60px_rgba(0,0,0,0.6),0_0_40px_rgba(176,38,255,0.15)]"
-      >
-        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 text-[13px] text-text-secondary leading-relaxed mb-6">
-          <div className="font-semibold text-white mb-2">
-            What activates immediately:
-          </div>
-          <ul className="pl-4.5 m-0 flex flex-col gap-1.5 list-disc">
-            <li><strong className="text-white">10 active codebases</strong> retained with full index state</li>
-            <li><strong className="text-white">2,000 files & 50 MB</strong> capacity per repository</li>
-            <li><strong className="text-white">500 monthly AI questions</strong> & 30 re-indexes</li>
-            <li><strong className="text-white">Deep Impact & Blast Radius</strong> change simulations</li>
-            <li><strong className="text-white">Priority indexing queue</strong> with accelerated AST generation</li>
-          </ul>
-        </div>
-
-        <div className="flex gap-3 justify-end">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={upgrading}
-            onClick={() => setShowUpgradeModal(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            disabled={upgrading}
-            isLoading={upgrading}
-            onClick={handleUpgradeToArchitect}
-            className="bg-gradient-to-r from-[#b026ff] to-[#6366f1] hover:brightness-110 border-0 shadow-[0_4px_16px_rgba(176,38,255,0.3)] text-white"
-          >
-            {upgrading ? 'Activating...' : 'Activate Architect Plan ($7.99/mo)'}
-          </Button>
-        </div>
-      </Modal>
-
-      <Footer />
-    </div>
-  );
+/** `2,000` and `15 MB` — one place, so the page never mixes formats. */
+function formatCount(n: number | undefined): string {
+  return n == null ? '—' : n.toLocaleString()
+}
+function formatMb(bytes: number | undefined): string {
+  if (bytes == null) return '—'
+  return `${Math.round(bytes / (1024 * 1024))} MB`
 }
 
-/* ── Auxiliary Subcomponents ── */
-
-function TelemetryCard({
+/**
+ * One capacity meter.
+ *
+ * The bar only appears when there is a ceiling to be near. On Architect,
+ * analyses are unlimited — drawing a full bar for "unlimited" would read as
+ * "you are at the limit", which is the opposite of what it means.
+ */
+function Meter({
   label,
   used,
   limit,
-  isUnlimited = false,
   unit,
-  hint,
+  note,
 }: {
-  label: string;
-  used: number;
-  limit: number;
-  isUnlimited?: boolean;
-  unit: string;
-  hint: string;
+  label: string
+  used: number | undefined
+  limit: number | undefined
+  unit?: string
+  note?: string
 }) {
-  const percentage = isUnlimited ? 0 : Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
-  const isNearLimit = percentage >= 80;
-  const isAtLimit = percentage >= 100;
+  const known = used != null && limit != null
+  const unlimited = known && (limit as number) > 100000
+  const pct = known && !unlimited ? Math.min(100, Math.round(((used as number) / Math.max(1, limit as number)) * 100)) : 0
+  const atLimit = known && !unlimited && (used as number) >= (limit as number)
+  const nearLimit = known && !unlimited && pct >= 80 && !atLimit
+
+  const tone = atLimit ? 'text-sig' : nearLimit ? 'text-amber' : 'text-ink'
 
   return (
-    <Card
-      variant="default"
-      hoverable={false}
-      className="p-5 flex flex-col justify-between rounded-xl bg-surface-base/80 border-border-subtle"
-    >
-      <div>
-        <div className="text-[12px] font-semibold text-text-muted uppercase tracking-[0.04em] mb-2">
-          {label}
-        </div>
-        <div className="flex items-baseline gap-1.5 mb-1.5">
-          <span
-            className={`text-[26px] font-extrabold tracking-[-0.03em] font-mono ${
-              isAtLimit ? 'text-status-error' : isNearLimit ? 'text-status-warning' : 'text-text-primary'
-            }`}
-          >
-            {used}
-          </span>
-          <span className="text-[13px] text-text-muted">
-            {isUnlimited ? '(Unlimited)' : `/ ${limit} ${unit}`}
-          </span>
-        </div>
+    <div className="grid grid-cols-1 gap-2 py-4 sm:grid-cols-[minmax(0,1.4fr)_auto] sm:items-center sm:gap-6">
+      <div className="min-w-0">
+        <div className="text-[13.5px] text-ink">{label}</div>
+        {note && <div className="mt-0.5 font-mono text-[9px] leading-[1.6] text-ink-3">{note}</div>}
       </div>
 
-      <div>
-        {!isUnlimited ? (
-          <div
-            role="progressbar"
-            aria-valuenow={used}
-            aria-valuemin={0}
-            aria-valuemax={limit}
-            aria-label={`${label} quota`}
-            className="w-full h-1.5 bg-white/[0.06] rounded-full overflow-hidden my-2.5"
-          >
-            <div
-              style={{ width: `${percentage}%` }}
-              className={`h-full transition-[width] duration-400 ease-out ${
-                isAtLimit
-                  ? 'bg-gradient-to-r from-red-500 to-red-600'
-                  : isNearLimit
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600'
-                  : 'bg-gradient-to-r from-[#b026ff] to-[#6366f1]'
-              }`}
-            />
-          </div>
+      <div className="sm:min-w-[220px]">
+        {!known ? (
+          <div className="text-right font-mono text-[12px] text-ink-3">—</div>
+        ) : unlimited ? (
+          <div className="text-right font-mono text-[12px] text-emerald">no ceiling</div>
         ) : (
-          <div className="w-full h-1.5 bg-status-success/15 rounded-full overflow-hidden my-2.5">
-            <div className="w-full h-full bg-status-success/60 rounded-full" />
-          </div>
+          <>
+            <div className="flex items-baseline justify-end gap-1.5">
+              <span className={`font-mono text-[13px] tabular-nums ${tone}`}>{used}</span>
+              <span className="font-mono text-[11px] text-ink-3">
+                / {limit}
+                {unit ? ` ${unit}` : ''}
+              </span>
+            </div>
+            <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-rule">
+              <div
+                className={`h-full rounded-full ${atLimit ? 'bg-sig' : nearLimit ? 'bg-amber' : 'bg-emerald'}`}
+                style={{ width: `${used === 0 ? 0 : Math.max(pct, 3)}%` }}
+              />
+            </div>
+          </>
         )}
-        <div className="text-[11px] text-text-muted leading-relaxed">
-          {hint}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function CapabilityItem({
-  label,
-  value,
-  subtext,
-  highlight = false,
-}: {
-  label: string;
-  value: string;
-  subtext: string;
-  highlight?: boolean;
-}) {
-  return (
-    <div className="bg-white/[0.02] border border-border-subtle/60 rounded-lg p-3.5 sm:p-4">
-      <div className="text-[11px] font-semibold text-text-muted uppercase tracking-[0.04em]">
-        {label}
-      </div>
-      <div
-        className={`text-[15px] font-bold my-1 ${
-          highlight ? 'text-[#c084fc]' : 'text-text-primary'
-        }`}
-      >
-        {value}
-      </div>
-      <div className="text-[11px] text-text-muted">
-        {subtext}
       </div>
     </div>
-  );
+  )
 }
 
+export default function Profile() {
+  const navigate = useNavigate()
+  const { user, logout } = useAuthStore()
+
+  const [usage, setUsage] = useState<UsageData | null>(null)
+  const [repos, setRepos] = useState<RepoRow[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [name, setName] = useState(user?.name ?? '')
+  const [savingName, setSavingName] = useState(false)
+
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [savingPassword, setSavingPassword] = useState(false)
+
+  /** False once the component unmounts, so late fetches stop setting state. */
+  const aliveRef = useRef(true)
+
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
+
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const [u, r] = await Promise.allSettled([api.get('/auth/usage'), api.get('/repos')])
+    // The component may have unmounted while those two requests were in flight
+    // (the user navigated away), in which case setting state is a no-op that
+    // React warns about. Bail out instead.
+    if (!aliveRef.current) return
+    if (u.status === 'fulfilled') setUsage(u.value.data?.data ?? null)
+    if (r.status === 'fulfilled') setRepos(r.value.data?.data ?? [])
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    // Deferred a tick so the fetch (and its `setLoading`) lands after the first
+    // paint rather than forcing a second synchronous render during mount.
+    const t = setTimeout(load, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  const saveName = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast.error('A display name cannot be empty.')
+      return
+    }
+    if (trimmed === (user?.name ?? '')) return
+    setSavingName(true)
+    try {
+      await api.patch('/auth/profile', { name: trimmed })
+      toast.success('Name updated.')
+    } catch (err: unknown) {
+      toast.error(
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message || 'Could not save that name.',
+      )
+    } finally {
+      setSavingName(false)
+    }
+  }
+
+  const savePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPassword !== confirmPassword) {
+      toast.error('The two new passwords do not match.')
+      return
+    }
+    if (newPassword.length < 8) {
+      toast.error('Use at least 8 characters.')
+      return
+    }
+    setSavingPassword(true)
+    try {
+      await api.post('/auth/change-password', { currentPassword, newPassword })
+      toast.success('Password changed.')
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+    } catch (err: unknown) {
+      toast.error(
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message || 'Could not change the password.',
+      )
+    } finally {
+      setSavingPassword(false)
+    }
+  }
+
+  const limits = usage?.limits
+  const used = usage?.usage
+  const isPro = usage?.plan === 'pro' || user?.plan === 'pro'
+  const provider = user?.provider || 'email'
+  const isEmailAccount = provider === 'email'
+
+  const activeRepos = useMemo(() => repos.filter((r) => !r.isArchived), [repos])
+  const totalFiles = useMemo(() => repos.reduce((s, r) => s + (r.fileCount || 0), 0), [repos])
+  const initial = (user?.name || user?.email || 'A').charAt(0).toUpperCase()
+
+  const passwordMismatch = Boolean(confirmPassword) && confirmPassword !== newPassword
+  const canSavePassword =
+    isEmailAccount && !savingPassword && currentPassword.length > 0 && newPassword.length > 0 && !passwordMismatch
+
+  return (
+    <div className="relative min-h-[100dvh] bg-paper text-ink">
+      <Substrate />
+
+      <div className="relative z-[1] flex min-h-[100dvh] flex-col">
+        <SiteHeader />
+
+        <main className="mx-auto w-full max-w-site flex-1 px-6 pb-24 pt-14 md:px-10 lg:px-14">
+          {/* ══ who this is ═════════════════════════════════════════════ */}
+          <div className="flex flex-wrap items-center gap-x-7 gap-y-5 border-b border-rule-strong pb-8">
+            {user?.avatarUrl ? (
+              <img src={user.avatarUrl} alt="" className="h-20 w-20 flex-none rounded-full object-cover" />
+            ) : (
+              <span className="grid h-20 w-20 flex-none place-items-center rounded-full bg-forest text-[26px] font-semibold text-[#f0f6f2]">
+                {initial}
+              </span>
+            )}
+
+            <div className="min-w-0 flex-1">
+              <h1 className="text-[30px] font-semibold leading-tight tracking-[-0.036em]">
+                {user?.name || 'Your account'}
+              </h1>
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
+                <span className="truncate font-mono text-[11.5px] text-ink-2">{user?.email}</span>
+                <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink-3">
+                  signed in with {provider}
+                </span>
+                <span className={isPro ? 'st st--ok' : 'st st--idle'}>
+                  <i />
+                  {limits?.displayName ?? (isPro ? 'Architect' : 'Explorer')}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Link to="/history" className="abtn abtn--ghost">
+                Your repositories
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  logout()
+                  navigate('/')
+                }}
+                className="abtn abtn--ghost"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+
+          {/* ══ 01 · capacity ═══════════════════════════════════════════ */}
+          <section className="mt-11" aria-labelledby="s-capacity">
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div className="flex items-baseline gap-3">
+                <span className="font-mono text-[10px] text-ink-3">01</span>
+                <h2 id="s-capacity" className="text-[19px] font-semibold tracking-[-0.028em]">
+                  What you have used
+                </h2>
+              </div>
+              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink-3">
+                {loading ? 'reading…' : `against your ${limits?.displayName ?? 'plan'} limits`}
+              </span>
+            </div>
+
+            <div className="mt-5 divide-y divide-rule-2 border-y border-rule">
+              <Meter
+                label="Codebase analyses"
+                used={used?.lifetimeAnalysesUsed}
+                limit={limits?.lifetimeAnalyses}
+                note="Counted across the life of the account, not monthly."
+              />
+              <Meter
+                label="Active codebases"
+                used={used?.activeCodebases}
+                limit={limits?.maxActiveCodebases}
+                note="Archive one to free its slot."
+              />
+              <Meter
+                label="AI questions this month"
+                used={used?.monthlyAiQuestionsUsed}
+                limit={limits?.monthlyAiQuestions}
+                unit="questions"
+              />
+              <Meter
+                label="Re-indexes this month"
+                used={used?.monthlyReindexesUsed}
+                limit={limits?.monthlyReindexes}
+                unit="re-indexes"
+              />
+            </div>
+
+            {/* per-repository ceilings: stated, not metered, because they apply
+                to each repository rather than accumulating */}
+            <div className="mt-5 grid grid-cols-1 gap-x-10 gap-y-3 sm:grid-cols-3">
+              <div>
+                <div className="font-mono text-[8.5px] uppercase tracking-[0.15em] text-ink-3">
+                  Files per repository
+                </div>
+                <div className="mt-1 font-mono text-[13px] text-ink">{formatCount(limits?.maxFilesPerRepo)}</div>
+              </div>
+              <div>
+                <div className="font-mono text-[8.5px] uppercase tracking-[0.15em] text-ink-3">
+                  Repository size
+                </div>
+                <div className="mt-1 font-mono text-[13px] text-ink">{formatMb(limits?.maxRepoSizeBytes)}</div>
+              </div>
+              <div>
+                <div className="font-mono text-[8.5px] uppercase tracking-[0.15em] text-ink-3">
+                  When a ceiling is hit
+                </div>
+                <div className="mt-1 font-mono text-[13px] text-ink-3">
+                  refused, and named
+                </div>
+              </div>
+            </div>
+
+            {!isPro && (
+              <div className="mt-6 flex flex-wrap items-center gap-4 border border-rule bg-paper-2 px-5 py-4">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13.5px] text-ink">Architect raises every one of these.</div>
+                  <p className="mt-1 font-mono text-[9px] leading-[1.6] text-ink-3">
+                    Billing is not open yet. Plan changes will come from the payment provider, not
+                    from this page.
+                  </p>
+                </div>
+                <Link to="/pricing" className="abtn abtn--ghost flex-none">
+                  See the limits
+                </Link>
+              </div>
+            )}
+          </section>
+
+          {/* ══ 02 · what you can change ════════════════════════════════ */}
+          <section className="mt-14" aria-labelledby="s-details">
+            <div className="flex items-baseline gap-3">
+              <span className="font-mono text-[10px] text-ink-3">02</span>
+              <h2 id="s-details" className="text-[19px] font-semibold tracking-[-0.028em]">
+                Your details
+              </h2>
+            </div>
+
+            <div className="mt-5 grid grid-cols-1 gap-x-12 gap-y-10 lg:grid-cols-2">
+              {/* name */}
+              <form onSubmit={saveName}>
+                <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-ink-3">
+                  Display name
+                </div>
+                <p className="mt-1.5 text-[12.5px] leading-[1.6] text-ink-2">
+                  Shown in the header and beside your repositories. Anything you like.
+                </p>
+
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoComplete="name"
+                  aria-label="Display name"
+                  className="mt-3 w-full border border-rule-strong bg-paper-2 px-3 py-2.5 text-[13.5px] text-ink outline-none transition-colors focus:border-emerald"
+                />
+
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    type="submit"
+                    disabled={savingName || !name.trim() || name.trim() === (user?.name ?? '')}
+                    className="abtn abtn--solid disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {savingName ? 'Saving…' : 'Save'}
+                  </button>
+                  {name.trim() !== (user?.name ?? '') && !savingName && (
+                    <button
+                      type="button"
+                      onClick={() => setName(user?.name ?? '')}
+                      className="font-mono text-[10px] uppercase tracking-[0.13em] text-ink-3 transition-colors hover:text-ink"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </form>
+
+              {/* email — read-only, and says why */}
+              <div>
+                <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-ink-3">
+                  Email
+                </div>
+                <p className="mt-1.5 text-[12.5px] leading-[1.6] text-ink-2">
+                  Your sign-in identity. It cannot be changed here.
+                </p>
+                <div
+                  className="mt-3 flex items-center gap-3 border border-rule bg-paper-3 px-3 py-2.5"
+                  aria-describedby="email-why"
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink-2">
+                    {user?.email}
+                  </span>
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    className="flex-none text-ink-3"
+                    aria-hidden="true"
+                  >
+                    <rect x="4" y="10" width="16" height="10" rx="2" />
+                    <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                  </svg>
+                </div>
+                <p id="email-why" className="mt-2 font-mono text-[9px] leading-[1.6] text-ink-3">
+                  Changing it would break the link between this account and its repositories.
+                </p>
+              </div>
+            </div>
+
+            {/* password — its own row, because it is a different kind of change */}
+            <div className="mt-11 border-t border-rule pt-8">
+              <div className="flex flex-wrap items-baseline justify-between gap-3">
+                <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-ink-3">
+                  Password
+                </div>
+                <span className="font-mono text-[9px] uppercase tracking-[0.13em] text-ink-3">
+                  {isEmailAccount ? 'email account' : `managed by ${provider}`}
+                </span>
+              </div>
+
+              {!isEmailAccount ? (
+                <p className="mt-3 max-w-[62ch] text-[13px] leading-[1.65] text-ink-2">
+                  This account signs in with <span className="font-mono text-ink">{provider}</span>,
+                  so there is no password stored here. Change your credentials with that provider.
+                </p>
+              ) : (
+                <form onSubmit={savePassword} className="mt-4 grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+                  <div>
+                    <label
+                      htmlFor="pw-current"
+                      className="mb-1.5 block font-mono text-[8.5px] uppercase tracking-[0.15em] text-ink-3"
+                    >
+                      Current
+                    </label>
+                    <input
+                      id="pw-current"
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      autoComplete="current-password"
+                      className="w-full border border-rule-strong bg-paper-2 px-3 py-2.5 text-[13.5px] text-ink outline-none transition-colors focus:border-emerald"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="pw-new"
+                      className="mb-1.5 block font-mono text-[8.5px] uppercase tracking-[0.15em] text-ink-3"
+                    >
+                      New
+                    </label>
+                    <input
+                      id="pw-new"
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      autoComplete="new-password"
+                      className="w-full border border-rule-strong bg-paper-2 px-3 py-2.5 text-[13.5px] text-ink outline-none transition-colors focus:border-emerald"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="pw-confirm"
+                      className="mb-1.5 block font-mono text-[8.5px] uppercase tracking-[0.15em] text-ink-3"
+                    >
+                      Repeat new
+                    </label>
+                    <input
+                      id="pw-confirm"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      autoComplete="new-password"
+                      aria-invalid={passwordMismatch || undefined}
+                      aria-describedby="pw-rules"
+                      className={`w-full border bg-paper-2 px-3 py-2.5 text-[13.5px] text-ink outline-none transition-colors focus:border-emerald ${
+                        passwordMismatch ? 'border-sig' : 'border-rule-strong'
+                      }`}
+                    />
+                  </div>
+
+                  <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-3">
+                    <p id="pw-rules" className="font-mono text-[9px] leading-[1.6] text-ink-3">
+                      {passwordMismatch
+                        ? 'The two new passwords do not match yet.'
+                        : 'At least 8 characters, with an uppercase letter, a lowercase letter, a number and a symbol.'}
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={!canSavePassword}
+                      className="abtn abtn--solid flex-none disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {savingPassword ? 'Changing…' : 'Change password'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </section>
+
+          {/* ══ 03 · your work ══════════════════════════════════════════ */}
+          <section className="mt-14" aria-labelledby="s-work">
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div className="flex items-baseline gap-3">
+                <span className="font-mono text-[10px] text-ink-3">03</span>
+                <h2 id="s-work" className="text-[19px] font-semibold tracking-[-0.028em]">
+                  What you have indexed
+                </h2>
+              </div>
+              {!loading && repos.length > 0 && (
+                <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink-3">
+                  {activeRepos.length} active · {repos.length - activeRepos.length} archived ·{' '}
+                  {totalFiles.toLocaleString()} files
+                </span>
+              )}
+            </div>
+
+            {loading ? (
+              <div className="mt-5 border-y border-rule py-5 font-mono text-[10.5px] text-ink-3">
+                Reading registry…
+              </div>
+            ) : repos.length === 0 ? (
+              <div className="mt-5 border border-rule bg-paper-2 px-6 py-8">
+                <p className="max-w-[52ch] text-[13.5px] leading-[1.65] text-ink-2">
+                  Nothing indexed yet. Paste a repository URL and Archon will read every file in
+                  it — it appears here the moment the index completes.
+                </p>
+                <Link to="/" className="abtn abtn--solid mt-4">
+                  Index a repository
+                  <span aria-hidden="true">→</span>
+                </Link>
+              </div>
+            ) : (
+              <div className="mt-5 border-y border-rule">
+                {repos.slice(0, 6).map((r) => (
+                  <Link
+                    key={r.id}
+                    to={`/dashboard/${r.id}`}
+                    className="group flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-rule-2 py-3.5 transition-colors last:border-b-0 hover:bg-paper-3"
+                  >
+                    <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink group-hover:text-emerald">
+                      {r.owner ? `${r.owner}/${r.name}` : r.name}
+                    </span>
+                    {r.isArchived && (
+                      <span className="font-mono text-[8.5px] uppercase tracking-[0.13em] text-ink-3">
+                        archived
+                      </span>
+                    )}
+                    <span className="font-mono text-[10.5px] text-ink-3">
+                      {r.fileCount?.toLocaleString() ?? '—'} files
+                    </span>
+                    <span className="w-14 text-right font-mono text-[10.5px] text-ink-3">
+                      {r.confidence > 0 ? `${r.confidence}/100` : '—'}
+                    </span>
+                    <span
+                      className="font-mono text-[10px] text-ink-3 opacity-0 transition-opacity group-hover:opacity-100"
+                      aria-hidden="true"
+                    >
+                      →
+                    </span>
+                  </Link>
+                ))}
+
+                <Link
+                  to="/history"
+                  className="block w-full py-3 font-mono text-[9.5px] uppercase tracking-[0.13em] text-ink-3 transition-colors hover:text-ink"
+                >
+                  {repos.length > 6
+                    ? `All ${repos.length} repositories in the hub →`
+                    : 'Open the repository hub →'}
+                </Link>
+              </div>
+            )}
+          </section>
+
+          {/* ══ what is not here, and why ══════════════════════════════ */}
+          <section className="mt-14 border-t border-rule pt-8" aria-labelledby="s-absent">
+            <div className="flex items-baseline gap-3">
+              <span className="font-mono text-[10px] text-ink-3">04</span>
+              <h2 id="s-absent" className="text-[19px] font-semibold tracking-[-0.028em]">
+                Not here yet
+              </h2>
+            </div>
+            <p className="mt-2 max-w-[62ch] text-[13px] leading-[1.6] text-ink-2">
+              Three settings existed before and have been removed rather than restyled, because
+              none of them did anything.
+            </p>
+
+            <div className="mt-5 grid grid-cols-1 gap-x-10 gap-y-6 md:grid-cols-3">
+              {[
+                {
+                  k: 'Default branch',
+                  v: 'Archon indexes the branch it is given rather than picking one, so there is nothing to choose.',
+                },
+                {
+                  k: 'Auto re-index on push',
+                  v: 'The server does not accept a webhook yet. Re-indexing runs when you ask for it.',
+                },
+                {
+                  k: 'Telemetry',
+                  v: 'No usage data leaves your instance. There is no switch because there is nothing to switch off.',
+                },
+              ].map((c) => (
+                <div key={c.k}>
+                  <div className="font-mono text-[8.5px] uppercase tracking-[0.15em] text-ink-3">
+                    {c.k}
+                  </div>
+                  <p className="mt-2 text-[12.5px] leading-[1.65] text-ink-2">{c.v}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </main>
+
+        <SiteFooter />
+      </div>
+    </div>
+  )
+}
