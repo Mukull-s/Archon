@@ -103,6 +103,7 @@ router.post('/:id/chat', requireAuth, impactLimiter, repoController.chatWithRepo
 router.post('/:id/chat/stream', requireAuth, impactLimiter, repoController.chatWithRepoStream);
 router.get('/:id/chat/history', requireAuth, repoController.getChatHistory);
 router.get('/:id/insights', requireAuth, repoController.getRepoInsights);
+router.get('/:id/file', requireAuth, repoController.getRepoFileContent);
 router.get('/:id/story', requireAuth, repoController.getRepoStory);
 router.get('/:id/onboarding', requireAuth, repoController.getRepoOnboarding);
 

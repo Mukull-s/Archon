@@ -530,6 +530,118 @@ export async function getRepoInsights(req: Request, res: Response, next: NextFun
 }
 
 /**
+ * GET /api/repos/:id/file?path=<filePath>
+ *
+ * Returns the source of one file, reassembled from the `CodeChunk` rows the
+ * indexer already persisted. The engine chunks files for embedding and stores
+ * each chunk's `content` together with its `startLine`/`endLine`, so the code is
+ * already held — this is a read of existing data, not a new capability.
+ *
+ * Why reassemble rather than read the original file: the archive is deleted
+ * after ingestion, so chunks are the only surviving copy of the source. They are
+ * stored in `chunkIndex` order and are contiguous, so concatenating them in
+ * order reproduces the file.
+ *
+ * Response shape:
+ *   { path, language, lines: string[], startLine, endLine, symbols: [{name,startLine,endLine}] }
+ *
+ * `lines` is an array so the viewer can address a line by number without
+ * splitting on the client. `symbols` maps each chunk's `symbolName` back to its
+ * line range, which is what lets the viewer show structure beside the code.
+ */
+export async function getRepoFileContent(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new AppError('Unauthorized.', 401);
+    }
+
+    const filePath = (req.query.path as string | undefined) || '';
+    if (!filePath.trim()) {
+      throw new AppError('A file path is required.', 400);
+    }
+
+    // Ownership check first, so a path cannot be probed against someone else's
+    // repository.
+    const repo = await prisma.repository.findFirst({
+      where: { id: id as string, userId: userId as string },
+      select: { id: true }
+    });
+    if (!repo) {
+      throw new AppError('Repository not found or access denied.', 404);
+    }
+
+    const chunks = await prisma.codeChunk.findMany({
+      where: { repositoryId: repo.id, filePath },
+      orderBy: { chunkIndex: 'asc' },
+      select: {
+        chunkIndex: true,
+        content: true,
+        startLine: true,
+        endLine: true,
+        symbolName: true
+      }
+    });
+
+    if (chunks.length === 0) {
+      // Not an error: the file exists in the tree but was not selected for
+      // embedding (binary, oversized, or below the chunk threshold). The client
+      // says so rather than showing a blank editor.
+      res.status(200).json({
+        success: true,
+        data: { path: filePath, indexed: false, lines: [], symbols: [] }
+      });
+      return;
+    }
+
+    const content = chunks.map((c) => c.content).join('\n');
+    const lines = content.split('\n');
+
+    // Keep only chunks that represent a real symbol, and dedupe: several chunks
+    // of one long function share its name.
+    const seen = new Set<string>();
+    const symbols = chunks
+      .filter((c) => Boolean(c.symbolName) && c.symbolName !== 'file-level')
+      .filter((c) => {
+        const key = `${c.symbolName}:${c.startLine}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((c) => ({
+        name: c.symbolName as string,
+        startLine: c.startLine,
+        endLine: c.endLine
+      }));
+
+    const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+    const language =
+      ext === 'ts' || ext === 'tsx' ? 'typescript'
+      : ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs' ? 'javascript'
+      : ext === 'py' ? 'python'
+      : ext === 'json' ? 'json'
+      : ext === 'md' ? 'markdown'
+      : ext || 'text';
+
+    res.status(200).json({
+      success: true,
+      data: {
+        path: filePath,
+        indexed: true,
+        language,
+        lines,
+        startLine: chunks[0].startLine,
+        endLine: chunks[chunks.length - 1].endLine,
+        symbols
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * Returns structured repository history and architectural narrative.
  */
 export async function getRepoStory(req: Request, res: Response, next: NextFunction): Promise<void> {
