@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { TreeNode, FileItem, ArchitecturalRole } from './explorerTypes';
-import { getRoleBadgeStyle } from './explorerUtils';
 
 interface ExplorerFileTreeProps {
   tree: TreeNode;
@@ -19,48 +18,16 @@ interface ExplorerFileTreeProps {
   hotspotsMap: Record<string, number>;
 }
 
-// Visual File Icon based on extension
-const FileIcon = ({ name, role }: { name: string; role?: ArchitecturalRole }) => {
-  const ext = name.split('.').pop()?.toLowerCase();
-  let color = 'text-zinc-400';
-
-  if (role === 'ENTRY POINT') color = 'text-emerald-400';
-  else if (role === 'CONTROLLER') color = 'text-indigo-400';
-  else if (role === 'SERVICE') color = 'text-purple-400';
-  else if (role === 'ROUTE') color = 'text-blue-400';
-  else if (role === 'MODEL') color = 'text-amber-400';
-  else if (ext === 'ts' || ext === 'tsx') color = 'text-blue-400';
-  else if (ext === 'js' || ext === 'jsx') color = 'text-yellow-400';
-  else if (ext === 'json') color = 'text-orange-400';
-  else if (ext === 'css' || ext === 'scss') color = 'text-pink-400';
-  else if (ext === 'md') color = 'text-emerald-400';
-
-  return (
-    <svg className={`w-4 h-4 shrink-0 ${color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-    </svg>
-  );
+// Two-letter extension badge used inside the tree row's `.ic` slot.
+const fileBadge = (name: string): string => {
+  const ext = name.split('.').pop()?.toLowerCase() || '';
+  if (!ext || ext === name.toLowerCase()) return '·';
+  return ext.slice(0, 2);
 };
 
-// Folder Icon
-const FolderIcon = ({ expanded }: { expanded: boolean }) => (
-  <svg className={`w-4 h-4 shrink-0 ${expanded ? 'text-blue-400' : 'text-zinc-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-  </svg>
-);
-
-// Chevron Icon
-const ChevronIcon = ({ expanded }: { expanded: boolean }) => (
-  <svg
-    className={`w-3.5 h-3.5 shrink-0 text-zinc-500 transition-transform duration-150 ${expanded ? 'rotate-90 text-zinc-300' : ''}`}
-    fill="none"
-    viewBox="0 0 24 24"
-    stroke="currentColor"
-    strokeWidth="2.5"
-  >
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-  </svg>
-);
+// Leading label for the role badge, mirroring the tree's abbreviation rule.
+const roleAbbrev = (role: ArchitecturalRole): string =>
+  role === 'ENTRY POINT' ? 'entry' : role.slice(0, 4).toLowerCase();
 
 export default function ExplorerFileTree({
   tree,
@@ -165,7 +132,6 @@ export default function ExplorerFileTree({
     const isExpanded = expandedFolders.has(node.path) || !!searchQuery.trim();
     const isSelected = selectedFile === node.path;
     const role = rolesMap[node.path];
-    const roleStyle = role ? getRoleBadgeStyle(role) : null;
     const hasWarning = warningsMap[node.path];
     const hotspotCount = hotspotsMap[node.path];
 
@@ -183,27 +149,23 @@ export default function ExplorerFileTree({
               onSelectFile(node.path);
             }
           }}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
-          className={`flex items-center gap-2 py-1.5 pr-2 rounded-[4px] cursor-pointer group transition-colors select-none text-[12.5px] font-mono relative ${
-            isSelected
-              ? 'bg-[#18181b] text-white border-l-2 border-primary font-semibold shadow-sm'
-              : 'hover:bg-[#18181b]/60 text-zinc-400 hover:text-zinc-200'
-          }`}
+          style={{ paddingLeft: `${depth * 14 + 6}px` }}
+          className={`tnode ${node.isDirectory ? '' : 'is-file'} ${isSelected ? 'is-on' : ''}`}
           role="treeitem"
           aria-expanded={node.isDirectory ? isExpanded : undefined}
           aria-selected={isSelected}
           title={node.path}
         >
-          {/* Chevron */}
-          <div
+          {/* Twist / chevron */}
+          <span
+            className="tw"
             onClick={(e) => {
               e.stopPropagation();
               if (node.isDirectory) onToggleFolderExpand(node.path);
             }}
-            className="w-4 h-4 flex items-center justify-center shrink-0 cursor-pointer hover:bg-zinc-800 rounded"
           >
-            {node.isDirectory && <ChevronIcon expanded={isExpanded} />}
-          </div>
+            {node.isDirectory ? (isExpanded ? '▾' : '▸') : ''}
+          </span>
 
           {/* Scope selection checkbox for AI assistant scope */}
           <input
@@ -221,49 +183,39 @@ export default function ExplorerFileTree({
               }
             }}
             title="Include in AI Assistant Context Scope"
-            className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-900 text-primary focus:ring-0 cursor-pointer shrink-0 opacity-40 group-hover:opacity-100 transition-opacity"
+            className="h-3 w-3 shrink-0 cursor-pointer rounded-[2px] border-rule-strong bg-paper accent-forest opacity-40 transition-opacity group-hover:opacity-100"
           />
 
-          {/* Icon */}
-          {node.isDirectory ? (
-            <FolderIcon expanded={isExpanded} />
-          ) : (
-            <FileIcon name={node.name} role={role} />
-          )}
+          {/* File-type badge / folder mark */}
+          <span className="ic">{node.isDirectory ? '/' : fileBadge(node.name)}</span>
 
-          {/* Node Name */}
-          <span className="truncate flex-1">
-            {node.name}
-          </span>
+          {/* Node name */}
+          <span className="nm">{node.name}</span>
 
-          {/* Indicators: Hotspots / Warnings / Role */}
-          <div className="flex items-center gap-1.5 shrink-0 ml-auto">
-            {hotspotCount && hotspotCount > 0 && (
+          {/* Indicators: hotspots / warnings / role */}
+          <span className="meta flex items-center gap-1.5">
+            {hotspotCount && hotspotCount > 0 ? (
               <span
-                className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                className="deg font-mono"
                 title={`${hotspotCount} incoming callers`}
               >
-                ★ {hotspotCount}
+                {hotspotCount}
               </span>
-            )}
+            ) : null}
 
             {hasWarning && (
-              <span
-                className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0"
-                title="Architectural warning or drift detected"
-              />
+              <span className="st st--risk h-2 w-2 rounded-full bg-sig" title="Architectural warning or drift detected" />
             )}
 
             {!node.isDirectory && role && role !== 'MODULE' && (
               <span
-                className={`text-[9px] font-mono px-1 py-0.2 rounded uppercase tracking-wider hidden group-hover:inline-block ${
-                  roleStyle ? `${roleStyle.bg} ${roleStyle.text} border ${roleStyle.border}` : 'text-zinc-500'
-                }`}
+                className="rounded-[2px] border border-rule bg-paper-3 px-1 py-px font-mono text-[8.5px] uppercase tracking-[.1em] text-ink-3"
+                title={role}
               >
-                {role === 'ENTRY POINT' ? 'ENTRY' : role.slice(0, 4)}
+                {roleAbbrev(role)}
               </span>
             )}
-          </div>
+          </span>
         </div>
 
         {/* Child nodes */}
@@ -277,11 +229,11 @@ export default function ExplorerFileTree({
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#0b0b0e] border-r border-zinc-800/80 select-none">
-      {/* Search Header */}
-      <div className="p-3 border-b border-zinc-800/80 space-y-2.5 flex-shrink-0">
+    <div className="flex h-full flex-col border-r border-rule bg-paper-2 select-none">
+      {/* Search header */}
+      <div className="flex shrink-0 flex-col gap-2.5 border-b border-rule p-3">
         <div className="relative">
-          <svg className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+          <svg className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
@@ -289,29 +241,29 @@ export default function ExplorerFileTree({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search files (path, name)..."
-            className="w-full bg-[#141418] border border-zinc-800 rounded px-2.5 py-1.5 pl-8 text-[12px] font-mono text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-primary/50"
+            className="w-full rounded-[3px] border border-rule-strong bg-paper py-1.5 pl-8 pr-2.5 font-mono text-[11.5px] text-ink placeholder:text-ink-3 focus:border-ink focus:outline-none"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs"
+              className="absolute right-2 top-1/2 -translate-y-1/2 font-mono text-xs text-ink-3 hover:text-ink"
             >
               ✕
             </button>
           )}
         </div>
 
-        {/* Quick Filter Row */}
-        <div className="flex items-center justify-between text-[11px] text-zinc-400">
-          <div className="flex items-center gap-1 overflow-x-auto scrollbar-none py-0.5">
+        {/* Quick filter row */}
+        <div className="flex items-center justify-between font-mono text-[10px] text-ink-2">
+          <div className="flex items-center gap-1 overflow-x-auto py-0.5">
             {['ALL', 'HOTSPOTS', 'WARNINGS', 'CONTROLLER', 'SERVICE', 'ROUTE'].map(filter => (
               <button
                 key={filter}
                 onClick={() => setActiveRoleFilter(filter)}
-                className={`px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider transition-colors cursor-pointer shrink-0 ${
+                className={`shrink-0 cursor-pointer rounded-[2px] border px-1.5 py-0.5 text-[9px] uppercase tracking-[.1em] transition-colors ${
                   activeRoleFilter === filter
-                    ? 'bg-primary/20 text-primary border border-primary/40 font-semibold'
-                    : 'hover:bg-zinc-800 text-zinc-400'
+                    ? 'border-forest bg-forest/10 font-semibold text-emerald'
+                    : 'border-transparent text-ink-3 hover:border-rule hover:bg-paper-3 hover:text-ink'
                 }`}
               >
                 {filter === 'ALL' ? 'All' : filter === 'HOTSPOTS' ? 'Hot' : filter === 'WARNINGS' ? 'Warn' : filter.slice(0, 4)}
@@ -320,22 +272,22 @@ export default function ExplorerFileTree({
           </div>
 
           {/* Tree expand/collapse controls */}
-          <div className="flex items-center gap-1 shrink-0 ml-1">
+          <div className="ml-1 flex shrink-0 items-center gap-1">
             <button
               onClick={onCollapseAll}
-              className="p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded"
+              className="cursor-pointer rounded-[2px] p-1 text-ink-3 transition-colors hover:bg-paper-3 hover:text-ink"
               title="Collapse all folders"
             >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
               </svg>
             </button>
             <button
               onClick={onExpandAll}
-              className="p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded"
+              className="cursor-pointer rounded-[2px] p-1 text-ink-3 transition-colors hover:bg-paper-3 hover:text-ink"
               title="Expand all folders"
             >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
               </svg>
             </button>
@@ -343,13 +295,13 @@ export default function ExplorerFileTree({
         </div>
       </div>
 
-      {/* Tree View Container */}
-      <div className="flex-1 overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-zinc-800" role="tree">
+      {/* Tree view container */}
+      <div className="tree flex-1 overflow-y-auto p-2" role="tree">
         {renderTreeNode(tree)}
       </div>
 
-      {/* Scope Footer Status */}
-      <div className="p-2.5 border-t border-zinc-800/80 flex items-center justify-between text-[11px] font-mono text-zinc-400 bg-[#09090b]">
+      {/* Scope footer status */}
+      <div className="flex shrink-0 items-center justify-between border-t border-rule bg-paper-3 p-2.5 font-mono text-[10px] text-ink-2">
         <span>{selectedScopeFiles.size} / {files.length} indexed</span>
         <button
           onClick={() => {
@@ -361,7 +313,7 @@ export default function ExplorerFileTree({
               });
             }
           }}
-          className="text-primary hover:underline cursor-pointer"
+          className="cursor-pointer text-emerald hover:underline"
         >
           {selectedScopeFiles.size === files.length ? 'Deselect All' : 'Select All'}
         </button>
