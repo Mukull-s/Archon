@@ -105,84 +105,38 @@ export function detectArchitecturalRole(
 /**
  * Returns color & badge configuration for an architectural role.
  */
-export function getRoleBadgeStyle(role: ArchitecturalRole): {
-  label: string;
-  bg: string;
-  text: string;
-  border: string;
-} {
+/**
+ * The human label for an architectural role.
+ *
+ * This used to return a dark-theme colour triple (bg / text / border) as well.
+ * Nothing consumed those classes — both callers read only `label` — so the
+ * colour strings were dead weight that kept the retired palette alive in the
+ * codebase. Roles are surfaced through the Plate & Paper `.st` chip instead,
+ * which derives its colour from the token set in one place.
+ */
+export function getRoleLabel(role: ArchitecturalRole): string {
   switch (role) {
     case 'ENTRY POINT':
-      return {
-        label: 'ENTRY POINT',
-        bg: 'bg-emerald-500/10',
-        text: 'text-emerald-400',
-        border: 'border-emerald-500/30'
-      };
+      return 'ENTRY POINT';
     case 'CONTROLLER':
-      return {
-        label: 'CONTROLLER',
-        bg: 'bg-indigo-500/10',
-        text: 'text-indigo-400',
-        border: 'border-indigo-500/30'
-      };
+      return 'CONTROLLER';
     case 'SERVICE':
-      return {
-        label: 'SERVICE',
-        bg: 'bg-purple-500/10',
-        text: 'text-purple-400',
-        border: 'border-purple-500/30'
-      };
+      return 'SERVICE';
     case 'ROUTE':
-      return {
-        label: 'ROUTE',
-        bg: 'bg-blue-500/10',
-        text: 'text-blue-400',
-        border: 'border-blue-500/30'
-      };
+      return 'ROUTE';
     case 'MODEL':
-      return {
-        label: 'MODEL',
-        bg: 'bg-amber-500/10',
-        text: 'text-amber-400',
-        border: 'border-amber-500/30'
-      };
+      return 'MODEL';
     case 'CONFIG':
-      return {
-        label: 'CONFIG',
-        bg: 'bg-orange-500/10',
-        text: 'text-orange-400',
-        border: 'border-orange-500/30'
-      };
+      return 'CONFIG';
     case 'UTILITY':
-      return {
-        label: 'UTILITY',
-        bg: 'bg-cyan-500/10',
-        text: 'text-cyan-400',
-        border: 'border-cyan-500/30'
-      };
+      return 'UTILITY';
     case 'COMPONENT':
-      return {
-        label: 'COMPONENT',
-        bg: 'bg-sky-500/10',
-        text: 'text-sky-400',
-        border: 'border-sky-500/30'
-      };
+      return 'COMPONENT';
     case 'TEST':
-      return {
-        label: 'TEST',
-        bg: 'bg-zinc-500/10',
-        text: 'text-zinc-400',
-        border: 'border-zinc-500/30'
-      };
+      return 'TEST';
     case 'MODULE':
     default:
-      return {
-        label: 'MODULE',
-        bg: 'bg-zinc-800/40',
-        text: 'text-zinc-400',
-        border: 'border-zinc-700/40'
-      };
+      return 'MODULE';
   }
 }
 
