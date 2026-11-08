@@ -283,33 +283,27 @@ export default function ExplorerTab({
   }, [activeFileItem, rolesMap, entryPoints, hotspotsMap, dependentsMap, dependencyGraph, insights, astMetadata]);
 
   return (
-    <div className="h-[calc(100vh-64px)] flex flex-col bg-[#09090b] overflow-hidden">
+    <div className="h-[calc(100vh-64px)] flex flex-col bg-paper overflow-hidden">
       {/* MOBILE / TABLET TAB SELECTOR (Hidden on lg+ desktop) */}
-      <div className="lg:hidden flex items-center border-b border-zinc-800 bg-[#0e0e11] px-3 py-2 shrink-0">
-        <div className="flex rounded bg-zinc-900 p-0.5 border border-zinc-800 text-[12px] font-mono w-full">
+      <div className="lg:hidden flex items-center border-b border-rule bg-paper-2 px-3 py-2 shrink-0">
+        <div className="ktabs__in w-full gap-0">
           <button
             onClick={() => setMobileTab('tree')}
-            className={`flex-1 py-1 text-center rounded cursor-pointer ${
-              mobileTab === 'tree' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400'
-            }`}
+            className={`ktab flex-1 justify-center ${mobileTab === 'tree' ? 'is-on' : ''}`}
           >
-            File Tree ({files.length})
+            <span className="n">01</span> File Tree ({files.length})
           </button>
           <button
             onClick={() => setMobileTab('code')}
-            className={`flex-1 py-1 text-center rounded cursor-pointer ${
-              mobileTab === 'code' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400'
-            }`}
+            className={`ktab flex-1 justify-center ${mobileTab === 'code' ? 'is-on' : ''}`}
           >
-            Code View
+            <span className="n">02</span> Code View
           </button>
           <button
             onClick={() => setMobileTab('intel')}
-            className={`flex-1 py-1 text-center rounded cursor-pointer ${
-              mobileTab === 'intel' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400'
-            }`}
+            className={`ktab flex-1 justify-center ${mobileTab === 'intel' ? 'is-on' : ''}`}
           >
-            Intelligence
+            <span className="n">03</span> Intelligence
           </button>
         </div>
       </div>
@@ -349,6 +343,9 @@ export default function ExplorerTab({
           {activeFileItem && activeIntelligence ? (
             <ExplorerCodeViewer
               file={activeFileItem}
+               repositoryId={repositoryId}
+               astMetadata={astMetadata}
+               dependencyGraph={dependencyGraph}
               role={activeIntelligence.role}
               driftViolations={activeIntelligence.driftViolations}
               cycleInvolvement={activeIntelligence.cycleInvolvement}
@@ -364,12 +361,12 @@ export default function ExplorerTab({
               isScopeSelected={selectedFiles.has(activeFileItem.path)}
             />
           ) : (
-            <div className="h-full flex flex-col items-center justify-center p-8 text-center text-zinc-500 space-y-2">
-              <svg className="w-12 h-12 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1">
+            <div className="h-full flex flex-col items-center justify-center p-8 text-center text-ink-3 space-y-2 bg-paper">
+              <svg className="w-12 h-12 text-rule-strong" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
               </svg>
-              <p className="text-zinc-300 font-medium">Select a file to inspect</p>
-              <p className="text-[12px] text-zinc-500">
+              <p className="text-ink font-medium">Select a file to inspect</p>
+              <p className="text-[12px] text-ink-3">
                 Choose any file from the repository tree on the left to reveal its code and architectural intelligence.
               </p>
             </div>
