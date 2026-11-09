@@ -1,11 +1,16 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config';
-import { AppError } from '../utils';
+import { AppError, logger } from '../utils';
 import { entitlementService } from './entitlement.service';
 import { plannerService } from './planner.service';
 import { evidenceService } from './evidence.service';
 import { vectorService } from './vector.service';
 import { llmService, ChatHistoryMessage } from './llm.service';
+import {
+  buildKnownPathSet,
+  validateCitations,
+  fabricationNotice,
+} from './answerVerification';
 
 export interface PreparedChatContext {
   contextChunks: Array<{
@@ -28,6 +33,20 @@ export interface PreparedChatContext {
   evidenceTraces: string[];
   plan: ReturnType<typeof plannerService.planQuery>;
   conversationHistory: ChatHistoryMessage[];
+  /**
+   * Every file the parser read, as structured data.
+   *
+   * Carried through so the finished answer can be checked against the real file
+   * list without re-parsing `repoMetadata.fileTree`, which is a rendered string
+   * for the prompt and not a reliable source of truth for path validation.
+   */
+  scannedFiles: Array<{ path: string }>;
+  /**
+   * How close the nearest retrieved chunk was, or null when retrieval did not
+   * run through the vector index. Lower is closer. Reported to the UI as a
+   * soft signal — see the note where it is computed for why it is not enforced.
+   */
+  retrievalQuality: { bestDistance: number | null; chunkCount: number };
 }
 
 /**
@@ -132,6 +151,22 @@ export async function prepareChatContext(
     });
   }
 
+  /* ── retrieval quality ────────────────────────────────────────────────
+     The best cosine distance of the top chunk says how well the repository
+     actually matches the question. It is reported, not enforced: measured on
+     a real repository, matching questions land at 0.77–0.92 and unrelated ones
+     at 0.84–0.94, so the two ranges overlap and no threshold separates them.
+     A hard floor would reject good answers and admit bad ones. What is honest
+     is to carry the number forward and let the UI say "weak match, treat with
+     care" when it is high — the reader decides, not a guessed constant. */
+  const bestDistance = similarChunks.reduce<number | null>((best, c) => {
+    const d = typeof (c as { distance?: number }).distance === 'number'
+      ? (c as { distance: number }).distance
+      : null;
+    if (d === null) return best;
+    return best === null || d < best ? d : best;
+  }, null);
+
   // Token-budget dynamic allocation
   let currentTokenCount = 0;
   const MAX_TOKEN_BUDGET = 6000;
@@ -187,7 +222,9 @@ export async function prepareChatContext(
     },
     evidenceTraces,
     plan,
-    conversationHistory
+    conversationHistory,
+    scannedFiles,
+    retrievalQuality: { bestDistance, chunkCount: contextChunks.length }
   };
 }
 
@@ -213,7 +250,9 @@ export async function executeChatWithRepo(req: Request, res: Response, next: Nex
       repoMetadata,
       evidenceTraces,
       plan,
-      conversationHistory
+      conversationHistory,
+      scannedFiles,
+      retrievalQuality
     } = await prepareChatContext(id as string, userId, message);
     contextPrepared = true;
 
@@ -232,12 +271,36 @@ export async function executeChatWithRepo(req: Request, res: Response, next: Nex
       dependencyAnalysis: plan.dependencyAnalysis
     });
 
+    /* ── verify the answer before it reaches the user ─────────────────────
+       The prompt tells the model to cite files from the context and not to
+       name anything it was not shown. That is a request, not a guarantee. This
+       checks the finished text against the repository's real file list and
+       reports anything it cited that does not exist.
+
+       The answer text is preserved verbatim — rewriting prose risks changing
+       the claim. Instead a short notice is appended that names the citations
+       that could not be matched, so the reader knows which parts to trust. */
+    const knownPaths = buildKnownPathSet(scannedFiles);
+    const citations = validateCitations(aiResponse.text, knownPaths);
+    const verifiedText =
+      citations.fabricated.length > 0
+        ? aiResponse.text + fabricationNotice(citations.fabricated)
+        : aiResponse.text;
+
+    if (citations.fabricated.length > 0) {
+      logger.warn('Answer contained unverifiable citations', {
+        repositoryId: id,
+        fabricated: citations.fabricated.slice(0, 5),
+        count: citations.fabricated.length,
+      });
+    }
+
     // Save AI response to database
     await prisma.chatMessage.create({
       data: {
         repositoryId: id as string,
         sender: 'ASSISTANT',
-        message: aiResponse.text,
+        message: verifiedText,
         modelUsed: aiResponse.modelUsed
       }
     });
@@ -245,11 +308,18 @@ export async function executeChatWithRepo(req: Request, res: Response, next: Nex
     res.status(200).json({
       success: true,
       data: {
-        text: aiResponse.text,
+        text: verifiedText,
         reasoning: aiResponse.reasoning,
         modelUsed: aiResponse.modelUsed,
         contextChunksUsed: contextChunks.length,
         evidenceTracesUsed: evidenceTraces.length,
+        // Surfaced so the UI can show a trust indicator without re-parsing text.
+        citations: {
+          verified: citations.verified.length,
+          fabricated: citations.fabricated.length,
+          uncited: citations.uncited,
+        },
+        retrievalQuality,
         plan: {
           intent: plan.intent,
           steps: plan.steps
@@ -286,7 +356,9 @@ export async function executeChatWithRepoStream(req: Request, res: Response, nex
       repoMetadata,
       evidenceTraces,
       plan,
-      conversationHistory
+      conversationHistory,
+      scannedFiles,
+      retrievalQuality
     } = await prepareChatContext(id as string, userId, message);
     contextPrepared = true;
 
@@ -349,18 +421,65 @@ export async function executeChatWithRepoStream(req: Request, res: Response, nex
         }
       }
 
+      /* ── verify the answer once the stream has finished ───────────────────
+         Tokens have already reached the client, so the prose cannot be
+         retracted or rewritten. What can be done is to tell the client, in a
+         final event, which citations did not match a real file, and to persist
+         only the verified text. The reader still sees the model's own words,
+         followed by an honest note about the parts that could not be checked —
+         the same contract as the non-streaming path, delivered differently. */
+      const knownPaths = buildKnownPathSet(scannedFiles);
+      const citations =
+        completeText.length > 0
+          ? validateCitations(completeText, knownPaths)
+          : { verified: [], fabricated: [], clean: true, uncited: false };
+      const verifiedText =
+        citations.fabricated.length > 0
+          ? completeText + fabricationNotice(citations.fabricated)
+          : completeText;
+
+      if (citations.fabricated.length > 0) {
+        logger.warn('Streamed answer contained unverifiable citations', {
+          repositoryId: id,
+          fabricated: citations.fabricated.slice(0, 5),
+          count: citations.fabricated.length,
+        });
+      }
+
       if (completeText.length > 0) {
         await prisma.chatMessage.create({
           data: {
             repositoryId: id as string,
             sender: 'ASSISTANT',
-            message: completeText,
+            message: verifiedText,
             modelUsed: finalModel
           }
         });
       }
 
       if (!clientDisconnected) {
+        // Sent before `done` so a client that renders the notice has it in hand
+        // when it decides the answer is finished.
+        res.write(
+          `data: ${JSON.stringify({
+            verification: {
+              verified: citations.verified.length,
+              fabricated: citations.fabricated.length,
+              // The paths themselves, so the client can name them. A
+              // pre-rendered notice would tie the streamed and non-streamed
+              // paths to two different shapes of the same fact.
+              fabricatedPaths: citations.fabricated.slice(0, 10),
+              uncited: citations.uncited,
+              notice:
+                citations.fabricated.length > 0
+                  ? fabricationNotice(citations.fabricated)
+                  : null,
+              // Weak retrieval is reported, not hidden — a high best-distance
+              // means the answer rests on loosely-related code.
+              retrievalQuality,
+            },
+          })}\n\n`,
+        );
         res.write(`data: ${JSON.stringify({ done: true, modelUsed: finalModel })}\n\n`);
         res.end();
       }
