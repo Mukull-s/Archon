@@ -9,6 +9,23 @@ export interface Message {
   message: string;
   modelUsed?: string | null;
   createdAt: string;
+  /**
+   * What the server was able to verify about this answer's citations.
+   *
+   * The answer text is the model's own; this says how many of the files it
+   * named actually exist in the repository. When `fabricated` is non-zero the
+   * server also sends a `notice` to append, because a citation that cannot be
+   * matched is a claim the reader should not take on trust.
+   */
+  verification?: {
+    verified: number;
+    fabricated: number;
+    /** The paths that could not be matched, so they can be named in the aside. */
+    fabricatedPaths?: string[];
+    uncited: boolean;
+    notice?: string | null;
+    retrievalQuality?: { bestDistance: number | null; chunkCount: number };
+  };
 }
 
 export interface ChatConsoleProps {
@@ -103,6 +120,10 @@ export default function ChatConsole({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Streaming token buffer: text accumulates here and is flushed to state once
+  // per animation frame. See the note in the stream loop for why.
+  const pendingTokens = useRef<string>('');
+  const flushScheduled = useRef<boolean>(false);
 
   const [repoInfo, setRepoInfo] = useState<{
     name: string;
@@ -227,12 +248,13 @@ export default function ChatConsole({
     }
   }, [messages, loading, loadingStep, isAtBottom]);
 
-  // Auto-grow textarea height
+  // Auto-grow textarea height. The ceiling here must match the CSS max-height on
+  // `.chat__in textarea` (220px) or the smaller of the two silently wins.
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 44), 160)}px`;
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 52), 220)}px`;
   }, [input]);
 
   // Ensure codebase vector index is ready
@@ -305,6 +327,11 @@ export default function ChatConsole({
     const controller = new AbortController();
     setAbortController(controller);
 
+    // Declared outside the try so the catch block can flush a partial answer
+    // when the user stops generation mid-stream.
+    let completeText = '';
+    let activeModel = '';
+
     try {
       await ensureIndexed();
       setMessages(prev => [...prev, tempAiMsg]);
@@ -323,9 +350,33 @@ export default function ChatConsole({
         signal: controller.signal
       });
 
+      /*
+       * This fetch bypasses the shared axios instance, so it does not inherit
+       * the 401 interceptor that clears the session and sends the user to the
+       * sign-in page. Without handling 401 here, an expired token produced a
+       * thrown JSON blob as the "message" and left the user staring at an
+       * error while still nominally signed in. Handle it the same way the
+       * interceptor does.
+       */
+      if (response.status === 401) {
+        localStorage.removeItem('archon_token');
+        localStorage.removeItem('archon_user');
+        window.dispatchEvent(new StorageEvent('storage', { key: 'archon_token' }));
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || 'AI engine failed.');
+        // The API speaks a JSON envelope; surface its message rather than the
+        // raw serialised object.
+        const raw = await response.text();
+        let message = raw || 'AI engine failed.';
+        try {
+          const parsed = JSON.parse(raw);
+          message = parsed?.error?.message || parsed?.message || message;
+        } catch {
+          /* not JSON — keep the raw text */
+        }
+        throw new Error(message);
       }
 
       if (!response.body) {
@@ -335,8 +386,6 @@ export default function ChatConsole({
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      let completeText = '';
-      let activeModel = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -362,21 +411,70 @@ export default function ChatConsole({
                 continue;
               }
 
+              /* The server validates the finished answer and reports what it
+                 found. The prose is already on screen and cannot be rewritten,
+                 so this attaches the verdict instead: how many citations were
+                 real, and the note describing any that were not. The note is
+                 rendered as an aside under the answer rather than spliced into
+                 the model's text, so the two are never confused. */
+              if (parsed.verification) {
+                setMessages(prev => {
+                  const idx = prev.findIndex(m => m.id === aiMessageId);
+                  if (idx === -1) return prev;
+                  const nextArr = [...prev];
+                  nextArr[idx] = {
+                    ...nextArr[idx],
+                    verification: {
+                      verified: parsed.verification.verified ?? 0,
+                      fabricated: parsed.verification.fabricated ?? 0,
+                      fabricatedPaths: parsed.verification.fabricatedPaths ?? [],
+                      uncited: !!parsed.verification.uncited,
+                      notice: parsed.verification.notice ?? null,
+                      retrievalQuality: parsed.verification.retrievalQuality ?? undefined,
+                    },
+                  };
+                  return nextArr;
+                });
+                continue;
+              }
+
               const tokenText = parsed.token || '';
               activeModel = parsed.modelUsed || activeModel;
               completeText += tokenText;
 
-              setMessages(prev => {
-                const idx = prev.findIndex(m => m.id === aiMessageId);
-                if (idx === -1) return prev;
-                const nextArr = [...prev];
-                nextArr[idx] = {
-                  ...nextArr[idx],
-                  message: completeText,
-                  modelUsed: activeModel
-                };
-                return nextArr;
-              });
+              /*
+               * Token buffering.
+               *
+               * This used to call setMessages for every token. Each call ran
+               * findIndex over the whole list, copied the array, spread the
+               * message, and re-rendered — hundreds of times per answer, while
+               * the markdown in the message was re-parsed each time. That is
+               * what made generation feel laggy and stepped rather than smooth.
+               *
+               * Tokens now accumulate in a ref and are flushed once per animation
+               * frame, so a burst of tokens arriving between two paints costs
+               * exactly one render. The text is identical; only the number of
+               * renders changes.
+               */
+              pendingTokens.current = completeText;
+              if (!flushScheduled.current) {
+                flushScheduled.current = true;
+                requestAnimationFrame(() => {
+                  flushScheduled.current = false;
+                  const text = pendingTokens.current;
+                  setMessages(prev => {
+                    const idx = prev.findIndex(m => m.id === aiMessageId);
+                    if (idx === -1) return prev;
+                    const nextArr = [...prev];
+                    nextArr[idx] = {
+                      ...nextArr[idx],
+                      message: text,
+                      modelUsed: activeModel,
+                    };
+                    return nextArr;
+                  });
+                });
+              }
             } catch {
               // Partial line in chunk, wait for next buffer flush
             }
@@ -384,14 +482,50 @@ export default function ChatConsole({
         }
       }
 
-      // Persist final conversation
+      /*
+       * The stream has ended. Any tokens that arrived since the last animation
+       * frame are still in `completeText` but possibly not yet rendered, and the
+       * persist below would write a truncated answer to localStorage.
+       *
+       * The render update and the persist are done in ONE updater so the text
+       * written to storage is the same text that is rendered. Two separate
+       * setMessages calls in the same tick both read the pre-update state, so
+       * the second would have persisted the truncated message.
+       */
+      const finalText = completeText;
       setMessages(prev => {
-        localStorage.setItem(`archon_chat_history_${repositoryId}`, JSON.stringify(prev));
-        return prev;
+        const idx = prev.findIndex(m => m.id === aiMessageId);
+        const next = idx === -1
+          ? prev
+          : prev.map((m, i) =>
+              i === idx ? { ...m, message: finalText || m.message, modelUsed: activeModel } : m,
+            );
+        localStorage.setItem(`archon_chat_history_${repositoryId}`, JSON.stringify(next));
+        return next;
       });
 
     } catch (err: any) {
       if (err.name === 'AbortError') {
+        /*
+         * The user stopped generation. Whatever was received is a real, if
+         * partial, answer and should be kept — but the stream aborted before the
+         * end-of-stream persist ran, so nothing has been written yet. Flush the
+         * buffer and persist here, or the stopped answer would silently vanish
+         * on refresh.
+         */
+        const partial = completeText;
+        if (partial) {
+          setMessages(prev => {
+            const idx = prev.findIndex(m => m.id === aiMessageId);
+            const next = idx === -1
+              ? prev
+              : prev.map((m, i) =>
+                  i === idx ? { ...m, message: partial, modelUsed: activeModel } : m,
+                );
+            localStorage.setItem(`archon_chat_history_${repositoryId}`, JSON.stringify(next));
+            return next;
+          });
+        }
         toast.info('Generation stopped.');
       } else {
         const errorMsg = err.message || 'AI request failed.';
@@ -553,7 +687,7 @@ export default function ChatConsole({
   // Inline text renderer for markdown
   const renderInlineText = (text: string, keyBase: number) => {
     const boldSegments = text.split(/\*\*(.*?)\*\*/g).map((segment, i) => {
-      if (i % 2 === 1) return <strong key={`b-${keyBase}-${i}`} className="text-white font-semibold">{segment}</strong>;
+      if (i % 2 === 1) return <strong key={`b-${keyBase}-${i}`} className="font-semibold text-ink">{segment}</strong>;
       return segment.split(/`([^`]+)`/g).map((part, j) => {
         if (j % 2 === 1) {
           // Check if this inline code is a verified real file
@@ -573,7 +707,7 @@ export default function ChatConsole({
                   if (onNavigateToExplorer) onNavigateToExplorer(matchedFile.path);
                   else if (onNavigateToFile) onNavigateToFile(matchedFile.path);
                 }}
-                className="bg-[#3b82f6]/10 hover:bg-[#3b82f6]/20 border border-[#3b82f6]/30 text-[#60a5fa] px-1.5 py-0.5 rounded font-mono text-[12px] inline-flex items-center gap-1 cursor-pointer transition-colors"
+                className="inline-flex cursor-pointer items-center gap-1 rounded-[2px] border border-rule-strong bg-paper-3 px-1.5 py-0.5 font-mono text-[11.5px] text-ink transition-colors hover:border-emerald hover:text-emerald"
                 title={`Inspect ${matchedFile.path}`}
               >
                 <span>📁</span>
@@ -583,7 +717,7 @@ export default function ChatConsole({
           }
 
           return (
-            <code key={`c-${keyBase}-${i}-${j}`} className="bg-[#18181b] border border-[#27272a] px-1.5 py-0.5 rounded text-[#e4e4e7] font-mono text-[12px]">
+            <code key={`c-${keyBase}-${i}-${j}`} className="rounded-[2px] border border-rule bg-paper-3 px-1.5 py-0.5 font-mono text-[11.5px] text-ink">
               {part}
             </code>
           );
@@ -608,13 +742,13 @@ export default function ChatConsole({
       if (currentList.length > 0) {
         if (listType === 'ul') {
           elements.push(
-            <ul key={key} className="list-disc pl-5 my-3 space-y-1.5 text-[#d4d4d8] leading-relaxed text-[13.5px]">
+            <ul key={key} className="my-3 list-disc space-y-1.5 pl-5 text-[13.5px] leading-relaxed text-ink-2">
               {currentList}
             </ul>
           );
         } else if (listType === 'ol') {
           elements.push(
-            <ol key={key} className="list-decimal pl-5 my-3 space-y-1.5 text-[#d4d4d8] leading-relaxed text-[13.5px]">
+            <ol key={key} className="my-3 list-decimal space-y-1.5 pl-5 text-[13.5px] leading-relaxed text-ink-2">
               {currentList}
             </ol>
           );
@@ -627,22 +761,22 @@ export default function ChatConsole({
     const flushTable = (key: string) => {
       if (inTable) {
         elements.push(
-          <div key={key} className="my-4 overflow-x-auto border border-[#27272a] rounded-lg">
-            <table className="min-w-full divide-y divide-[#27272a] text-[13px] font-sans">
-              <thead className="bg-[#121215]">
+          <div key={key} className="my-4 overflow-x-auto rounded-[3px] border border-rule">
+            <table className="min-w-full divide-y divide-rule font-sans text-[13px]">
+              <thead className="bg-paper-3">
                 <tr>
                   {tableHeaders.map((h, idx) => (
-                    <th key={idx} className="px-3.5 py-2.5 text-left font-mono font-semibold text-[#fafafa] border-b border-[#27272a]">
+                    <th key={idx} className="border-b border-rule px-3.5 py-2.5 text-left font-mono font-semibold text-ink">
                       {h}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#27272a] bg-[#0e0e11]">
+              <tbody className="divide-y divide-rule-2 bg-paper-2">
                 {tableRows.map((row, rIdx) => (
-                  <tr key={rIdx} className="hover:bg-[#18181b]/60 transition-colors">
+                  <tr key={rIdx} className="transition-colors hover:bg-paper-3">
                     {row.map((cell, cIdx) => (
-                      <td key={cIdx} className="px-3.5 py-2 text-[#d4d4d8]">
+                      <td key={cIdx} className="px-3.5 py-2 text-ink-2">
                         {cell}
                       </td>
                     ))}
@@ -684,21 +818,21 @@ export default function ChatConsole({
       if (trimmed.startsWith('### ')) {
         flushList(`list-before-h3-${i}`);
         elements.push(
-          <h4 key={i} className="text-[14px] font-mono font-bold text-white mt-5 mb-2 tracking-tight">
+          <h4 key={i} className="mb-2 mt-5 font-mono text-[14px] font-bold tracking-tight text-ink">
             {renderInlineText(trimmed.slice(4), i)}
           </h4>
         );
       } else if (trimmed.startsWith('## ')) {
         flushList(`list-before-h2-${i}`);
         elements.push(
-          <h3 key={i} className="text-[16px] font-mono font-bold text-white mt-6 mb-2.5 pb-1 border-b border-[#27272a]/40 tracking-tight">
+          <h3 key={i} className="mb-2.5 mt-6 border-b border-rule pb-1 font-mono text-[16px] font-bold tracking-tight text-ink">
             {renderInlineText(trimmed.slice(3), i)}
           </h3>
         );
       } else if (trimmed.startsWith('# ')) {
         flushList(`list-before-h1-${i}`);
         elements.push(
-          <h2 key={i} className="text-[18px] font-mono font-bold text-white mt-7 mb-3 pb-1.5 border-b border-[#27272a]/60 tracking-tight">
+          <h2 key={i} className="mb-3 mt-7 border-b border-rule-strong pb-1.5 font-mono text-[18px] font-bold tracking-tight text-ink">
             {renderInlineText(trimmed.slice(2), i)}
           </h2>
         );
@@ -707,7 +841,7 @@ export default function ChatConsole({
       else if (trimmed.startsWith('> ')) {
         flushList(`list-before-bq-${i}`);
         elements.push(
-          <blockquote key={i} className="border-l-2 border-[#3b82f6] bg-[#3b82f6]/5 pl-4 py-2 pr-3 my-3 rounded-r text-[#93c5fd] text-[13px] italic">
+          <blockquote key={i} className="my-3 rounded-r-[3px] border-l-2 border-emerald bg-paper-3 py-2 pl-4 pr-3 font-serif text-[13.5px] italic text-ink-2">
             {renderInlineText(trimmed.slice(2), i)}
           </blockquote>
         );
@@ -737,7 +871,7 @@ export default function ChatConsole({
       else {
         flushList(`list-para-${i}`);
         elements.push(
-          <p key={i} className="my-2.5 leading-relaxed text-[#d4d4d8] font-sans text-[13.5px]">
+          <p key={i} className="my-2.5 font-sans text-[13.5px] leading-relaxed text-ink-2">
             {renderInlineText(line, i)}
           </p>
         );
@@ -768,9 +902,9 @@ export default function ChatConsole({
       const langName = match[1] || 'CODE';
       const codeSnippet = match[2].trim();
       parts.push(
-        <div key={`code-block-${parts.length}`} className="my-4 border border-[#27272a] rounded-lg bg-[#0d0d10] overflow-hidden font-mono shadow-sm">
-          <div className="flex justify-between items-center bg-[#131316] px-3.5 py-1.5 border-b border-[#27272a] text-[11px] text-[#919095] select-none">
-            <span className="font-semibold text-zinc-400 tracking-wider uppercase text-[10.5px]">
+        <div key={`code-block-${parts.length}`} className="my-4 overflow-hidden rounded-[3px] border border-plate-3 bg-plate font-mono">
+          <div className="flex select-none items-center justify-between border-b border-plate-3 bg-plate-2 px-3.5 py-1.5 font-mono text-[10.5px] text-[#82868f]">
+            <span className="font-semibold uppercase tracking-wider text-[#a8adb6]">
               {langName}
             </span>
             <button
@@ -779,16 +913,16 @@ export default function ChatConsole({
                 navigator.clipboard.writeText(codeSnippet);
                 toast.success('Code copied to clipboard');
               }}
-              className="text-[#919095] hover:text-white flex items-center gap-1.5 cursor-pointer text-[11px] transition-colors py-0.5 px-1.5 rounded hover:bg-[#1f1f23]"
+              className="flex cursor-pointer items-center gap-1.5 rounded-[2px] px-1.5 py-0.5 font-mono text-[11px] text-[#82868f] transition-colors hover:text-[#e6e9ee]"
               title="Copy code snippet"
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
               <span>Copy</span>
             </button>
           </div>
-          <pre className="p-4 text-[12.5px] text-[#e4e4e7] overflow-x-auto leading-relaxed whitespace-pre font-mono">
+          <pre className="overflow-x-auto whitespace-pre p-4 font-mono text-[12.5px] leading-relaxed text-[#c8cdd6]">
             <code>{codeSnippet}</code>
           </pre>
         </div>
@@ -807,505 +941,583 @@ export default function ChatConsole({
     return parts.length > 0 ? parts : text;
   };
 
+  // Every file the assistant has cited so far, deduplicated. Derived purely from
+  // the rendered transcript — the rail never asserts a citation the answer didn't.
+  const groundedPreview = (() => {
+    const seen = new Set<string>();
+    const files: Array<{ path: string; name: string }> = [];
+    for (const msg of messages) {
+      if (msg.sender !== 'AI' || !msg.message) continue;
+      for (const file of getGroundedEvidenceFiles(msg.message)) {
+        if (seen.has(file.path)) continue;
+        seen.add(file.path);
+        files.push(file);
+      }
+    }
+    return files;
+  })();
+
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-[#09090b] text-zinc-200 selection:bg-blue-500/20 font-sans">
-      
-      {/* 1. MINIMAL WORKSPACE HEADER */}
-      <div className="h-12 border-b border-[#27272a] bg-[#0e0e11] px-4 sm:px-6 flex items-center justify-between shrink-0 select-none z-10">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="text-zinc-400 font-mono text-[12px] font-semibold tracking-tight uppercase">
-              {repoInfo?.name || 'REPOSITORY'}
-            </span>
-            <span className="text-zinc-600 font-mono text-[12px]">/</span>
-            <span className="text-white font-mono text-[12px] font-bold tracking-tight">
-              AI ASSISTANT
-            </span>
-          </div>
-
-          {/* Active Investigation Target Badge */}
-          {investigationTarget && (
-            <div className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-950/40 border border-blue-800/40 text-blue-300 font-mono text-[11px] truncate max-w-[280px]">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />
-              <span className="truncate" title={investigationTarget}>
-                Target: {investigationTarget.split('/').pop()}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (onSelectInvestigationTarget) onSelectInvestigationTarget('');
-                }}
-                className="hover:text-white font-bold ml-1 text-zinc-400 cursor-pointer shrink-0"
-                title="Clear active target"
-              >
-                ✕
-              </button>
-            </div>
-          )}
+    <div className="kview !pt-0">
+      {/* ══ header ═══════════════════════════════════════════════════════ */}
+      <div className="khead">
+        <div className="khead__l">
+          <div className="eyebrow">Assistant</div>
+          <h1 className="khead__t">
+            Ask the codebase <em className="serif-it">directly</em>.
+          </h1>
+          <p className="khead__d">
+            Answers are grounded in the parsed trees and the resolved import graph, and stream back
+            with the files they cite. Every citation below is verified against the repository before
+            it is shown.
+          </p>
         </div>
-
-        {/* Header Actions: Clear conversation & Discreet model badge */}
-        <div className="flex items-center gap-2">
+        <div className="khead__r">
+          {repoInfo?.name && (
+            <span className="st st--idle">
+              <i />
+              {repoInfo.name}
+            </span>
+          )}
+          {framework && (
+            <span className="st st--idle">
+              <i />
+              {framework}
+            </span>
+          )}
+          {investigationTarget && (
+            <span className="st st--live">
+              <i />
+              {investigationTarget.split('/').pop()}
+            </span>
+          )}
+          {selectedFiles.size > 0 && (
+            <span className="st st--idle">
+              <i />
+              {selectedFiles.size} files
+            </span>
+          )}
+          <span className={loading ? 'st st--live' : indexed ? 'st st--ok' : 'st st--warn'}>
+            <i />
+            {loading ? 'Streaming' : indexed ? 'Indexed' : 'Not indexed'}
+          </span>
           {messages.length > 0 && (
             <button
               type="button"
               onClick={handleClearChat}
-              className="text-[11px] font-mono text-zinc-400 hover:text-white bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] px-2.5 py-1 rounded transition-colors cursor-pointer"
+              className="abtn abtn--ghost !py-1.5 !text-[10px]"
               title="Clear conversation"
             >
               Clear
             </button>
           )}
-
-          {/* Discreet secondary model indicator */}
-          <span 
-            className="text-[10px] font-mono text-zinc-500 border border-[#27272a]/60 px-2 py-0.5 rounded bg-[#121215]"
-            title="Active Intelligence Engine"
-          >
-            qwen3-coder
-          </span>
         </div>
       </div>
 
-      {/* 2. DEDICATED CONVERSATION SCROLL AREA (ChatGPT / Claude standard) */}
-      <div 
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 md:px-8 py-6 relative scrollbar-thin"
-        data-lenis-prevent
-      >
-        <div className="max-w-4xl mx-auto">
-          {historyLoading ? (
-            <div className="flex items-center justify-center py-24">
-              <Loading message="Restoring conversation state..." type="skeleton" />
-            </div>
-          ) : messages.length === 0 && !loading && !indexing ? (
-            /* Rule 7: EMPTY STATE - Calm, focused, spacious investigation starters */
-            <div className="py-12 sm:py-16 text-center space-y-8 select-none max-w-2xl mx-auto">
-              
-              {/* Minimal Crest & Title */}
-              <div className="space-y-3">
-                <div className="w-10 h-10 mx-auto rounded-lg bg-blue-950/40 border border-blue-800/40 flex items-center justify-center text-blue-400 shadow-sm">
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                </div>
-
-                <h2 className="text-lg sm:text-xl font-bold text-white font-mono tracking-tight uppercase">
-                  {repoInfo?.name ? `${repoInfo.name} Investigation` : 'Codebase Intelligence'}
-                </h2>
-
-                <p className="text-[12.5px] font-mono text-zinc-400">
-                  {repoInfo ? `${repoInfo.fileCount} files scanned` : 'Repository mapped'}
-                  {framework ? ` • ${framework} architecture` : ''}
-                  {investigationTarget ? ` • Active Focus: ${investigationTarget.split('/').pop()}` : ''}
-                </p>
+      {/* ══ conversation ═════════════════════════════════════════════════ */}
+      <div className="chatw">
+        <div className="chat relative">
+          <div
+            ref={scrollContainerRef}
+            onScroll={handleScroll}
+            className="chat__log"
+            data-lenis-prevent
+          >
+            {historyLoading ? (
+              <div className="flex items-center justify-center py-24">
+                <Loading message="Restoring conversation state..." type="skeleton" />
               </div>
-
-              {/* 4 Lightweight Investigation Starters */}
-              <div className="space-y-2 text-left pt-2">
-                <span className="text-[10.5px] font-mono uppercase tracking-wider text-zinc-500 font-semibold px-1 block">
-                  Investigation Starters
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            ) : messages.length === 0 && !loading && !indexing ? (
+              /* ── empty state — the four investigation starters ────────── */
+              <div className="mx-auto max-w-2xl select-none py-10 text-center">
+                <div className="eyebrow justify-center">Investigation starters</div>
+                <h2 className="mt-4 text-[19px] font-semibold tracking-[-0.025em] text-ink">
+                  {repoInfo?.name ? `${repoInfo.name} — pick a thread` : 'Codebase intelligence'}
+                </h2>
+                <p className="mt-2 font-mono text-[11px] text-ink-3">
+                  {repoInfo ? `${repoInfo.fileCount} files scanned` : 'Repository mapped'}
+                  {framework ? ` · ${framework} architecture` : ''}
+                  {investigationTarget ? ` · focus ${investigationTarget.split('/').pop()}` : ''}
+                </p>
+                <div className="mt-6 grid grid-cols-1 gap-2.5 text-left sm:grid-cols-2">
                   {INVESTIGATION_STARTERS.map((starter) => (
                     <button
                       key={starter.title}
                       type="button"
                       onClick={() => sendMessage(starter.prompt)}
-                      className="p-3.5 bg-[#121215] hover:bg-[#18181b] border border-[#27272a] hover:border-blue-500/40 rounded-lg text-left transition-all duration-150 group cursor-pointer shadow-sm"
+                      className="group cursor-pointer rounded-[3px] border border-rule bg-paper-2 p-3.5 text-left transition-colors hover:border-emerald"
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-mono font-semibold text-zinc-200 group-hover:text-blue-300 transition-colors">
+                      <div className="mb-1 flex items-start justify-between gap-2">
+                        <span className="font-mono text-[11.5px] font-semibold text-ink transition-colors group-hover:text-emerald">
                           {starter.title}
                         </span>
-                        <span className="text-zinc-500 group-hover:text-blue-400 font-mono text-xs transition-colors">
+                        <span className="shrink-0 font-mono text-[12px] text-rule-strong transition-colors group-hover:text-emerald">
                           →
                         </span>
                       </div>
-                      <p className="text-[11.5px] text-zinc-400 line-clamp-2 leading-relaxed">
+                      <p className="line-clamp-2 text-[11.5px] leading-relaxed text-ink-3">
                         {starter.prompt}
                       </p>
                     </button>
                   ))}
                 </div>
               </div>
-            </div>
-          ) : (
-            /* CONVERSATION FEED */
-            <div className="space-y-6">
-              {messages.map((msg) => {
-                const isUser = msg.sender === 'USER';
-                const groundedFiles = !isUser ? getGroundedEvidenceFiles(msg.message) : [];
-                const contextualActions = !isUser ? getContextualActions(msg.message, groundedFiles) : [];
-                const cleanContent = isUser ? cleanMessageForDisplay(msg.message) : msg.message;
+            ) : (
+              /* ── conversation feed ───────────────────────────────────── */
+              <div>
+                {messages.map((msg) => {
+                  const isUser = msg.sender === 'USER';
+                  const groundedFiles = !isUser ? getGroundedEvidenceFiles(msg.message) : [];
+                  const contextualActions = !isUser ? getContextualActions(msg.message, groundedFiles) : [];
+                  const cleanContent = isUser ? cleanMessageForDisplay(msg.message) : msg.message;
 
-                if (isUser) {
-                  return (
-                    <div key={msg.id} className="flex justify-end my-5 select-text px-1">
-                      <div className="max-w-[80%] sm:max-w-[68%]">
-                        {/* YOU label above the bubble */}
-                        <div className="flex items-center justify-end gap-2 mb-1.5 select-none">
+                  if (isUser) {
+                    return (
+                      <div key={msg.id} className="msg msg--me select-text">
+                        <div className="msg__who">
                           {msg.createdAt && (
-                            <span className="text-[10px] font-mono text-zinc-500">
+                            <span>
                               {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           )}
-                          <span className="text-[10px] font-mono font-bold tracking-widest text-zinc-400 uppercase">
-                            You
-                          </span>
+                          <span>You</span>
                         </div>
-                        {/* User bubble — noticeably distinct from AI content */}
-                        <div className="bg-[#1e2433] border border-[#2d3a55] text-[#e8edf8] px-4 py-3 rounded-2xl rounded-br-sm shadow-md">
-                          <p className="text-[13.5px] font-sans leading-relaxed whitespace-pre-wrap text-[#dde5f5]">
-                            {cleanContent}
-                          </p>
+                        <div className="msg__txt whitespace-pre-wrap">
+                          {cleanContent}
                         </div>
                       </div>
-                    </div>
-                  );
-                }
+                    );
+                  }
 
-
-                return (
-                  <div key={msg.id} className="py-6 border-b border-[#27272a]/20 first:pt-2">
-                    {/* Archon Speaker Header */}
-                    <div className="flex items-center justify-between mb-3 select-none">
-                      <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 rounded bg-blue-500/10 border border-blue-500/30 text-blue-400 flex items-center justify-center text-[10px] font-bold shadow-sm">
-                          ⚡
-                        </div>
-                        <span className="text-[11px] font-mono font-bold text-blue-400 tracking-wider uppercase">
-                          ARCHON
-                        </span>
+                  return (
+                    <div key={msg.id} className="msg msg--ai">
+                      {/* speaker header */}
+                      <div className="msg__who">
+                        <span>Archon</span>
                         {msg.modelUsed && (
-                          <span className="text-[9px] font-mono text-zinc-500 border border-[#27272a] px-1.5 py-0.2 rounded bg-[#121215]">
+                          <span className="text-ink-3 normal-case tracking-normal">
                             {msg.modelUsed.split('/').pop()}
                           </span>
                         )}
+
+                        {/* Citation status. A trust claim the reader can check,
+                            not a decoration — so it only appears once the server
+                            has actually reported back. */}
+                        {msg.verification && (
+                          <span
+                            className={
+                              'font-mono text-[10.5px] normal-case tracking-normal ' +
+                              (msg.verification.fabricated > 0
+                                ? 'text-red-500'
+                                : 'text-ink-3')
+                            }
+                            title={
+                              msg.verification.fabricated > 0
+                                ? `${msg.verification.fabricated} cited path(s) could not be matched to a file in this repository`
+                                : 'Every file this answer cited exists in the repository'
+                            }
+                          >
+                            {msg.verification.fabricated > 0
+                              ? `${msg.verification.fabricated} unverified citation${msg.verification.fabricated === 1 ? '' : 's'}`
+                              : msg.verification.verified > 0
+                                ? `${msg.verification.verified} citation${msg.verification.verified === 1 ? '' : 's'} verified`
+                                : 'no citations'}
+                          </span>
+                        )}
+
+                        {/* Retrieval strength. Distances are measured, and a
+                            weak match is worth admitting: the same numbers that
+                            make a good answer look confident make a poorly
+                            grounded one look identical. Only shown past a
+                            threshold where the match is genuinely loose. */}
+                        {msg.verification?.retrievalQuality?.bestDistance != null &&
+                          msg.verification.retrievalQuality.bestDistance > 0.9 && (
+                            <span
+                              className="font-mono text-[10.5px] normal-case tracking-normal text-ink-3"
+                              title={`The closest code it found was a weak match (distance ${msg.verification.retrievalQuality.bestDistance.toFixed(2)}), so this answer rests on loosely-related files.`}
+                            >
+                              weak match
+                            </span>
+                          )}
+
+                        {msg.message && (
+                          <div className="relative ml-auto">
+                            <button
+                              type="button"
+                              onClick={() => setActiveMenuMessageId(prev => prev === msg.id ? null : msg.id)}
+                              className="cursor-pointer rounded-[2px] px-1.5 py-0.5 font-mono text-[11px] text-ink-3 transition-colors hover:bg-paper-3 hover:text-ink"
+                              title="More options"
+                            >
+                              •••
+                            </button>
+
+                            {activeMenuMessageId === msg.id && (
+                              <>
+                                <div
+                                  className="fixed inset-0 z-30"
+                                  onClick={() => setActiveMenuMessageId(null)}
+                                />
+                                <div className="absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-[3px] border border-rule bg-paper-2 py-1 text-left shadow-dossier">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleCopyText(msg.message);
+                                      setActiveMenuMessageId(null);
+                                    }}
+                                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-[11px] text-ink-2 transition-colors hover:bg-paper-3 hover:text-ink"
+                                  >
+                                    <span>📋</span> Copy response
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveMenuMessageId(null);
+                                      sendMessage('Elaborate on this analysis with more architectural depth.');
+                                    }}
+                                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-[11px] text-ink-2 transition-colors hover:bg-paper-3 hover:text-ink"
+                                  >
+                                    <span>🔍</span> Explain in depth
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveMenuMessageId(null);
+                                      sendMessage('Identify any potential edge cases or failure modes in this implementation.');
+                                    }}
+                                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-[11px] text-ink-2 transition-colors hover:bg-paper-3 hover:text-ink"
+                                  >
+                                    <span>⚠️</span> Analyze edge cases
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
 
-                      {/* Secondary menu trigger for AI response */}
+                      {/* answer body */}
+                      <div className="msg__txt select-text">
+                        {renderAIContent(msg.message)}
+                      </div>
+
+                      {/* Unverified citations, stated plainly.
+                          The model's prose is untouched — this is an aside, and
+                          it says only what was actually checked: that some
+                          named files could not be matched. */}
+                      {msg.verification?.notice && (
+                        <div className="mt-2 rounded-[3px] border border-rule border-l-2 border-l-red-500 bg-paper-2 px-3 py-2">
+                          <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-red-500">
+                            Unverified citation
+                            {msg.verification.fabricated === 1 ? '' : 's'}
+                          </div>
+                          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+                            {msg.verification.fabricated === 1
+                              ? 'One path this answer named does not match any file in this repository'
+                              : `${msg.verification.fabricated} paths this answer named do not match any file in this repository`}
+                            {msg.verification.fabricatedPaths &&
+                              msg.verification.fabricatedPaths.length > 0 && (
+                                <>
+                                  {' '}
+                                  (
+                                  {msg.verification.fabricatedPaths
+                                    .map(p => `\`${p}\``)
+                                    .join(', ')}
+                                  )
+                                </>
+                              )}
+                            . Treat those references as unreliable; the rest of
+                            the answer is unaffected.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* verified evidence citations */}
+                      {groundedFiles.length > 0 && (
+                        <div className="msg__cites">
+                          {groundedFiles.map(file => (
+                            <button
+                              key={file.path}
+                              type="button"
+                              onClick={() => {
+                                if (onSelectInvestigationTarget) onSelectInvestigationTarget(file.path);
+                                if (onNavigateToExplorer) onNavigateToExplorer(file.path);
+                                else if (onNavigateToFile) onNavigateToFile(file.path);
+                              }}
+                              className="msg__cite w-full cursor-pointer text-left transition-colors hover:bg-paper-3"
+                              title={`Inspect ${file.path} in Explorer`}
+                            >
+                              <span>{file.path}</span>
+                              <span className="ln">↗</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* contextual actions */}
                       {msg.message && (
-                        <div className="relative">
+                        <div className="mt-3 flex flex-wrap items-center gap-2 select-none">
+                          {contextualActions.map((action, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={action.onClick}
+                              className={`abtn !py-1 !text-[10px] ${action.primary ? 'abtn--solid' : 'abtn--ghost'}`}
+                            >
+                              <span>{action.icon}</span>
+                              <span>{action.label}</span>
+                            </button>
+                          ))}
+
                           <button
                             type="button"
-                            onClick={() => setActiveMenuMessageId(prev => prev === msg.id ? null : msg.id)}
-                            className="text-zinc-500 hover:text-zinc-300 text-xs px-1.5 py-0.5 rounded hover:bg-[#18181b] cursor-pointer"
-                            title="More options"
+                            onClick={() => handleCopyText(msg.message)}
+                            className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded-[2px] px-2 py-1 font-mono text-[10px] text-ink-3 transition-colors hover:text-ink"
+                            title="Copy text"
                           >
-                            •••
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2" />
+                            </svg>
+                            <span>Copy</span>
                           </button>
 
-                          {/* Overflow dropdown */}
-                          {activeMenuMessageId === msg.id && (
-                            <>
-                              <div 
-                                className="fixed inset-0 z-30" 
-                                onClick={() => setActiveMenuMessageId(null)} 
-                              />
-                              <div className="absolute right-0 top-full mt-1 w-44 bg-[#121215] border border-[#27272a] rounded-lg shadow-xl py-1 z-40 text-xs font-mono">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleCopyText(msg.message);
-                                    setActiveMenuMessageId(null);
-                                  }}
-                                  className="w-full text-left px-3 py-1.5 text-zinc-300 hover:text-white hover:bg-[#18181b] flex items-center gap-2 cursor-pointer"
-                                >
-                                  <span>📋</span> Copy response
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveMenuMessageId(null);
-                                    sendMessage('Elaborate on this analysis with more architectural depth.');
-                                  }}
-                                  className="w-full text-left px-3 py-1.5 text-zinc-300 hover:text-white hover:bg-[#18181b] flex items-center gap-2 cursor-pointer"
-                                >
-                                  <span>🔍</span> Explain in depth
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveMenuMessageId(null);
-                                    sendMessage('Identify any potential edge cases or failure modes in this implementation.');
-                                  }}
-                                  className="w-full text-left px-3 py-1.5 text-zinc-300 hover:text-white hover:bg-[#18181b] flex items-center gap-2 cursor-pointer"
-                                >
-                                  <span>⚠️</span> Analyze edge cases
-                                </button>
-                              </div>
-                            </>
-                          )}
+                          <button
+                            type="button"
+                            onClick={handleRegenerate}
+                            className="inline-flex cursor-pointer items-center gap-1 rounded-[2px] px-2 py-1 font-mono text-[10px] text-ink-3 transition-colors hover:text-ink"
+                            title="Regenerate response"
+                          >
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89M9 11l3-3m-3 3l-3-3" />
+                            </svg>
+                            <span>Regenerate</span>
+                          </button>
                         </div>
                       )}
                     </div>
+                  );
+                })}
 
-                    {/* AI Message Content */}
-                    <div className="select-text">
-                      {renderAIContent(msg.message)}
+                {/* planner intent steps */}
+                {currentPlan && loading && (
+                  <div className="msg__steps select-none">
+                    <div className="st-t">
+                      Intent — {currentPlan.intent}
                     </div>
-
-                    {/* Rule 6: GROUNDED EVIDENCE CHIPS (strictly verified against repository files) */}
-                    {!isUser && groundedFiles.length > 0 && (
-                      <div className="mt-4 flex flex-wrap items-center gap-1.5 pt-2 select-none">
-                        <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mr-1">
-                          Verified Evidence:
-                        </span>
-                        {groundedFiles.map(file => (
-                          <button
-                            key={file.path}
-                            type="button"
-                            onClick={() => {
-                              if (onSelectInvestigationTarget) onSelectInvestigationTarget(file.path);
-                              if (onNavigateToExplorer) onNavigateToExplorer(file.path);
-                              else if (onNavigateToFile) onNavigateToFile(file.path);
-                            }}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#141418] hover:bg-[#1f1f25] border border-[#27272a] hover:border-blue-500/40 text-blue-300 font-mono text-[11px] transition-colors cursor-pointer"
-                            title={`Inspect ${file.path} in Explorer`}
-                          >
-                            <span>📁</span>
-                            <span>{file.name}</span>
-                          </button>
-                        ))}
+                    {currentPlan.steps.map((step, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <span className="text-emerald">✓</span>
+                        <span>{step}</span>
                       </div>
-                    )}
-
-                    {/* Rule 5: CONTEXTUAL ACTIONS (avoid button soup) */}
-                    {!isUser && msg.message && (
-                      <div className="flex flex-wrap items-center gap-2 mt-3 pt-2 border-t border-[#27272a]/20 select-none">
-                        {/* Dynamic Contextual Action Buttons */}
-                        {contextualActions.map((action, idx) => (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={action.onClick}
-                            className={`inline-flex items-center gap-1.5 text-[11px] font-mono px-2.5 py-1 rounded transition-colors cursor-pointer ${
-                              action.primary
-                                ? 'bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/30 text-blue-300 font-semibold'
-                                : 'bg-[#18181b] hover:bg-[#222226] border border-[#27272a] text-zinc-300 hover:text-white'
-                            }`}
-                          >
-                            <span>{action.icon}</span>
-                            <span>{action.label}</span>
-                          </button>
-                        ))}
-
-                        {/* Subtle Secondary Controls */}
-                        <button
-                          type="button"
-                          onClick={() => handleCopyText(msg.message)}
-                          className="inline-flex items-center gap-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 px-2 py-1 rounded hover:bg-[#18181b] transition-colors cursor-pointer ml-auto"
-                          title="Copy text"
-                        >
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2" />
-                          </svg>
-                          <span>Copy</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={handleRegenerate}
-                          className="inline-flex items-center gap-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-200 px-2 py-1 rounded hover:bg-[#18181b] transition-colors cursor-pointer"
-                          title="Regenerate response"
-                        >
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89M9 11l3-3m-3 3l-3-3" />
-                          </svg>
-                          <span>Regenerate</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-
-              {/* RAG Planner Intent Step Indicator */}
-              {currentPlan && loading && (
-                <div className="py-4 select-none">
-                  <div className="bg-[#121215] border border-[#27272a] rounded-lg p-3 max-w-md space-y-1.5">
-                    <div className="flex justify-between items-center text-[11px] font-mono text-blue-400 font-semibold uppercase">
-                      <span>🎯 Intent: {currentPlan.intent}</span>
-                      <span className="text-[10px] text-zinc-500">Plan</span>
-                    </div>
-                    <div className="space-y-1">
-                      {currentPlan.steps.map((step, idx) => (
-                        <div key={idx} className="flex items-center gap-2 text-[11px] text-zinc-400 font-mono">
-                          <span className="text-emerald-400 text-xs">✓</span>
-                          <span>{step}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Streaming Indicator */}
-              {loading && (
-                <div className="py-4 flex items-center gap-2.5 text-[11.5px] font-mono text-zinc-400 select-none">
-                  <div className="flex gap-1">
-                    {[0, 1, 2].map(i => (
-                      <div
-                        key={i}
-                        className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce"
-                        style={{ animationDelay: `${i * 0.15}s` }}
-                      />
                     ))}
                   </div>
-                  <span>{loadingStep.toUpperCase()}</span>
-                </div>
-              )}
-
-              {/* AI Connection Error Alert */}
-              {aiError && (
-                <div className="py-4 select-none">
-                  <ErrorState
-                    title="AI Assistant Error"
-                    description={aiError}
-                    onRetry={() => {
-                      const lastUserMsg = [...messages].reverse().find(m => m.sender === 'USER');
-                      if (lastUserMsg) {
-                        sendMessage(cleanMessageForDisplay(lastUserMsg.message));
-                      }
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* Scroll anchor at bottom of messages */}
-              <div ref={scrollAnchorRef} className="h-4" />
-            </div>
-          )}
-        </div>
-
-        {/* Floating Jump to Latest Button (visible only when scrolled up inside feed) */}
-        {!isAtBottom && messages.length > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              scrollToBottom('smooth');
-              setIsAtBottom(true);
-            }}
-            className="sticky bottom-4 left-1/2 -translate-x-1/2 bg-[#18181b] hover:bg-[#27272a] text-zinc-200 border border-[#27272a] font-mono text-[11px] font-semibold px-3 py-1.5 rounded-full shadow-xl flex items-center gap-1.5 transition-all z-20 select-none cursor-pointer"
-          >
-            <span>↓</span>
-            <span>Jump to latest</span>
-          </button>
-        )}
-      </div>
-
-      {/* 3. DOCKED COMPOSER AT BOTTOM (ChatGPT / Claude Standard) */}
-      {/* Solid opaque background, border-t, anchored at absolute bottom of workspace */}
-      <div className="shrink-0 w-full bg-[#0e0e11] border-t border-[#27272a] px-4 sm:px-6 md:px-8 py-3 z-30">
-        <div className="max-w-4xl mx-auto">
-          
-          {/* Context indicator: ONLY target file or compact file badge, never 60 chips! */}
-          {(investigationTarget || selectedFiles.size > 0) && (
-            <div className="flex items-center gap-2 mb-2 text-[11px] font-mono select-none">
-              {investigationTarget && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-950/40 border border-blue-800/40 text-blue-300">
-                  <span>🎯 Focus: {investigationTarget.split('/').pop()}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onSelectInvestigationTarget) onSelectInvestigationTarget('');
-                    }}
-                    className="hover:text-white font-bold ml-1 text-zinc-400 cursor-pointer"
-                    title="Clear focus target"
-                  >
-                    ✕
-                  </button>
-                </span>
-              )}
-
-              {selectedFiles.size > 0 && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#18181b] border border-[#27272a] text-zinc-400">
-                  <span>📁 {selectedFiles.size} files referenced</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      selectedFiles.forEach(f => onToggleFile(f));
-                    }}
-                    className="hover:text-red-400 font-bold ml-1 text-zinc-500 cursor-pointer"
-                    title="Clear selected files"
-                  >
-                    ✕
-                  </button>
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Semantic index progress banner (two-phase indexing) */}
-          {showSemanticBanner && (
-            <div className="mb-2 flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-blue-900/40 bg-blue-950/30 text-[11px] font-mono text-blue-200">
-              <span>
-                Semantic index {semanticPct}% — answers use the structural graph until embeddings finish.
-              </span>
-              <span className="tabular-nums text-blue-300/80 shrink-0">{semanticPct}%</span>
-            </div>
-          )}
-
-          {/* Elevated Restrained Composer Input Box */}
-          <form
-            onSubmit={handleSubmit}
-            className="border border-[#27272a] focus-within:border-blue-500/60 bg-[#121215] rounded-lg p-3 shadow-md transition-colors"
-          >
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleTextareaKeyDown}
-              placeholder={
-                indexing
-                  ? 'Indexing repository schemas...'
-                  : loading
-                  ? 'Synthesizing response...'
-                  : 'Ask an architectural question, trace execution lifecycle, or analyze blast radius...'
-              }
-              disabled={loading || indexing}
-              className="w-full bg-transparent border-none text-[#fafafa] placeholder-zinc-500 text-[13.5px] font-sans leading-relaxed outline-none resize-none p-1 min-h-[44px] max-h-[160px]"
-            />
-
-            <div className="flex justify-between items-center mt-2 pt-2 border-t border-[#27272a]/40 px-1 select-none text-[11px] font-mono text-zinc-500">
-              <span className="hidden sm:inline">
-                ↵ to send • Shift+↵ for new line
-              </span>
-
-              <div className="flex items-center gap-2 ml-auto">
-                {loading ? (
-                  <button
-                    type="button"
-                    onClick={handleStopGeneration}
-                    className="bg-red-950/40 border border-red-900/50 hover:bg-red-900/40 text-red-300 px-3 py-1 rounded text-xs font-mono font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
-                    title="Stop generation"
-                  >
-                    <span>■</span>
-                    <span>Stop</span>
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={!input.trim() || loading || indexing}
-                    className={`px-3.5 py-1 rounded text-xs font-mono font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
-                      input.trim()
-                        ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                        : 'bg-[#18181b] text-zinc-600 border border-[#27272a]/50 cursor-default'
-                    }`}
-                  >
-                    <span>Ask Archon</span>
-                    <span>→</span>
-                  </button>
                 )}
+
+                {/* streaming indicator */}
+                {loading && (
+                  <div className="flex items-center gap-2.5 py-4 font-mono text-[11px] uppercase tracking-[0.13em] text-ink-3 select-none">
+                    <span className="st st--live">
+                      <i />
+                    </span>
+                    <span>{loadingStep}</span>
+                  </div>
+                )}
+
+                {/* connection error */}
+                {aiError && (
+                  <div className="py-4 select-none">
+                    <ErrorState
+                      title="AI Assistant Error"
+                      description={aiError}
+                      onRetry={() => {
+                        const lastUserMsg = [...messages].reverse().find(m => m.sender === 'USER');
+                        if (lastUserMsg) {
+                          sendMessage(cleanMessageForDisplay(lastUserMsg.message));
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div ref={scrollAnchorRef} className="h-4" />
               </div>
+            )}
+          </div>
+
+          {/* composer */}
+          <form onSubmit={handleSubmit} className="chat__in">
+            <div className="flex-1">
+              {(investigationTarget || selectedFiles.size > 0) && (
+                <div className="mb-2 flex flex-wrap items-center gap-2 select-none">
+                  {investigationTarget && (
+                    <span className="inline-flex items-center gap-1.5 rounded-[2px] border border-rule bg-paper-2 px-2 py-0.5 font-mono text-[10px] text-ink-2">
+                      <span>🎯 {investigationTarget.split('/').pop()}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onSelectInvestigationTarget) onSelectInvestigationTarget('');
+                        }}
+                        className="ml-1 cursor-pointer font-bold text-ink-3 transition-colors hover:text-sig"
+                        title="Clear focus target"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  )}
+
+                  {selectedFiles.size > 0 && (
+                    <span className="inline-flex items-center gap-1.5 rounded-[2px] border border-rule bg-paper-2 px-2 py-0.5 font-mono text-[10px] text-ink-2">
+                      <span>📁 {selectedFiles.size} files referenced</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectedFiles.forEach(f => onToggleFile(f));
+                        }}
+                        className="ml-1 cursor-pointer font-bold text-ink-3 transition-colors hover:text-sig"
+                        title="Clear selected files"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {showSemanticBanner && (
+                <div className="mb-2 flex items-center justify-between gap-3 rounded-[3px] border border-rule bg-paper-3 px-3 py-2 font-mono text-[10.5px] text-ink-2">
+                  <span className="st st--live">
+                    <i />
+                    Semantic index {semanticPct}% — answers use the structural graph until embeddings finish.
+                  </span>
+                  <span className="shrink-0 tabular-nums text-ink-3">{semanticPct}%</span>
+                </div>
+              )}
+
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleTextareaKeyDown}
+                placeholder={
+                  indexing
+                    ? 'Indexing repository schemas...'
+                    : loading
+                    ? 'Synthesizing response...'
+                    : 'Ask an architectural question, trace execution lifecycle, or analyze blast radius...'
+                }
+                disabled={loading || indexing}
+              />
+            </div>
+
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              {loading ? (
+                <button
+                  type="button"
+                  onClick={handleStopGeneration}
+                  className="abtn abtn--ghost !py-1.5 !text-[10px] !text-sig"
+                  title="Stop generation"
+                >
+                  <span>■</span>
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!input.trim() || loading || indexing}
+                  className="abtn abtn--solid !py-1.5 !text-[10px]"
+                >
+                  <span>Ask Archon</span>
+                  <span>→</span>
+                </button>
+              )}
+              <span className="hidden font-mono text-[9px] text-ink-3 sm:inline">↵ send · ⇧↵ newline</span>
             </div>
           </form>
+
+          {/* floating jump-to-latest sits inside the log's own rail */}
+          {!isAtBottom && messages.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                scrollToBottom('smooth');
+                setIsAtBottom(true);
+              }}
+              className="pointer-events-auto absolute bottom-[68px] left-1/2 z-20 -translate-x-1/2 rounded-[3px] border border-rule-strong bg-paper-2 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-ink-2 shadow-dossier transition-colors hover:border-ink hover:text-ink select-none"
+            >
+              ↓ Jump to latest
+            </button>
+          )}
+        </div>
+
+        {/* ══ side rail ══════════════════════════════════════════════════ */}
+        <div className="space-y-4">
+          <div className="chat__extra">
+            <div className="chat__eh">Session</div>
+            <div className="chat__eb">
+              <div className="ikv">
+                <span className="k">Repository</span>
+                <span className="v">{repoInfo?.name || '—'}</span>
+              </div>
+              <div className="ikv">
+                <span className="k">Files</span>
+                <span className="v">{repoInfo ? repoInfo.fileCount : '—'}</span>
+              </div>
+              <div className="ikv">
+                <span className="k">Framework</span>
+                <span className="v">{repoInfo?.framework || framework || '—'}</span>
+              </div>
+              <div className="ikv">
+                <span className="k">Languages</span>
+                <span className="v">{repoInfo?.languages?.join(' · ') || '—'}</span>
+              </div>
+              <div className="ikv">
+                <span className="k">Turns</span>
+                <span className="v">{messages.length}</span>
+              </div>
+              <div className="ikv">
+                <span className="k">Index</span>
+                <span className={indexed ? 'v v--em' : 'v v--risk'}>{indexed ? 'ready' : 'pending'}</span>
+              </div>
+              <div className="ikv">
+                <span className="k">Semantic</span>
+                <span className={semanticPct >= 100 ? 'v v--em' : 'v'}>{semanticPct}%</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="chat__extra">
+            <div className="chat__eh">Suggested questions</div>
+            <div className="chat__eb !py-1.5">
+              {INVESTIGATION_STARTERS.map((starter) => (
+                <button
+                  key={starter.title}
+                  type="button"
+                  onClick={() => sendMessage(starter.prompt)}
+                  className="qchip"
+                  title={starter.prompt}
+                >
+                  {starter.title}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {groundedPreview.length > 0 && (
+            <div className="chat__extra">
+              <div className="chat__eh">Cited files</div>
+              <div className="chat__eb !p-0">
+                {groundedPreview.map(file => (
+                  <div key={file.path} className="mini__row">
+                    <span className="ic">{file.name.slice(0, 1).toUpperCase()}</span>
+                    <span className="p" title={file.path}>{file.path}</span>
+                    <span className="n">{file.name.split('.').pop()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
-
     </div>
   );
 }
