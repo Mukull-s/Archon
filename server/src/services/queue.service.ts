@@ -28,6 +28,9 @@ export class QueueService {
   private heartbeatIntervalMs: number = 15_000; // 15 seconds
   private pollIntervalMs: number = 2_000; // 2 seconds
 
+  /** Consecutive failed polls. Reset to 0 as soon as one succeeds. */
+  private consecutivePollFailures: number = 0;
+
   constructor() {
     this.workerId = `worker-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   }
@@ -351,8 +354,10 @@ export class QueueService {
       }
 
       return staleJobs.length;
-    } catch (err: any) {
-      console.error('[Queue] Error in recoverStaleJobs:', err.message);
+    } catch {
+      // Swallowed deliberately: `pollAndProcess` owns the retry/backoff for a
+      // database that is unreachable, and logging here would double every
+      // message. Returning 0 simply means "nothing recovered this round".
       return 0;
     }
   }
@@ -402,6 +407,29 @@ export class QueueService {
   }
 
   /**
+   * How long to wait before the next poll, given how many polls have failed in
+   * a row.
+   *
+   * The interval is the floor for a healthy worker: it polls promptly when the
+   * database is answering. On failure the delay doubles up to a ceiling, so a
+   * database that is down — Neon suspending, a network blip, a connection pool
+   * exhausted — is retried a few times a minute instead of hundreds of times a
+   * second. That loop previously logged every attempt, which is why an
+   * unreachable database filled the terminal with the same line.
+   *
+   * The ceiling is deliberately under a minute: long enough to stop hammering,
+   * short enough that a job queued during an outage starts promptly once the
+   * database returns.
+   */
+  private nextPollDelay(consecutiveFailures: number): number {
+    if (consecutiveFailures === 0) return this.pollIntervalMs;
+    const backoff = this.pollIntervalMs * Math.pow(2, Math.min(consecutiveFailures, 6));
+    return Math.min(backoff, 45_000);
+  }
+
+  /** */
+
+  /**
    * Worker loop: claims available jobs and processes them with heartbeats.
    */
   private async pollAndProcess(): Promise<void> {
@@ -417,6 +445,14 @@ export class QueueService {
       await this.recoverStaleJobs();
 
       const job = await this.claimJob();
+
+      // Both database calls above succeeded, so the connection is healthy.
+      // Clear the failure counter so the next outage starts its backoff from
+      // the floor rather than inheriting an old delay.
+      if (this.consecutivePollFailures > 0) {
+        this.consecutivePollFailures = 0;
+      }
+
       if (!job) {
         // No jobs available; sleep until next poll
         this.scheduleNextPoll();
@@ -438,8 +474,17 @@ export class QueueService {
         setImmediate(() => this.pollAndProcess());
       }
     } catch (err: any) {
-      console.error('[Queue] Error polling for jobs:', err.message);
-      this.scheduleNextPoll();
+      this.consecutivePollFailures++;
+      const delay = this.nextPollDelay(this.consecutivePollFailures);
+      // Log the first failure in full, then every fifth, so a long outage stays
+      // visible without filling the terminal with the same line.
+      if (this.consecutivePollFailures === 1 || this.consecutivePollFailures % 5 === 0) {
+        console.error(
+          `[Queue] Poll failed (${this.consecutivePollFailures} in a row, retrying in ${Math.round(delay / 1000)}s):`,
+          err?.message ?? err,
+        );
+      }
+      this.scheduleNextPoll(delay);
     }
   }
 
