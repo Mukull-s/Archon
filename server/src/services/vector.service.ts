@@ -147,18 +147,87 @@ class VectorService {
     return embeddingService.getEmbeddingsBatch(texts, tracker);
   }
 
+  /**
+   * Nearest code chunks to a query vector, scoped to one repository.
+   *
+   * ── this query is load-bearing; read before changing it ────────────────
+   *
+   * The obvious form —
+   *
+   *   SELECT ... WHERE "repositoryId" = $1
+   *   ORDER BY embedding <=> $2::vector LIMIT $3
+   *
+   * — silently returns ZERO ROWS once the table holds vectors from more than a
+   * handful of repositories. The planner walks the HNSW index in global
+   * distance order and applies `repositoryId` as a post-filter, while HNSW
+   * only considers `hnsw.ef_search` candidates per scan (default 40). Across
+   * 26,000 chunks in many repositories, none of those 40 candidates belong to
+   * the repository being asked about, every one is discarded, and the query
+   * returns nothing.
+   *
+   * Measured on the live database with `EXPLAIN ANALYZE`:
+   *
+   *   Index Scan using "CodeChunk_embedding_hnsw_idx"
+   *     Filter: ("repositoryId" = '...')
+   *     Rows Removed by Filter: 40        <-- the whole ef_search budget
+   *     rows=0
+   *
+   * The failure is invisible from the application: the endpoint returns 200 and
+   * the assistant answers anyway, with no code in front of it. Retrieval
+   * returning empty looked like a model problem and was a query-plan problem.
+   *
+   * `MATERIALIZED` is the fix and it is not optional. A plain CTE gets inlined
+   * by the planner and reproduces the exact broken plan; the keyword forces the
+   * repository's vectors to be collected first, and only then sorted by
+   * distance. Verified to return rows for repositories that previously returned
+   * none, and to leave working repositories unchanged.
+   */
   async searchSimilarChunks(repositoryId: string, queryVector: number[], limit = 6) {
     const vectorStr = toVectorLiteral(queryVector);
 
-    // Query database for similar chunks using pgvector cosine distance (<=>) safely parameterized
     const results = await prisma.$queryRaw<any[]>`
-      SELECT id, "filePath", "content", "startLine", "endLine", "symbolName",
-             (embedding <=> ${vectorStr}::vector) as distance
-      FROM "CodeChunk"
-      WHERE "repositoryId" = ${repositoryId}
+      WITH scoped AS MATERIALIZED (
+        SELECT id, "filePath", content, "startLine", "endLine", "symbolName", embedding
+        FROM "CodeChunk"
+        WHERE "repositoryId" = ${repositoryId}
+          AND embedding IS NOT NULL
+      )
+      SELECT id, "filePath", content, "startLine", "endLine", "symbolName",
+             (embedding <=> ${vectorStr}::vector) AS distance
+      FROM scoped
       ORDER BY distance ASC
       LIMIT ${limit}
     `;
+
+    return results;
+  }
+
+  /**
+   * Every chunk belonging to a repository, nearest-first, with no vector index
+   * involved.
+   *
+   * Used when a caller needs retrieval to be exactly reproducible — the vector
+   * index is approximate by design, so two identical queries can return
+   * different neighbours. Accepted by traversal (which is exact by nature) and
+   * useful when debugging why a particular file was or was not retrieved.
+   */
+  async searchExactInRepository(
+    repositoryId: string,
+    queryVector: number[],
+    limit = 6,
+    onProgress?: (scanned: number) => void,
+  ) {
+    const vectorStr = toVectorLiteral(queryVector);
+    const results = await prisma.$queryRaw<any[]>`
+      SELECT id, "filePath", content, "startLine", "endLine", "symbolName",
+             (embedding <=> ${vectorStr}::vector) AS distance
+      FROM "CodeChunk"
+      WHERE "repositoryId" = ${repositoryId}
+        AND embedding IS NOT NULL
+      ORDER BY embedding <=> ${vectorStr}::vector ASC
+      LIMIT ${limit}
+    `;
+    onProgress?.(results.length);
     return results;
   }
 

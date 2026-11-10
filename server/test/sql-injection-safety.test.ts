@@ -29,7 +29,12 @@ async function runSqlSafetyTests() {
   const originalExecuteRaw = prisma.$executeRaw;
 
   (prisma as any).$queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
-    capturedQuerySql = strings.join('?');
+    // Preserve the full template so the test can assert that no value was ever
+    // concatenated into the SQL text — the property that actually prevents
+    // injection. `join('?')` alone loses the surrounding SQL and would let a
+    // test pass that only checked parameter ordering, which is not a security
+    // property and changes whenever the query shape legitimately changes.
+    capturedQuerySql = Array.isArray(strings) ? strings.raw.join('?') : String(strings);
     capturedQueryValues = values;
     return [
       {
@@ -66,11 +71,28 @@ async function runSqlSafetyTests() {
     const searchResults = await vectorService.searchSimilarChunks(maliciousRepoId, dummyVector, 5);
 
     assert.equal(searchResults.length, 1);
-    // Verify that the query received parameters rather than raw interpolated string
+    // The security invariant: the repositoryId is a BOUND PARAMETER, and the
+    // malicious SQL never appears in the query text itself. Parameter order is
+    // deliberately not asserted — it is an implementation detail that changes
+    // with the query shape (e.g. the MATERIALIZED scoped CTE) and asserting it
+    // produces a false failure that hides the real property.
     assert.ok(capturedQueryValues.length >= 3, 'Query must have at least 3 parameters');
-    assert.equal(capturedQueryValues[1], maliciousRepoId, 'Malicious SQL in repositoryId must remain a literal string parameter');
-    assert.equal(capturedQueryValues[2], 5, 'Limit must be a bound parameter');
-    assert.ok(capturedQueryValues[0].startsWith('['), 'Vector must be formatted as vector parameter');
+    assert.ok(
+      capturedQueryValues.includes(maliciousRepoId),
+      'Malicious SQL in repositoryId must be passed as a bound parameter value',
+    );
+    assert.ok(
+      !capturedQuerySql.includes('UNION SELECT'),
+      'Malicious SQL must never be concatenated into the query text',
+    );
+    assert.ok(
+      capturedQueryValues.includes(5),
+      'Limit must be a bound parameter',
+    );
+    assert.ok(
+      capturedQueryValues.some(v => typeof v === 'string' && v.startsWith('[')),
+      'Vector must be formatted as vector parameter',
+    );
     console.log('   [PASS] Test 1: searchSimilarChunks treats malicious SQL as literal parameter.\n');
 
     // --- Test 2: Bulk Insert Parameterization via Prisma.sql & Prisma.join ---
