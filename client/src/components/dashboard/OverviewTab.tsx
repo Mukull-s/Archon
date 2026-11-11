@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import api from '../../lib/api';
-import { Loading, ErrorState } from '../ui/DesignSystem';
 import { toast } from 'sonner';
-import { OverviewCommandDeck } from './overview/OverviewCommandDeck';
 import { OverviewBriefing } from './overview/OverviewBriefing';
 import { OverviewFindings } from './overview/OverviewFindings';
 import { OverviewTopology } from './overview/OverviewTopology';
@@ -18,7 +16,7 @@ export interface OverviewTabProps {
   totalSize: number;
   confidence: number;
   checklist: string[];
-  setActiveTab: (tab: 'summary' | 'explorer' | 'graph' | 'trace' | 'impact' | 'chat' | 'settings') => void;
+  setActiveTab: (tab: 'summary' | 'explorer' | 'graph' | 'trace' | 'impact' | 'chat') => void;
   onNavigateToExplorer?: (filePath: string) => void;
   onNavigateToGraph?: (filePath?: string) => void;
   onNavigateToImpact?: (filePath?: string) => void;
@@ -215,20 +213,30 @@ export default function OverviewTab({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <Loading message="Assembling architectural briefing..." type="skeleton" />
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-3">
+          Assembling architectural briefing…
+        </span>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <ErrorState
-          title="Repository Analysis Unavailable"
-          description={error}
-          onRetry={() => setRetryCount((prev) => prev + 1)}
-        />
+      <div className="panel mx-auto max-w-[560px]">
+        <div className="panel__head">
+          <div className="t">Overview unavailable</div>
+        </div>
+        <div className="panel__body">
+          <p className="text-[13px] leading-[1.65] text-ink-2">{error}</p>
+          <button
+            type="button"
+            className="abtn abtn--ghost mt-4"
+            onClick={() => setRetryCount((prev) => prev + 1)}
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -252,39 +260,72 @@ export default function OverviewTab({
   const resolvedConfidence = repoDetails?.confidenceDetails?.score ?? confidence;
   const resolvedChecklist = repoDetails?.confidenceDetails?.checklist ?? checklist;
 
-  const scrollToFindings = () => {
-    const el = document.getElementById('overview-findings');
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth' });
-    }
-  };
-
   return (
-    <div className="max-w-[1400px] mx-auto pb-16 space-y-2">
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* LEVEL 1: REPOSITORY IDENTITY & ARCHITECTURAL CONDITION    */}
-      {/* ────────────────────────────────────────────────────────── */}
-      <OverviewCommandDeck
-        name={repoDetails?.name || 'Workspace'}
-        owner={repoDetails?.owner}
-        isLocal={repoDetails?.isLocal}
-        framework={repoDetails?.framework || framework}
-        languages={repoDetails?.languages || languages}
-        fileCount={calculatedNodesCount}
-        totalSize={repoDetails?.totalSize || totalSize}
-        confidence={resolvedConfidence}
-        entryPointsCount={entryPoints.length}
-        driftCount={architecturalDrift.length}
-        circularCount={circularDependencies.length}
-        hotspotsCount={centralityHotspots.length}
-        onNavigateToExplorer={() => onNavigateToExplorer?.(entryPoints[0] || '')}
-        onNavigateToGraph={() => onNavigateToGraph?.()}
-        onScrollToFindings={scrollToFindings}
-      />
+    <div className="kview !pt-0">
+      {/* ── header ────────────────────────────────────────────────────── */}
+      <div className="khead">
+        <div className="khead__l">
+          <div className="eyebrow">Overview</div>
+          <h1 className="khead__t">
+            What this repository <em className="serif-it">is</em>, structurally.
+          </h1>
+          <p className="khead__d">
+            Generated from the parsed syntax trees and the resolved import graph. Every statement
+            below is traceable to a file; the citation is shown with it.
+          </p>
+        </div>
+        <div className="khead__r">
+          {repoDetails?.framework && (
+            <span className="st st--idle">
+              <i />
+              {repoDetails.framework}
+            </span>
+          )}
+          <span className={resolvedConfidence >= 80 ? 'st st--ok' : resolvedConfidence >= 60 ? 'st st--warn' : 'st st--risk'}>
+            <i />
+            Confidence {resolvedConfidence}
+          </span>
+        </div>
+      </div>
 
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* LEVEL 1: AI TECHNICAL BRIEFING (Subordinate synthesis)     */}
-      {/* ────────────────────────────────────────────────────────── */}
+      {/* ── metric row — every figure is measured, none is asserted ───── */}
+      <div className="kmetrics">
+        <div className="kmetric">
+          <div className="k">Files indexed</div>
+          <div className="v">
+            {calculatedNodesCount}
+            {Array.isArray(repoDetails?.scannedFiles) && (
+              <small>of {repoDetails.scannedFiles.length}</small>
+            )}
+          </div>
+          <div className="sub">
+            {Array.isArray(repoDetails?.languages) ? repoDetails.languages.join(' · ') : '—'}
+          </div>
+        </div>
+
+        <div className="kmetric">
+          <div className="k">Import edges</div>
+          <div className="v">{calculatedEdgesCount.toLocaleString()}</div>
+          <div className="sub">resolved from the dependency graph</div>
+        </div>
+
+        <div className="kmetric">
+          <div className="k">Entry points</div>
+          <div className="v">{entryPoints.length}</div>
+          <div className="sub">{entryPoints[0] || 'none detected'}</div>
+        </div>
+
+        <div className={resolvedConfidence >= 80 ? 'kmetric kmetric--ok' : 'kmetric kmetric--risk'}>
+          <div className="k">Confidence</div>
+          <div className="v">
+            {resolvedConfidence}
+            <small>/ 100</small>
+          </div>
+          <div className="sub">deterministic score</div>
+        </div>
+      </div>
+
+      {/* ── the briefing — the one synthesis, kept visually dominant ──── */}
       <OverviewBriefing
         summaryData={repoDetails?.aiSummary}
         indexingStatus={repoDetails?.indexingStatus}
@@ -295,46 +336,43 @@ export default function OverviewTab({
         onTriggerChat={onTriggerChat}
       />
 
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* LEVEL 2: ARCHITECTURAL HEALTH & CRITICAL FINDINGS          */}
-      {/* ────────────────────────────────────────────────────────── */}
-      <OverviewFindings
-        architecturalDrift={architecturalDrift}
-        circularDependencies={circularDependencies}
-        centralityHotspots={centralityHotspots}
-        missingTests={missingTests}
-        deadCode={deadCode}
-        onNavigateToExplorer={onNavigateToExplorer}
-        onNavigateToGraph={onNavigateToGraph}
-        onNavigateToImpact={onNavigateToImpact}
-        onTriggerChat={onTriggerChat}
-      />
+      {/* ── topology and confidence, side by side like the reference ──── */}
+      <div className="ksplit mb-6">
+        <OverviewTopology
+          architectureType={
+            story?.architectureType ||
+            (repoDetails?.framework ? `${repoDetails.framework} Architecture` : undefined)
+          }
+          executionFlowStory={story?.executionFlowStory}
+          entryPoints={entryPoints}
+          dependencyGraph={depGraph}
+          calculatedNodesCount={calculatedNodesCount}
+          calculatedEdgesCount={calculatedEdgesCount}
+          onNavigateToGraph={() => onNavigateToGraph?.()}
+          onNavigateToExplorer={onNavigateToExplorer}
+        />
+        <OverviewConfidence
+          confidence={resolvedConfidence}
+          checklist={resolvedChecklist}
+        />
+      </div>
 
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* LEVEL 2: ARCHITECTURE TOPOLOGY & REQUEST LIFECYCLE        */}
-      {/* ────────────────────────────────────────────────────────── */}
-      <OverviewTopology
-        architectureType={story?.architectureType || repoDetails?.framework ? `${repoDetails?.framework} Architecture` : undefined}
-        executionFlowStory={story?.executionFlowStory}
-        entryPoints={entryPoints}
-        dependencyGraph={depGraph}
-        calculatedNodesCount={calculatedNodesCount}
-        calculatedEdgesCount={calculatedEdgesCount}
-        onNavigateToGraph={() => onNavigateToGraph?.()}
-        onNavigateToExplorer={onNavigateToExplorer}
-      />
+      {/* ── cited findings ─────────────────────────────────────────────── */}
+      <div id="overview-findings">
+        <OverviewFindings
+          architecturalDrift={architecturalDrift}
+          circularDependencies={circularDependencies}
+          centralityHotspots={centralityHotspots}
+          missingTests={missingTests}
+          deadCode={deadCode}
+          onNavigateToExplorer={onNavigateToExplorer}
+          onNavigateToGraph={onNavigateToGraph}
+          onNavigateToImpact={onNavigateToImpact}
+          onTriggerChat={onTriggerChat}
+        />
+      </div>
 
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* LEVEL 3: ANALYSIS CONFIDENCE & DETERMINISTIC EVIDENCE      */}
-      {/* ────────────────────────────────────────────────────────── */}
-      <OverviewConfidence
-        confidence={resolvedConfidence}
-        checklist={resolvedChecklist}
-      />
-
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* LEVEL 3: DEVELOPER ONBOARDING RUNBOOK                     */}
-      {/* ────────────────────────────────────────────────────────── */}
+      {/* ── the runbook ────────────────────────────────────────────────── */}
       <OverviewOnboarding
         onboarding={onboarding}
         entryPoints={entryPoints}
