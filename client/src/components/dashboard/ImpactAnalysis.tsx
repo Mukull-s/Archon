@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import api from '../../lib/api';
 import { detectArchitecturalRole } from './explorer/explorerUtils';
-import { ArchitecturalRole, FileItem } from './explorer/explorerTypes';
+import { FileItem } from './explorer/explorerTypes';
+import { getDependencies, getDownstream, getUpstream } from './graph/graphQueries';
 
 export interface ImpactAnalysisProps {
   repositoryId: string;
@@ -38,32 +39,6 @@ interface ImpactResult {
     others: string[];
   };
   summary: string;
-}
-
-// Role color helpers matching Archon design system
-function getRoleBadgeStyle(role: ArchitecturalRole) {
-  switch (role) {
-    case 'ENTRY POINT':
-      return 'bg-purple-950/70 text-purple-300 border-purple-800/60';
-    case 'ROUTE':
-      return 'bg-blue-950/70 text-blue-300 border-blue-800/60';
-    case 'CONTROLLER':
-      return 'bg-cyan-950/70 text-cyan-300 border-cyan-800/60';
-    case 'SERVICE':
-      return 'bg-emerald-950/70 text-emerald-300 border-emerald-800/60';
-    case 'MODEL':
-      return 'bg-amber-950/70 text-amber-300 border-amber-800/60';
-    case 'COMPONENT':
-      return 'bg-teal-950/70 text-teal-300 border-teal-800/60';
-    case 'TEST':
-      return 'bg-yellow-950/70 text-yellow-300 border-yellow-800/60';
-    case 'CONFIG':
-      return 'bg-zinc-800/80 text-zinc-300 border-zinc-700/60';
-    case 'UTILITY':
-      return 'bg-indigo-950/70 text-indigo-300 border-indigo-800/60';
-    default:
-      return 'bg-zinc-900/80 text-zinc-400 border-zinc-800';
-  }
 }
 
 // Format file size utility
@@ -151,6 +126,19 @@ function computeLocalBlastRadius(targetFile: string, dependencyGraph: Record<str
   };
 }
 
+/**
+ * The band scale for the risk gauge. The formula is fixed and public:
+ * risk = 0.6 × in-degree + 0.4 × cascade depth. The band names, thresholds,
+ * and the 10-point ceiling all come from that formula, not from a lookup table.
+ */
+const RISK_CEILING = 10;
+
+function riskBand(score: number): { label: string; mod: 'high' | 'med' | 'low' } {
+  if (score >= 5.0) return { label: 'High blast risk', mod: 'high' };
+  if (score >= 2.0) return { label: 'Moderate impact', mod: 'med' };
+  return { label: 'Contained impact', mod: 'low' };
+}
+
 export default function ImpactAnalysis({
   repositoryId,
   files,
@@ -182,7 +170,9 @@ export default function ImpactAnalysis({
   const inspectorRef = useRef<HTMLDivElement>(null);
   const [isInspectorPulsing, setIsInspectorPulsing] = useState(false);
 
-  // Helper to focus, inspect, and smoothly highlight any node in the inspector
+  // Helper to focus, inspect, and smoothly highlight any node in the inspector.
+  // The ref is only ever read here, inside an event handler — never during
+  // render — which is why the two `react-hooks/refs` sites below are disabled.
   const handleInspectNode = useCallback((filePath: string) => {
     setInspectedFile(filePath);
     setIsInspectorPulsing(true);
@@ -282,10 +272,29 @@ export default function ImpactAnalysis({
       .catch((err: any) => {
         if (!isMounted) return;
         clearInterval(interval);
-        // Fallback to grounded topology from dependency graph
+
+        /*
+         * The backend could not be reached, so the panel falls back to a local
+         * computation over the dependency graph that the page already holds.
+         *
+         * This fallback is real and useful, but it is NOT the same answer the
+         * server gives. It cannot: it has no AST metadata, so `dbModels` and
+         * `envVars` come back empty, and its summary is a different sentence.
+         * Presenting it unlabelled would show the user a complete-looking
+         * blast radius that silently differs from the authoritative one.
+         *
+         * So the result is still shown — refusing to render anything would be
+         * its own kind of failure — but the reason is surfaced alongside it,
+         * and the caller must label it. `simulationError` carries that reason.
+         */
         const fallback = computeLocalBlastRadius(selectedFile, dependencyGraph);
         resultsCache.current[selectedFile] = fallback;
         setResult(fallback);
+        setSimulationError(
+          'The architecture service did not respond, so this blast radius was computed locally from the dependency graph. ' +
+            'Direct and transitive dependents are reliable; database models and environment variables are unavailable offline. ' +
+            'Retry to load the full analysis.',
+        );
       })
       .finally(() => {
         if (isMounted) {
@@ -327,40 +336,91 @@ export default function ImpactAnalysis({
     });
   }, [result, directDependents, selectedFile]);
 
-  // Causal Provenance: calculate which direct dependent acted as the bridge to an indirect file
+  /* Hop distribution across the affected set.
+   *
+   * Every affected file is at some hop distance *upstream* of the target: 1 hop
+   * is a file that imports the target directly, 2 hops is a file that imports
+   * one of those, and so on. This is the reverse direction from `getDownstream`
+   * — dependents, not dependencies — which is what "what breaks if I edit this"
+   * means. Using the downstream traversal here would have produced a plausible
+   * chart of the wrong files.
+   *
+   * The backend returns the affected files and the maximum depth but not the
+   * per-hop split, so it is derived from the same dependency graph the rest of
+   * the tab uses, via the shared traversal rather than a second hand-rolled BFS.
+   *
+   * Only files the backend actually reported as affected are counted, so the
+   * chart can never show more than the total the API returned. If the traversal
+   * cannot place a file, it is left out of the bars rather than guessed at — and
+   * the remainder is stated.
+   */
+  const hopDistribution = useMemo(() => {
+    if (!result || !dependencyGraph || !selectedFile) return null;
+
+    const normalizedSelected = selectedFile.replace(/\\/g, '/');
+    const affected = new Set((result.affectedFiles || []).map((f) => f.replace(/\\/g, '/')));
+
+    const byHop = new Map<number, number>();
+    let placed = 0;
+
+    // Bounded by the backend's own depth, so this cannot run away.
+    const reached = getUpstream(dependencyGraph, normalizedSelected, Math.max(1, result.maxDepth || 1));
+    for (const { path: p, hops } of reached) {
+      if (!affected.has(p)) continue;
+      byHop.set(hops, (byHop.get(hops) ?? 0) + 1);
+      placed++;
+    }
+
+    const maxHop = Math.max(0, ...byHop.keys());
+    if (maxHop === 0) return null;
+
+    const bars = Array.from({ length: maxHop }, (_, i) => {
+      const hop = i + 1;
+      return { hop, count: byHop.get(hop) ?? 0 };
+    });
+    const peak = Math.max(1, ...bars.map((b) => b.count));
+
+    return {
+      bars,
+      peak,
+      placed,
+      total: affected.size,
+      maxHop,
+    };
+  }, [result, dependencyGraph, selectedFile]);
+
+  // Causal provenance: which direct dependent is the bridge to an indirect file.
+  //
+  // Two checks, cheapest first. A file imported *directly* by the indirect file
+  // is the bridge — that is one lookup. Otherwise the indirect file is reached
+  // transitively, and we ask the shared traversal rather than scanning every
+  // file for every node in the queue (which was O(files × edges) and would not
+  // scale past a few hundred files).
   const getProvenanceBridge = useCallback(
     (indirectFile: string): string | null => {
-      if (!dependencyGraph || directDependents.length === 0) return null;
-      const normIndirect = indirectFile.replace(/\\/g, '/');
+      if (!dependencyGraph || directDependents.length === 0) return null
+      const norm = (s: string) => s.replace(/\\/g, '/')
+      const normIndirect = norm(indirectFile)
 
-      // 1. Direct parent check: Does indirectFile import any directDependent?
-      const importsOfIndirect = dependencyGraph[normIndirect] || [];
-      for (const dir of directDependents) {
-        const normDir = dir.replace(/\\/g, '/');
-        if (importsOfIndirect.some(imp => imp.replace(/\\/g, '/') === normDir)) {
-          return dir;
-        }
+      const directByNormalised = new Map(directDependents.map((d) => [norm(d), d]))
+
+      // 1. direct: does the indirect file import one of the direct dependents?
+      for (const imported of getDependencies(dependencyGraph, normIndirect)) {
+        const match = directByNormalised.get(norm(imported))
+        if (match) return match
       }
 
-      // 2. Transitive reachability check via BFS
-      for (const dir of directDependents) {
-        const normDir = dir.replace(/\\/g, '/');
-        const queue = [normDir];
-        const visited = new Set<string>([normDir]);
-        while (queue.length > 0) {
-          const curr = queue.shift()!;
-          for (const [file, imports] of Object.entries(dependencyGraph)) {
-            if (Array.isArray(imports) && imports.some(imp => imp.replace(/\\/g, '/') === curr) && !visited.has(file)) {
-              if (file === normIndirect) return dir;
-              visited.add(file);
-              queue.push(file);
-            }
-          }
-        }
+      // 2. transitive: does the indirect file sit downstream of a direct dependent?
+      for (const dependent of directDependents) {
+        const reached = getDownstream(dependencyGraph, norm(dependent))
+        if (reached.some((r) => norm(r.path) === normIndirect)) return dependent
       }
-      return directDependents[0] || null;
+
+      // No verified bridge. Returning null is the honest answer — the caller
+      // says "no path found" rather than naming an arbitrary dependent.
+      return null
     },
-    [dependencyGraph, directDependents]
+    [dependencyGraph, directDependents],
   );
 
   // Top Hub files (highest in-degree in repository) for fast target switching
@@ -428,55 +488,13 @@ export default function ImpactAnalysis({
     return astMetadata[inspectedFile] || null;
   }, [inspectedFile, astMetadata]);
 
-  // Risk styling helper
-  const riskMeta = useMemo(() => {
-    if (!result) {
-      return {
-        label: 'COMPUTING',
-        color: 'text-zinc-400',
-        bg: 'bg-zinc-800/60',
-        border: 'border-zinc-700/60',
-        bar: 'bg-zinc-600',
-        glow: 'rgba(161, 161, 170, 0.1)'
-      };
-    }
-    const lvl = String(result.riskLevel || '').toUpperCase();
-    if (lvl === 'CRITICAL' || lvl === 'HIGH' || result.riskScore >= 5.0) {
-      return {
-        label: 'HIGH BLAST RISK',
-        color: 'text-rose-400',
-        bg: 'bg-rose-950/40',
-        border: 'border-rose-800/60',
-        bar: 'bg-rose-500',
-        glow: 'rgba(244, 63, 94, 0.15)'
-      };
-    }
-    if (lvl === 'MEDIUM' || result.riskScore >= 2.0) {
-      return {
-        label: 'MODERATE IMPACT',
-        color: 'text-amber-400',
-        bg: 'bg-amber-950/40',
-        border: 'border-amber-800/60',
-        bar: 'bg-amber-500',
-        glow: 'rgba(245, 158, 11, 0.15)'
-      };
-    }
-    return {
-      label: 'CONTAINED IMPACT',
-      color: 'text-emerald-400',
-      bg: 'bg-emerald-950/40',
-      border: 'border-emerald-800/60',
-      bar: 'bg-emerald-500',
-      glow: 'rgba(16, 185, 129, 0.15)'
-    };
-  }, [result]);
-
   // Export report
   const handleExport = (format: 'md' | 'json') => {
     if (!result || !selectedFile) return;
-    let dataStr = '';
-    let mimeType = 'text/plain';
+    let dataStr: string;
+    let mimeType: string;
     const cleanTargetName = selectedFile.split('/').pop() || 'target';
+    const band = riskBand(result.riskScore);
 
     if (format === 'json') {
       dataStr = JSON.stringify(
@@ -504,7 +522,7 @@ export default function ImpactAnalysis({
 
 **Target Entity:** \`${selectedFile}\`  
 **Architectural Role:** ${targetRole}  
-**Blast Severity Index:** ${riskMeta.label} (${result.riskScore.toFixed(1)})  
+**Blast Severity Index:** ${band.label} (${result.riskScore.toFixed(1)})  
 **Direct Dependents (In-Degree $C_i$):** ${result.inDegree}  
 **Max Cascade Depth ($d_{blast}$):** ${result.maxDepth} levels  
 **Total Affected Files:** ${result.affectedFilesCount} modules  
@@ -564,488 +582,474 @@ ${
     toast.success(`Exported blast-radius report (${format.toUpperCase()})`);
   };
 
+  const band = result ? riskBand(result.riskScore) : null;
+  const riskPct = result ? Math.min(100, (result.riskScore / RISK_CEILING) * 100) : 0;
+
   return (
-    <div className="w-full min-h-screen text-zinc-200 pb-24 font-sans selection:bg-purple-500/30">
-      
-      {/* 1. STICKY TARGET WORKBENCH HEADER */}
-      <header className="sticky top-0 z-30 w-full bg-[#0e0e11]/95 backdrop-blur-md border-b border-[#27272a] px-4 lg:px-6 py-3.5 shadow-xl transition-all">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          
-          {/* Target Identifier & Selector Dropdown */}
-          <div className="flex items-center gap-3 min-w-0 relative">
-            <div className="p-2 bg-purple-950/40 border border-purple-800/50 rounded-lg text-purple-400 shrink-0 shadow-[0_0_15px_rgba(168,85,247,0.15)]">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
+    <div className="w-full">
+      {/* ── header ────────────────────────────────────────────────────── */}
+      <div className="khead">
+        <div className="khead__l">
+          <div className="eyebrow">Impact analysis</div>
+          <h1 className="khead__t">
+            What <em className="serif-it">breaks</em> if this file changes.
+          </h1>
+          <p className="khead__d">
+            The blast radius is resolved from import contracts, then scored. Pick a target to
+            trace its direct consumers and the transitive cascade behind them.
+          </p>
+        </div>
+        <div className="khead__r">
+          {framework && (
+            <span className="st st--idle">
+              <i />
+              {framework}
+            </span>
+          )}
+          {selectedFile && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  onTriggerChatQuery(
+                    `Perform a thorough architectural impact analysis for modifying "${selectedFile}". How should we manage testing and downstream breakage?`
+                  )
+                }
+                className="abtn abtn--solid"
+              >
+                Ask Archon
+              </button>
+              <button type="button" onClick={() => handleExport('md')} className="abtn abtn--ghost">
+                MD
+              </button>
+              <button type="button" onClick={() => handleExport('json')} className="abtn abtn--ghost">
+                JSON
+              </button>
+            </>
+          )}
+        </div>
+      </div>
 
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-purple-400 font-semibold flex items-center gap-1.5">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
-                  Target of Investigation
-                </span>
-                <span className="text-zinc-600">•</span>
-                <span className="text-[11px] font-mono text-zinc-400">
-                  {framework ? `${framework} Architecture` : 'Codebase Module'}
-                </span>
-              </div>
+      {/* ── target selector ───────────────────────────────────────────── */}
+      <div className="isel mb-6">
+        <div className="isel__head flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <span className="figcap">Target of investigation</span>
+            {selectedFile && (
+              <span className="rounded-[2px] border border-rule bg-paper-3 px-1.5 py-0.5 font-mono text-[9px] uppercase text-ink-2">
+                {targetRole}
+              </span>
+            )}
+            {targetFileItem && (
+              <span className="font-mono text-[9.5px] text-ink-3">
+                {targetFileItem.lines} lines · {formatBytes(targetFileItem.size)}
+              </span>
+            )}
+          </div>
 
-              {/* Target File Display & Switcher Button */}
-              <div className="flex items-center gap-2 mt-0.5">
-                <button
-                  onClick={() => setIsTargetDropdownOpen(prev => !prev)}
-                  className="flex items-center gap-2 text-left group cursor-pointer focus:outline-none"
-                  title="Click to switch simulation target"
-                >
-                  <h1 className="text-base sm:text-lg font-bold text-white font-mono tracking-tight group-hover:text-purple-300 transition-colors truncate">
-                    {selectedFile ? selectedFile.split('/').pop() : 'Select Target File'}
-                  </h1>
-                  <span className="text-zinc-500 group-hover:text-zinc-300 transition-colors">
-                    <svg className={`w-4 h-4 transition-transform ${isTargetDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          <button
+            type="button"
+            onClick={() => setIsTargetDropdownOpen(prev => !prev)}
+            aria-expanded={isTargetDropdownOpen}
+            className="abtn abtn--ghost !py-1.5 !text-[10px]"
+            title="Switch simulation target"
+          >
+            Switch target
+            <svg
+              className={`h-3 w-3 transition-transform ${isTargetDropdownOpen ? 'rotate-180' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="isel__body">
+          <div className="isel__file">
+            <span className="ic">
+              {(selectedFile?.split('.').pop() || '??').slice(0, 3).toUpperCase()}
+            </span>
+            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+              {selectedFile || 'No target selected'}
+            </span>
+          </div>
+
+          <AnimatePresence>
+            {isTargetDropdownOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.15 }}
+                className="mb-4 flex max-h-[440px] flex-col overflow-hidden rounded-[3px] border border-rule bg-paper-2"
+              >
+                {/* search */}
+                <div className="border-b border-rule bg-paper-3 p-3">
+                  <div className="flex items-center gap-2 rounded-[3px] border border-rule-strong bg-paper-2 px-3 py-1.5">
+                    <svg className="h-3.5 w-3.5 shrink-0 text-ink-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
                     </svg>
-                  </span>
-                </button>
+                    <input
+                      type="text"
+                      value={targetSearchQuery}
+                      onChange={e => setTargetSearchQuery(e.target.value)}
+                      placeholder="Search file path or name…"
+                      className="w-full border-none bg-transparent p-0 font-mono text-[11px] text-ink outline-none placeholder:text-ink-3 focus:ring-0"
+                      autoFocus
+                    />
+                  </div>
 
-                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${getRoleBadgeStyle(targetRole)}`}>
-                  {targetRole}
-                </span>
+                  <div className="mt-2.5 flex items-center gap-0.5 overflow-x-auto rounded-[3px] border border-rule bg-paper-2 p-0.5">
+                    {['ALL', 'ROUTES', 'CONTROLLERS', 'SERVICES', 'COMPONENTS', 'ENTRY'].map(filter => (
+                      <button
+                        key={filter}
+                        type="button"
+                        onClick={() => setTargetRoleFilter(filter)}
+                        className={`whitespace-nowrap rounded-[2px] px-2 py-1 font-mono text-[9.5px] uppercase tracking-[0.09em] transition-colors ${
+                          targetRoleFilter === filter
+                            ? 'bg-paper-3 font-semibold text-ink shadow-[inset_0_-2px_0_var(--emerald)]'
+                            : 'text-ink-3 hover:text-ink'
+                        }`}
+                      >
+                        {filter}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                {targetFileItem && (
-                  <span className="hidden sm:inline-block text-[11px] font-mono text-zinc-500">
-                    {targetFileItem.lines} lines • {formatBytes(targetFileItem.size)}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Target Selection Dropdown Modal */}
-            <AnimatePresence>
-              {isTargetDropdownOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 8, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute left-0 top-full mt-2 w-[340px] sm:w-[480px] bg-[#131316] border border-[#27272a] rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col max-h-[460px]"
-                >
-                  {/* Search input */}
-                  <div className="p-3 border-b border-[#27272a] bg-[#0e0e11]/80">
-                    <div className="relative">
-                      <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                      </svg>
-                      <input
-                        type="text"
-                        value={targetSearchQuery}
-                        onChange={e => setTargetSearchQuery(e.target.value)}
-                        placeholder="Search file path or name..."
-                        className="w-full bg-[#09090b] border border-[#27272a] rounded-lg pl-9 pr-3 py-1.5 text-xs font-mono text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-purple-500"
-                        autoFocus
-                      />
-                    </div>
-
-                    {/* Filter Pills */}
-                    <div className="flex items-center gap-1.5 mt-2.5 overflow-x-auto no-scrollbar">
-                      {['ALL', 'ROUTES', 'CONTROLLERS', 'SERVICES', 'COMPONENTS', 'ENTRY'].map(filter => (
+                {/* hotspots */}
+                {topHubFiles.length > 0 && !targetSearchQuery && (
+                  <div className="border-b border-rule bg-paper-3 px-3 py-2.5">
+                    <span className="figcap mb-1.5 block">Critical centrality hotspots — highest in-degree</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {topHubFiles.map(({ filePath, count }) => (
                         <button
-                          key={filter}
-                          onClick={() => setTargetRoleFilter(filter)}
-                          className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider rounded transition-colors cursor-pointer ${
-                            targetRoleFilter === filter
-                              ? 'bg-purple-600 text-white font-semibold'
-                              : 'bg-[#1e1e22] text-zinc-400 hover:text-white'
-                          }`}
+                          key={filePath}
+                          type="button"
+                          onClick={() => {
+                            setIsTargetDropdownOpen(false);
+                            selectTargetFile(filePath);
+                          }}
+                          className="flex items-center gap-1.5 rounded-[2px] border border-rule bg-paper-2 px-2 py-0.5 font-mono text-[10.5px] text-ink-2 transition-colors hover:border-ink hover:text-ink"
                         >
-                          {filter}
+                          <span className="max-w-[140px] truncate">{filePath.split('/').pop()}</span>
+                          <span className="text-[9px] text-emerald">{count} dep</span>
                         </button>
                       ))}
                     </div>
                   </div>
+                )}
 
-                  {/* Hotspot Recommendations */}
-                  {topHubFiles.length > 0 && !targetSearchQuery && (
-                    <div className="px-3 py-2 bg-purple-950/20 border-b border-[#27272a]">
-                      <span className="text-[10px] font-mono text-purple-400 uppercase tracking-wider block mb-1.5 font-semibold">
-                        Critical Centrality Hotspots (High In-Degree)
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {topHubFiles.map(({ filePath, count }) => (
-                          <button
-                            key={filePath}
-                            onClick={() => {
-                              setIsTargetDropdownOpen(false);
-                              selectTargetFile(filePath);
-                            }}
-                            className="px-2 py-0.5 bg-[#18181b] hover:bg-purple-900/40 border border-[#27272a] hover:border-purple-500/50 rounded text-[11px] font-mono text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
-                          >
-                            <span className="truncate max-w-[140px]">{filePath.split('/').pop()}</span>
-                            <span className="text-[9px] bg-purple-900/60 text-purple-300 px-1 rounded">
-                              {count} dep
+                {/* list */}
+                <div className="flex-1 overflow-y-auto p-2">
+                  {filteredTargetFiles.length > 0 ? (
+                    filteredTargetFiles.map(f => {
+                      const isCurrent = f.path === selectedFile;
+                      const role = detectArchitecturalRole(f.path, astMetadata?.[f.path], entryPoints);
+                      return (
+                        <button
+                          key={f.path}
+                          type="button"
+                          onClick={() => {
+                            setIsTargetDropdownOpen(false);
+                            selectTargetFile(f.path);
+                          }}
+                          className={`flex w-full items-center justify-between gap-2 rounded-[3px] px-2 py-1.5 text-left font-mono transition-colors ${
+                            isCurrent ? 'bg-paper-3' : 'hover:bg-paper-3'
+                          }`}
+                        >
+                          <span className="min-w-0 pr-2">
+                            <span className="flex items-center gap-2">
+                              <span className="truncate text-[11.5px] font-semibold text-ink">
+                                {f.path.split('/').pop()}
+                              </span>
+                              <span className="shrink-0 rounded-[2px] border border-rule bg-paper-3 px-1.5 py-0.5 text-[8.5px] uppercase text-ink-3">
+                                {role}
+                              </span>
                             </span>
-                          </button>
-                        ))}
-                      </div>
+                            <span className="mt-0.5 block truncate text-[9.5px] text-ink-3">{f.path}</span>
+                          </span>
+                          <span className="shrink-0 text-[9.5px] text-ink-3">{f.lines}L</span>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="p-6 text-center font-mono text-[11px] text-ink-3">
+                      No matching files found in repository.
                     </div>
                   )}
-
-                  {/* Filtered list */}
-                  <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                    {filteredTargetFiles.length > 0 ? (
-                      filteredTargetFiles.map(f => {
-                        const isCurrent = f.path === selectedFile;
-                        const role = detectArchitecturalRole(f.path, astMetadata?.[f.path], entryPoints);
-                        return (
-                          <div
-                            key={f.path}
-                            onClick={() => {
-                              setIsTargetDropdownOpen(false);
-                              selectTargetFile(f.path);
-                            }}
-                            className={`p-2 rounded-lg cursor-pointer transition-all flex items-center justify-between text-xs font-mono group ${
-                              isCurrent
-                                ? 'bg-purple-950/40 border border-purple-500/40 text-purple-200'
-                                : 'hover:bg-[#1a1a1e] text-zinc-300'
-                            }`}
-                          >
-                            <div className="min-w-0 pr-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-white group-hover:text-purple-300 transition-colors truncate">
-                                  {f.path.split('/').pop()}
-                                </span>
-                                <span className={`px-1.5 py-0.2 rounded text-[9px] border ${getRoleBadgeStyle(role)}`}>
-                                  {role}
-                                </span>
-                              </div>
-                              <span className="text-[10px] text-zinc-500 block truncate mt-0.5">{f.path}</span>
-                            </div>
-                            <span className="text-[10px] text-zinc-500 shrink-0">{f.lines}L</span>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="p-6 text-center text-zinc-500 font-mono text-xs">
-                        No matching files found in repository.
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Quick Action Buttons (Export, Resimulate, Ask AI) */}
-          <div className="flex items-center gap-2 shrink-0">
-            {selectedFile && (
-              <>
-                <button
-                  onClick={() =>
-                    onTriggerChatQuery(
-                      `Perform a thorough architectural impact analysis for modifying "${selectedFile}". How should we manage testing and downstream breakage?`
-                    )
-                  }
-                  className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-mono font-medium transition-all shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center gap-1.5 cursor-pointer"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                  </svg>
-                  <span>Ask Archon AI</span>
-                </button>
-
-                <div className="flex items-center bg-[#18181b] border border-[#27272a] rounded-lg p-0.5">
-                  <button
-                    onClick={() => handleExport('md')}
-                    className="p-1.5 text-zinc-400 hover:text-white hover:bg-[#27272a] rounded cursor-pointer transition-colors"
-                    title="Export Markdown Report"
-                  >
-                    <span className="text-[10px] font-mono font-semibold px-1">MD</span>
-                  </button>
-                  <div className="w-[1px] h-3.5 bg-[#27272a]" />
-                  <button
-                    onClick={() => handleExport('json')}
-                    className="p-1.5 text-zinc-400 hover:text-white hover:bg-[#27272a] rounded cursor-pointer transition-colors"
-                    title="Export JSON Payload"
-                  >
-                    <span className="text-[10px] font-mono font-semibold px-1">JSON</span>
-                  </button>
                 </div>
-              </>
+              </motion.div>
             )}
-          </div>
+          </AnimatePresence>
         </div>
-      </header>
+      </div>
 
-      {/* 2. MAIN WORKBENCH CONTENT CONTAINER */}
-      <main className="max-w-7xl mx-auto px-4 lg:px-6 pt-6 space-y-6">
-        
-        {/* Loading Overlay */}
-        {analyzing && (
-          <div className="bg-[#131316]/90 border border-purple-500/30 rounded-xl p-8 flex flex-col items-center justify-center gap-4 text-center shadow-2xl backdrop-blur-md">
-            <div className="relative w-12 h-12 flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full border-2 border-purple-500/20 animate-ping" />
-              <div className="w-10 h-10 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
+      {/* ── loading ───────────────────────────────────────────────────── */}
+      {analyzing && (
+        <div className="panel mb-6">
+          <div className="panel__body flex flex-col items-center justify-center gap-3 py-10 text-center">
+            <div className="relative flex h-10 w-10 items-center justify-center">
+              <div className="absolute inset-0 animate-ping rounded-full border-2 border-emerald/20" />
+              <div className="h-9 w-9 animate-spin rounded-full border-2 border-emerald border-t-transparent" />
             </div>
             <div>
-              <h3 className="text-sm font-mono font-semibold text-white tracking-wide uppercase">
-                Simulating Blast Radius
-              </h3>
-              <p className="text-xs font-mono text-purple-300/80 mt-1">{loadingStep}</p>
+              <div className="figcap">Simulating blast radius</div>
+              <p className="mt-1 font-mono text-[11px] text-ink-2">{loadingStep}</p>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Error Notification */}
-        {!analyzing && simulationError && (
-          <div className="bg-rose-950/40 border border-rose-800/60 rounded-xl p-5 flex items-start gap-4 shadow-lg">
-            <div className="p-2 bg-rose-900/60 text-rose-300 rounded-lg shrink-0">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            </div>
+      {/* ── degraded / failed ─────────────────────────────────────────── */}
+      {!analyzing && simulationError && (
+        <div className="panel mb-6 !border-amber">
+          <div className="panel__body flex items-start gap-3">
+            <span className="st st--warn mt-0.5">
+              <i />
+              {result ? 'Degraded' : 'Failed'}
+            </span>
             <div className="flex-1">
-              <h4 className="text-sm font-semibold text-rose-200">Simulation Encountered an Issue</h4>
-              <p className="text-xs text-rose-300/80 mt-0.5">{simulationError}</p>
+              <p className="text-[12.5px] leading-[1.6] text-ink-2">{simulationError}</p>
               <button
+                type="button"
                 onClick={() => setRetryTrigger(c => c + 1)}
-                className="mt-3 px-3 py-1 bg-rose-900/50 hover:bg-rose-800/50 text-rose-200 rounded text-xs font-mono cursor-pointer transition-colors border border-rose-700/50"
+                className="abtn abtn--ghost mt-3 !py-1.5 !text-[10px]"
               >
-                Retry Analysis
+                Retry analysis
               </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* 3. GROUNDED SUMMARY & BLAST RADIUS METRICS STRIP */}
-        {!analyzing && result && (
-          <div className="space-y-4">
-            
-            {/* Blast Radius High-Level Banner */}
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              
-              {/* Severity / Risk Level */}
-              <div className={`p-3.5 rounded-xl border flex flex-col justify-between ${riskMeta.bg} ${riskMeta.border} shadow-lg relative overflow-hidden`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
-                    Blast Severity
-                  </span>
-                  <span className={`w-2 h-2 rounded-full ${riskMeta.bar}`} />
-                </div>
-                <div className="mt-2">
-                  <span className={`text-base sm:text-lg font-bold font-mono tracking-tight block ${riskMeta.color}`}>
-                    {riskMeta.label}
-                  </span>
-                  <span className="text-[11px] font-mono text-zinc-400 mt-0.5 block">
-                    Score: {result.riskScore.toFixed(1)} / 10
-                  </span>
+      {/* ── results ───────────────────────────────────────────────────── */}
+      {!analyzing && result && selectedFile && (
+        <>
+          <div className="impact-grid mb-6">
+            {/* left — the risk instrument */}
+            <div className="panel">
+              <div className="panel__head">
+                <div className="t">Blast severity index</div>
+                <div className="r">risk = 0.6·in-degree + 0.4·depth</div>
+              </div>
+              <div className="panel__body">
+                <div className="riskgauge">
+                  <div className="rg__top">
+                    <span className="rg__num">
+                      {result.riskScore.toFixed(1)}
+                      <small>/ {RISK_CEILING}</small>
+                    </span>
+                    {band && <span className={`rg__band rg__band--${band.mod}`}>{band.label}</span>}
+                  </div>
+
+                  <div className="rg__scale">
+                    <div className="rg__track">
+                      <div className="rg__fill" style={{ width: `${riskPct}%` }} />
+                    </div>
+                    <div className="rg__marks">
+                      <span>0</span>
+                      <span>2 · moderate</span>
+                      <span>5 · high</span>
+                      <span>{RISK_CEILING}</span>
+                    </div>
+                  </div>
+
+                  <div className="rg__formula">
+                    (<b>0.6</b> × in-degree <u>{result.inDegree}</u>) + (<b>0.4</b> × cascade depth{' '}
+                    <u>{result.maxDepth}</u>) = <b>{result.riskScore.toFixed(1)}</b>
+                  </div>
                 </div>
               </div>
-
-              {/* Direct Dependents (Level 1 In-degree) */}
-              <div className="p-3.5 rounded-xl border border-[#27272a] bg-[#131316] flex flex-col justify-between shadow-lg">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
-                  Direct Dependents
-                </span>
-                <div className="mt-2">
-                  <span className="text-xl sm:text-2xl font-bold font-mono text-white block">
-                    {result.inDegree}
-                  </span>
-                  <span className="text-[11px] font-mono text-purple-400 mt-0.5 block">
-                    Level 1 consumers (In-Degree)
-                  </span>
-                </div>
-              </div>
-
-              {/* Max Cascade Depth */}
-              <div className="p-3.5 rounded-xl border border-[#27272a] bg-[#131316] flex flex-col justify-between shadow-lg">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
-                  Cascade Depth
-                </span>
-                <div className="mt-2">
-                  <span className="text-xl sm:text-2xl font-bold font-mono text-white block">
-                    {result.maxDepth}
-                  </span>
-                  <span className="text-[11px] font-mono text-zinc-500 mt-0.5 block">
-                    Downstream cascade hops
-                  </span>
-                </div>
-              </div>
-
-              {/* Total Blast Radius (All Reachable Files) */}
-              <div className="p-3.5 rounded-xl border border-[#27272a] bg-[#131316] flex flex-col justify-between shadow-lg">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
-                  Total Blast Radius
-                </span>
-                <div className="mt-2">
-                  <span className={`text-xl sm:text-2xl font-bold font-mono block ${result.affectedFilesCount > 0 ? 'text-amber-300' : 'text-emerald-400'}`}>
-                    {result.affectedFilesCount}
-                  </span>
-                  <span className="text-[11px] font-mono text-zinc-500 mt-0.5 block">
-                    Downstream modules
-                  </span>
-                </div>
-              </div>
-
-              {/* Exposed Routes / Surfaces */}
-              <div className="p-3.5 rounded-xl border border-[#27272a] bg-[#131316] flex flex-col justify-between shadow-lg">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
-                  Affected Routes
-                </span>
-                <div className="mt-2">
-                  <span className="text-xl sm:text-2xl font-bold font-mono text-blue-400 block">
-                    {result.categories.routes.length}
-                  </span>
-                  <span className="text-[11px] font-mono text-zinc-500 mt-0.5 block">
-                    API ingress surfaces
-                  </span>
-                </div>
-              </div>
-
-              {/* Database & Env Touchpoints */}
-              <div className="p-3.5 rounded-xl border border-[#27272a] bg-[#131316] flex flex-col justify-between shadow-lg">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">
-                  Data Touchpoints
-                </span>
-                <div className="mt-2">
-                  <span className="text-sm font-bold font-mono text-zinc-200 block">
-                    {result.dbModels.length} DB / {result.envVars.length} Env
-                  </span>
-                  <span className="text-[10px] font-mono text-zinc-500 mt-0.5 block truncate">
-                    {result.dbModels.length > 0 ? result.dbModels.slice(0, 2).join(', ') : 'No direct schema'}
-                  </span>
-                </div>
-              </div>
-
             </div>
 
-            {/* AI Architectural Summary Narrative */}
-            {result.summary && (
-              <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-900/40 shadow-md flex items-start gap-3.5">
-                <div className="p-2 bg-purple-900/50 text-purple-300 rounded-lg shrink-0 mt-0.5">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
+            {/* right — category counts */}
+            <div className="panel">
+              <div className="panel__head">
+                <div className="t">Reached surfaces</div>
+              </div>
+              <div className="panel__body">
+                <div className="catbar">
+                  <div className={`catcell ${result.categories.routes.length > 0 ? 'catcell--hit' : 'catcell--none'}`}>
+                    <div className="k">Routes</div>
+                    <div className="v">{result.categories.routes.length}</div>
+                    <div className="u">API ingress</div>
+                  </div>
+                  <div className={`catcell ${result.categories.controllers.length > 0 ? 'catcell--hit' : 'catcell--none'}`}>
+                    <div className="k">Controllers</div>
+                    <div className="v">{result.categories.controllers.length}</div>
+                    <div className="u">handlers</div>
+                  </div>
+                  <div className={`catcell ${result.categories.services.length > 0 ? 'catcell--hit' : 'catcell--none'}`}>
+                    <div className="k">Services</div>
+                    <div className="v">{result.categories.services.length}</div>
+                    <div className="u">domain logic</div>
+                  </div>
+                  <div className={`catcell ${result.categories.components.length > 0 ? 'catcell--hit' : 'catcell--none'}`}>
+                    <div className="k">Components</div>
+                    <div className="v">{result.categories.components.length}</div>
+                    <div className="u">UI units</div>
+                  </div>
+                  <div className={`catcell ${result.categories.others.length > 0 ? 'catcell--hit' : 'catcell--none'}`}>
+                    <div className="k">Other</div>
+                    <div className="v">{result.categories.others.length}</div>
+                    <div className="u">modules</div>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-mono uppercase tracking-wider text-purple-300 font-semibold">
-                      Architectural Impact Insight
-                    </span>
-                    <span className="text-[10px] font-mono text-zinc-500">
-                      Grounded in AST imports and dependency graph
+
+                <div className="mt-4 grid grid-cols-2 gap-x-4">
+                  <div className="ikv">
+                    <span className="k">Direct dependents</span>
+                    <span className="v">{result.inDegree}</span>
+                  </div>
+                  <div className="ikv">
+                    <span className="k">Cascade depth</span>
+                    <span className="v">{result.maxDepth}</span>
+                  </div>
+                  <div className="ikv">
+                    <span className="k">Affected files</span>
+                    <span className={result.affectedFilesCount > 0 ? 'v v--risk' : 'v v--em'}>
+                      {result.affectedFilesCount}
                     </span>
                   </div>
-                  <p className="text-xs sm:text-sm text-zinc-300 font-normal leading-relaxed">
+                  <div className="ikv">
+                    <span className="k">DB / env touchpoints</span>
+                    <span className="v">
+                      {result.dbModels.length} / {result.envVars.length}
+                    </span>
+                  </div>
+                </div>
+
+                {result.summary && (
+                  <p className="mt-4 border-t border-rule pt-3 text-[12.5px] leading-[1.65] text-ink-2">
                     {result.summary}
                   </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ── hop distribution across the affected set ───────────────── */}
+          {hopDistribution && (
+            <div className="panel mb-6">
+              <div className="panel__head">
+                <div className="t">Hop distribution across the affected set</div>
+                <div className="r">
+                  {hopDistribution.placed} of {hopDistribution.total} placed · depth {hopDistribution.maxHop}
                 </div>
               </div>
-            )}
-          </div>
-        )}
+              <div className="panel__body">
+                {/* Each row is one hop. Width is the share of the peak count, so
+                    the tallest bar fills the row and the rest read against it.
+                    Colour walks from forest to signal as depth increases, which
+                    is the same language the risk gauge uses. */}
+                <div className="hopbars">
+                  {hopDistribution.bars.map(({ hop, count }) => {
+                    const share = count / hopDistribution.peak;
+                    const colour =
+                      hop === 1 ? 'var(--forest)'
+                      : hop === 2 ? '#1c5748'
+                      : hop === 3 ? 'var(--emerald)'
+                      : hop === 4 ? '#3f9e7c'
+                      : hop === 5 ? 'var(--amber)'
+                      : 'var(--signal)';
+                    return (
+                      <div
+                        key={hop}
+                        className="hopbar"
+                        title={`${count} file${count === 1 ? '' : 's'} at ${hop} hop${hop === 1 ? '' : 's'} from the target`}
+                      >
+                        <span className="hopbar__k">{hop} hop{hop === 1 ? '' : 's'}</span>
+                        <div className="hopbar__track">
+                          <div
+                            className="hopbar__fill"
+                            style={{ width: `${Math.max(2, share * 100)}%`, background: colour }}
+                          />
+                        </div>
+                        <span className="hopbar__n">{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {hopDistribution.placed < hopDistribution.total && (
+                  <p className="mt-3 font-mono text-[9.5px] leading-relaxed text-ink-3">
+                    {hopDistribution.total - hopDistribution.placed} affected file
+                    {hopDistribution.total - hopDistribution.placed === 1 ? '' : 's'} could not be
+                    placed by hop from this graph and {hopDistribution.total - hopDistribution.placed === 1 ? 'is' : 'are'} not
+                    shown above. The total affected count is unaffected.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
-        {/* 4. MAIN WORKBENCH SPLIT: BLAST RADIUS TREE + INVESTIGATION INSPECTOR */}
-        {!analyzing && result && selectedFile && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            
-            {/* LEFT 8 COLS: BLAST RADIUS HIERARCHY TREE */}
-            <div className="lg:col-span-8 space-y-6">
-              
-              {/* SECTION: LEVEL 0 - THE TARGET ROOT */}
-              <div className="bg-[#131316] border border-[#27272a] rounded-xl p-5 shadow-xl relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-purple-500" />
-                
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-400 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/40">
-                        LEVEL 0: TARGET ROOT
-                      </span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${getRoleBadgeStyle(targetRole)}`}>
-                        {targetRole}
-                      </span>
+          {/* ── blast-radius hierarchy + inspector ─────────────────────── */}
+          <div className="impact-grid">
+            {/* left — hierarchy */}
+            <div className="space-y-6">
+              {/* level 0 */}
+              <div className="panel">
+                <div className="panel__head">
+                  <div className="t">Level 00 — target root</div>
+                  <div className="r">{targetRole}</div>
+                </div>
+                <div className="panel__body">
+                  <h2 className="break-all font-mono text-[14px] font-semibold text-ink">
+                    {selectedFile.split('/').pop()}
+                  </h2>
+                  <p className="mt-0.5 break-all font-mono text-[10px] text-ink-3">{selectedFile}</p>
+
+                  <div className="mt-4 grid grid-cols-2 gap-x-4 border-t border-rule pt-3 sm:grid-cols-3">
+                    <div className="ikv">
+                      <span className="k">Imports outbound</span>
+                      <span className="v">{dependencyGraph?.[selectedFile.replace(/\\/g, '/')]?.length || 0}</span>
                     </div>
-                    <h2 className="text-lg font-bold font-mono text-white mt-1.5">
-                      {selectedFile.split('/').pop()}
-                    </h2>
-                    <p className="text-xs font-mono text-zinc-400 mt-0.5 break-all">
-                      {selectedFile}
-                    </p>
+                    <div className="ikv">
+                      <span className="k">Direct inbound</span>
+                      <span className="v">{directDependents.length}</span>
+                    </div>
+                    <div className="ikv">
+                      <span className="k">Size</span>
+                      <span className="v">{targetFileItem ? formatBytes(targetFileItem.size) : '—'}</span>
+                    </div>
                   </div>
 
                   <button
+                    type="button"
                     onClick={() => {
                       handleInspectNode(selectedFile);
-                      toast.success('Inspecting Origin Target in inspector', { duration: 1500 });
+                      toast.success('Inspecting origin target', { duration: 1500 });
                     }}
-                    className="self-start sm:self-center px-3.5 py-1.5 bg-[#1e1e22] hover:bg-[#27272a] border border-[#34343a] hover:border-purple-500/50 text-xs font-mono text-zinc-300 hover:text-white rounded-lg transition-all cursor-pointer shrink-0 flex items-center gap-1.5 active:scale-95 shadow-sm"
+                    className="abtn abtn--ghost mt-4 w-full justify-between"
                   >
-                    <span>Inspect Origin Details</span>
-                    <span className="text-purple-400">→</span>
+                    <span>Inspect origin details</span>
+                    <span className="text-ink-3">→</span>
                   </button>
                 </div>
-
-                <div className="mt-4 pt-3 border-t border-[#27272a] flex flex-wrap items-center gap-4 text-xs font-mono text-zinc-400">
-                  <div className="flex items-center gap-1.5" title="Number of files this module imports to function (dependencies this file relies on)">
-                    <span className="text-zinc-500">Imports Outbound:</span>
-                    <span className="text-zinc-200 font-semibold">
-                      {dependencyGraph?.[selectedFile.replace(/\\/g, '/')]?.length || 0} files
-                    </span>
-                  </div>
-                  <div className="text-zinc-600">•</div>
-                  <div className="flex items-center gap-1.5" title="Number of downstream files that directly import this file (direct blast radius)">
-                    <span className="text-zinc-500">Direct Inbound Dependents:</span>
-                    <span className="text-purple-300 font-semibold">{directDependents.length} files</span>
-                  </div>
-                  {targetFileItem && (
-                    <>
-                      <div className="text-zinc-600">•</div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-zinc-500">Size:</span>
-                        <span className="text-zinc-200">{formatBytes(targetFileItem.size)}</span>
-                      </div>
-                    </>
-                  )}
-                </div>
               </div>
 
-              {/* VERTICAL CONNECTOR SPINE TO LEVEL 1 */}
-              <div className="flex justify-center -my-2">
-                <div className="w-0.5 h-6 bg-gradient-to-b from-purple-500 to-blue-500" />
-              </div>
-
-              {/* SECTION: LEVEL 1 - DIRECT DEPENDENTS */}
-              <div className="bg-[#131316] border border-[#27272a] rounded-xl p-5 shadow-xl relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-blue-500" />
-
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800/40">
-                        LEVEL 1: DIRECT IMPACT ({directDependents.length})
-                      </span>
-                      <span className="text-[11px] font-mono text-zinc-400">
-                        Files with explicit <code className="text-blue-300 bg-blue-950/40 px-1 py-0.5 rounded">import</code> contracts to target
-                      </span>
-                    </div>
-                    <p className="text-xs text-zinc-400 mt-1">
-                      Direct dependents will directly experience interface breaking changes, missing exports, or signature alterations.
-                    </p>
+              {/* level 1 */}
+              <div className="panel">
+                <div className="panel__head">
+                  <div className="t">Level 01 — direct impact · {directDependents.length}</div>
+                  <div className="h">
+                    {directDependents.length > 6 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllDirect(prev => !prev)}
+                        className="font-mono text-[9px] uppercase tracking-[0.13em] text-emerald transition-opacity hover:opacity-70"
+                      >
+                        {showAllDirect ? 'Show fewer' : `Show all ${directDependents.length}`}
+                      </button>
+                    )}
                   </div>
-
-                  {directDependents.length > 6 && (
-                    <button
-                      onClick={() => setShowAllDirect(prev => !prev)}
-                      className="text-xs font-mono text-blue-400 hover:text-blue-300 underline cursor-pointer shrink-0"
-                    >
-                      {showAllDirect ? 'Show fewer' : `Show all ${directDependents.length}`}
-                    </button>
-                  )}
                 </div>
-
-                {directDependents.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {(showAllDirect ? directDependents : directDependents.slice(0, 6)).map(dep => {
+                <div className="panel__body !p-0">
+                  {directDependents.length > 0 ? (
+                    (showAllDirect ? directDependents : directDependents.slice(0, 6)).map(dep => {
                       const role = detectArchitecturalRole(dep, astMetadata?.[dep], entryPoints);
                       const isInspected = inspectedFile === dep;
                       const subCascade = (result.affectedFiles || []).filter(
@@ -1053,278 +1057,206 @@ ${
                       ).length;
 
                       return (
-                        <div
+                        <button
                           key={dep}
+                          type="button"
+                          // eslint-disable-next-line react-hooks/refs -- handler only, never during render
                           onClick={() => handleInspectNode(dep)}
-                          className={`p-3 rounded-lg border transition-all cursor-pointer flex flex-col justify-between group ${
-                            isInspected
-                              ? 'bg-blue-950/30 border-blue-500/70 shadow-[0_0_15px_rgba(59,130,246,0.15)]'
-                              : 'bg-[#18181b]/70 border-[#27272a] hover:border-blue-500/40 hover:bg-[#1f1f23]'
+                          title={dep}
+                          className={`deprow w-full text-left transition-colors hover:bg-paper-3 ${
+                            isInspected ? 'bg-paper-3' : ''
                           }`}
                         >
-                          <div>
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-mono font-semibold text-xs text-white group-hover:text-blue-300 transition-colors truncate">
-                                {dep.split('/').pop()}
-                              </span>
-                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono border ${getRoleBadgeStyle(role)} shrink-0`}>
-                                {role}
-                              </span>
-                            </div>
-                            <span className="text-[10px] font-mono text-zinc-500 block truncate mt-1">
-                              {dep}
-                            </span>
-                          </div>
-
-                          <div className="mt-3 pt-2 border-t border-[#27272a]/60 flex items-center justify-between text-[10px] font-mono text-zinc-400">
-                            <span className="text-blue-300/80">Direct consumer</span>
-                            {subCascade > 0 && (
-                              <span className="text-zinc-500">Cascades to {subCascade} files</span>
-                            )}
-                          </div>
-                        </div>
+                          <span className="ic shrink-0">
+                            {(dep.split('.').pop() || '??').slice(0, 3).toUpperCase()}
+                          </span>
+                          <span className="p">
+                            {dep.split('/').pop()}
+                            <span className="ml-2 text-[9.5px] text-ink-3">{role}</span>
+                          </span>
+                          <span className="k">Direct consumer</span>
+                          <span className="h">{subCascade > 0 ? `+${subCascade}` : '—'}</span>
+                        </button>
                       );
-                    })}
-                  </div>
-                ) : (
-                  <div className="p-6 text-center border border-dashed border-[#27272a] rounded-lg text-zinc-500 font-mono text-xs">
-                    No direct consumers found. This file is not directly imported by any other file.
-                  </div>
-                )}
+                    })
+                  ) : (
+                    <div className="fchain__none p-6 text-center">
+                      No direct consumers found. This file is not directly imported by any other file.
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* VERTICAL CONNECTOR SPINE TO LEVEL 2 */}
+              {/* level 2+ */}
               {indirectDependents.length > 0 && (
-                <div className="flex justify-center -my-2">
-                  <div className="w-0.5 h-6 bg-gradient-to-b from-blue-500 to-amber-500/80" />
-                </div>
-              )}
-
-              {/* SECTION: LEVEL 2+ - INDIRECT TRANSITIVE BLAST RADIUS */}
-              {indirectDependents.length > 0 && (
-                <div className="bg-[#131316] border border-[#27272a] rounded-xl p-5 shadow-xl relative overflow-hidden">
-                  <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-500/80" />
-
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/40">
-                          LEVEL 2+: INDIRECT BLAST RADIUS ({indirectDependents.length})
-                        </span>
-                        <span className="text-[11px] font-mono text-zinc-400">
-                          Transitive downstream consumers
-                        </span>
-                      </div>
-                      <p className="text-xs text-zinc-400 mt-1">
-                        These modules do not directly import the target, but depend on intermediate direct bridges.
-                      </p>
+                <div className="panel">
+                  <div className="panel__head">
+                    <div className="t">Level 02+ — indirect blast radius · {indirectDependents.length}</div>
+                    <div className="h">
+                      {indirectDependents.length > 8 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllIndirect(prev => !prev)}
+                          className="font-mono text-[9px] uppercase tracking-[0.13em] text-emerald transition-opacity hover:opacity-70"
+                        >
+                          {showAllIndirect ? 'Show fewer' : `Show all ${indirectDependents.length}`}
+                        </button>
+                      )}
                     </div>
-
-                    {indirectDependents.length > 8 && (
-                      <button
-                        onClick={() => setShowAllIndirect(prev => !prev)}
-                        className="text-xs font-mono text-amber-400 hover:text-amber-300 underline cursor-pointer shrink-0"
-                      >
-                        {showAllIndirect ? 'Show fewer' : `Show all ${indirectDependents.length}`}
-                      </button>
-                    )}
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="panel__body !p-0">
                     {(showAllIndirect ? indirectDependents : indirectDependents.slice(0, 8)).map(ind => {
                       const role = detectArchitecturalRole(ind, astMetadata?.[ind], entryPoints);
                       const isInspected = inspectedFile === ind;
                       const bridge = getProvenanceBridge(ind);
 
                       return (
-                        <div
+                        <button
                           key={ind}
+                          type="button"
                           onClick={() => handleInspectNode(ind)}
-                          className={`p-3 rounded-lg border transition-all cursor-pointer flex flex-col justify-between group ${
-                            isInspected
-                              ? 'bg-amber-950/30 border-amber-500/70 shadow-[0_0_15px_rgba(245,158,11,0.15)]'
-                              : 'bg-[#18181b]/70 border-[#27272a] hover:border-amber-500/40 hover:bg-[#1f1f23]'
+                          title={ind}
+                          className={`deprow w-full text-left transition-colors hover:bg-paper-3 ${
+                            isInspected ? 'bg-paper-3' : ''
                           }`}
                         >
-                          <div>
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-mono font-semibold text-xs text-white group-hover:text-amber-300 transition-colors truncate">
-                                {ind.split('/').pop()}
-                              </span>
-                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono border ${getRoleBadgeStyle(role)} shrink-0`}>
-                                {role}
-                              </span>
-                            </div>
-                            <span className="text-[10px] font-mono text-zinc-500 block truncate mt-1">
-                              {ind}
-                            </span>
-                          </div>
-
-                          <div className="mt-3 pt-2 border-t border-[#27272a]/60 flex items-center justify-between text-[10px] font-mono">
-                            <span className="text-zinc-500">Transitive bridge:</span>
-                            <span className="text-amber-300/80 truncate max-w-[130px]" title={bridge || 'Intermediate'}>
-                              {bridge ? bridge.split('/').pop() : 'Direct bridge'}
-                            </span>
-                          </div>
-                        </div>
+                          <span className="ic shrink-0">
+                            {(ind.split('.').pop() || '??').slice(0, 3).toUpperCase()}
+                          </span>
+                          <span className="p">
+                            {ind.split('/').pop()}
+                            <span className="ml-2 text-[9.5px] text-ink-3">{role}</span>
+                          </span>
+                          <span className="k">Bridge</span>
+                          <span className="h truncate" title={bridge || 'intermediate'}>
+                            {bridge ? bridge.split('/').pop() : '—'}
+                          </span>
+                        </button>
                       );
                     })}
                   </div>
                 </div>
               )}
 
-              {/* SECTION: AFFECTED EXECUTION SURFACES (ROUTES & API INGRESS) */}
+              {/* affected routes */}
               {result.categories.routes.length > 0 && (
-                <div className="bg-[#131316] border border-[#27272a] rounded-xl p-5 shadow-xl relative overflow-hidden">
-                  <div className="absolute top-0 left-0 w-1.5 h-full bg-cyan-500" />
-
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
-                          AFFECTED API & INGRESS SURFACES ({result.categories.routes.length})
-                        </span>
-                        <span className="text-[11px] font-mono text-zinc-400">
-                          External routes reaching this target
-                        </span>
-                      </div>
-                      <p className="text-xs text-zinc-400 mt-1">
-                        Changes to the target can propagate outward to these exposed HTTP or execution entry points.
-                      </p>
+                <div className="panel">
+                  <div className="panel__head">
+                    <div className="t">Affected API &amp; ingress surfaces · {result.categories.routes.length}</div>
+                    <div className="h">
+                      {result.categories.routes.length > 4 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllRoutes(prev => !prev)}
+                          className="font-mono text-[9px] uppercase tracking-[0.13em] text-emerald transition-opacity hover:opacity-70"
+                        >
+                          {showAllRoutes ? 'Show fewer' : `Show all ${result.categories.routes.length}`}
+                        </button>
+                      )}
                     </div>
-
-                    {result.categories.routes.length > 4 && (
-                      <button
-                        onClick={() => setShowAllRoutes(prev => !prev)}
-                        className="text-xs font-mono text-cyan-400 hover:text-cyan-300 underline cursor-pointer shrink-0"
-                      >
-                        {showAllRoutes ? 'Show fewer' : `Show all ${result.categories.routes.length}`}
-                      </button>
-                    )}
                   </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="panel__body !p-0">
                     {(showAllRoutes ? result.categories.routes : result.categories.routes.slice(0, 4)).map(route => {
                       const isInspected = inspectedFile === route;
                       return (
-                        <div
+                        <button
                           key={route}
+                          type="button"
                           onClick={() => handleInspectNode(route)}
-                          className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center justify-between text-xs font-mono group ${
-                            isInspected
-                              ? 'bg-cyan-950/30 border-cyan-500/70'
-                              : 'bg-[#18181b]/70 border-[#27272a] hover:border-cyan-500/40'
+                          title={route}
+                          className={`deprow w-full text-left transition-colors hover:bg-paper-3 ${
+                            isInspected ? 'bg-paper-3' : ''
                           }`}
                         >
-                          <div className="truncate pr-2">
-                            <span className="font-semibold text-white group-hover:text-cyan-300 block truncate">
-                              {route.split('/').pop()}
-                            </span>
-                            <span className="text-[10px] text-zinc-500 block truncate mt-0.5">{route}</span>
-                          </div>
-                          <span className="text-[10px] text-cyan-400 bg-cyan-950/50 px-1.5 py-0.5 rounded border border-cyan-800/50 shrink-0">
-                            ROUTE
+                          <span className="ic shrink-0">
+                            {(route.split('.').pop() || '??').slice(0, 3).toUpperCase()}
                           </span>
-                        </div>
+                          <span className="p">{route.split('/').pop()}</span>
+                          <span className="k k--risk">Route</span>
+                          <span className="h">{route.split('/').length - 1} segments</span>
+                        </button>
                       );
                     })}
                   </div>
                 </div>
               )}
 
-              {/* REASSURING ISOLATED MODULE STATE */}
+              {/* isolated module */}
               {result.affectedFilesCount === 0 && (
-                <div className="bg-[#131316] border border-emerald-800/40 rounded-xl p-8 text-center space-y-3 shadow-xl">
-                  <div className="w-12 h-12 rounded-full bg-emerald-950/50 border border-emerald-800/60 text-emerald-400 flex items-center justify-center mx-auto">
-                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
+                <div className="panel">
+                  <div className="panel__body py-10 text-center">
+                    <span className="st st--ok inline-flex">
+                      <i />
+                      Isolated module
+                    </span>
+                    <p className="mx-auto mt-3 max-w-[52ch] text-[12.5px] leading-[1.65] text-ink-2">
+                      This file is not imported by other modules in the codebase. Modifying its internal
+                      implementation or exports is safe and will not cascade to downstream consumers.
+                    </p>
                   </div>
-                  <h3 className="text-base font-mono font-bold text-white">
-                    Isolated Module — Zero Downstream Blast Radius
-                  </h3>
-                  <p className="text-xs font-mono text-zinc-400 max-w-md mx-auto leading-relaxed">
-                    This file is not imported by other modules in the codebase. Modifying its internal implementation or exports is safe and will not cascade to downstream consumers.
-                  </p>
                 </div>
               )}
-
             </div>
 
-            {/* RIGHT 4 COLS: STICKY NODE INVESTIGATION INSPECTOR */}
-            <div className="lg:col-span-4 sticky top-24 space-y-5" ref={inspectorRef}>
-              <div className={`bg-[#131316] border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-500 ${
-                isInspectorPulsing
-                  ? 'border-purple-500 ring-2 ring-purple-500/60 shadow-[0_0_25px_rgba(168,85,247,0.25)]'
-                  : 'border-[#27272a]'
-              }`}>
-                <div className="flex items-center justify-between pb-3 border-b border-[#27272a]">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400">
-                      Affected Node Inspector
-                    </span>
-                    {inspectedFile === selectedFile && (
-                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-purple-950/70 text-purple-300 border border-purple-800/50 font-semibold">
-                        ORIGIN TARGET
-                      </span>
-                    )}
+            {/* right — inspector */}
+            <div className="sticky top-[72px] space-y-5" ref={inspectorRef}>
+              <div className={`panel transition-shadow duration-500 ${isInspectorPulsing ? 'ring-2 ring-emerald' : ''}`}>
+                <div className="panel__head">
+                  <div className="t">Affected node inspector</div>
+                  <div className="r">
+                    {inspectedFile === selectedFile ? 'Origin target' : inspectedFile ? 'Active investigation' : ''}
                   </div>
-                  {inspectedFile && (
-                    <span className="text-[10px] font-mono text-purple-400 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
-                      Active Investigation
-                    </span>
-                  )}
                 </div>
 
                 {inspectedFile ? (
-                  <div className="mt-4 space-y-4">
-                    
-                    {/* Node Identification */}
+                  <div className="panel__body space-y-4">
+                    {/* identification */}
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${getRoleBadgeStyle(inspectedNodeRole)}`}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-[2px] border border-rule bg-paper-3 px-1.5 py-0.5 font-mono text-[9px] uppercase text-ink-2">
                           {inspectedNodeRole}
                         </span>
                         {inspectedFile === selectedFile ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950/60 text-purple-300 border border-purple-800/40">
-                            SIMULATION TARGET
+                          <span className="st st--ok">
+                            <i />
+                            Simulation target
                           </span>
                         ) : directDependents.includes(inspectedFile) ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-blue-950/60 text-blue-300 border border-blue-800/40">
-                            DIRECT CONSUMER
+                          <span className="st st--warn">
+                            <i />
+                            Direct consumer
                           </span>
                         ) : (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/60 text-amber-300 border border-amber-800/40">
-                            INDIRECT CONSUMER
+                          <span className="st st--idle">
+                            <i />
+                            Indirect consumer
                           </span>
                         )}
                       </div>
 
-                      <h3 className="text-sm sm:text-base font-bold font-mono text-white mt-2 break-all">
+                      <h3 className="mt-2 break-all font-mono text-[13px] font-semibold text-ink">
                         {inspectedFile.split('/').pop()}
                       </h3>
-                      <p className="text-[11px] font-mono text-zinc-500 break-all mt-0.5">
-                        {inspectedFile}
-                      </p>
+                      <p className="mt-0.5 break-all font-mono text-[10px] text-ink-3">{inspectedFile}</p>
                     </div>
 
-                    {/* Grounded Provenance: Why is this affected? */}
-                    <div className="p-3 bg-[#18181b] border border-[#27272a] rounded-lg space-y-1.5">
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold block">
-                        Why is this in the blast radius?
-                      </span>
-                      <p className="text-xs text-zinc-300 font-normal leading-relaxed">
+                    {/* provenance */}
+                    <div className="border-t border-rule pt-3">
+                      <div className="intel__k">Why is this in the blast radius?</div>
+                      <p className="text-[12px] leading-[1.62] text-ink-2">
                         {inspectedFile === selectedFile ? (
-                          'This is the root target file undergoing modification. Any changes to its exports or behavior initiate the downstream cascade.'
+                          'This is the root target file undergoing modification. Any changes to its exports or behaviour initiate the downstream cascade.'
                         ) : directDependents.includes(inspectedFile) ? (
                           <>
-                            Directly imports <code className="text-purple-300 font-mono">{selectedFile.split('/').pop()}</code>. Modifying exported types, functions, or schemas can cause compile errors or runtime divergence here.
+                            Directly imports{' '}
+                            <code className="font-mono text-emerald">{selectedFile.split('/').pop()}</code>.
+                            Modifying exported types, functions, or schemas can cause compile errors or runtime
+                            divergence here.
                           </>
                         ) : (
                           <>
                             Transitively impacted through intermediate bridge{' '}
-                            <code className="text-amber-300 font-mono">
+                            <code className="font-mono text-ink">
                               {getProvenanceBridge(inspectedFile)?.split('/').pop() || 'upstream dependent'}
                             </code>
                             . Modifying the target propagates through the dependency pipeline into this file.
@@ -1333,44 +1265,37 @@ ${
                       </p>
                     </div>
 
-                    {/* File Metrics & Dependency Centrality */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="p-2.5 bg-[#18181b] border border-[#27272a] rounded-lg">
-                        <span className="text-[9px] font-mono text-zinc-500 uppercase block">Outbound Imports</span>
-                        <span className="text-sm font-bold font-mono text-zinc-200 mt-0.5 block">
-                          {dependencyGraph?.[inspectedFile]?.length || 0} files
-                        </span>
+                    {/* metrics */}
+                    <div className="grid grid-cols-2 gap-x-4 border-t border-rule pt-3">
+                      <div className="ikv">
+                        <span className="k">Outbound imports</span>
+                        <span className="v">{dependencyGraph?.[inspectedFile]?.length || 0}</span>
                       </div>
-                      <div className="p-2.5 bg-[#18181b] border border-[#27272a] rounded-lg">
-                        <span className="text-[9px] font-mono text-zinc-500 uppercase block">File Scale</span>
-                        <span className="text-sm font-bold font-mono text-zinc-200 mt-0.5 block">
-                          {inspectedNodeItem ? `${inspectedNodeItem.lines} lines` : 'N/A'}
-                        </span>
+                      <div className="ikv">
+                        <span className="k">File scale</span>
+                        <span className="v">{inspectedNodeItem ? `${inspectedNodeItem.lines} lines` : '—'}</span>
                       </div>
                     </div>
 
-                    {/* AST Grounded Evidence (Functions & Exports) */}
+                    {/* AST evidence */}
                     {inspectedNodeAst && (
-                      <div className="space-y-2 pt-2 border-t border-[#27272a]">
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold block">
-                          AST Evidence in File
-                        </span>
-                        
-                        {/* Functions */}
+                      <div className="border-t border-rule pt-3">
+                        <div className="intel__k">AST evidence in file</div>
+
                         {Array.isArray(inspectedNodeAst.functions) && inspectedNodeAst.functions.length > 0 && (
-                          <div className="space-y-1">
-                            <span className="text-[10px] font-mono text-zinc-500 block">Functions:</span>
-                            <div className="flex flex-wrap gap-1">
+                          <div className="mb-2">
+                            <span className="figcap">Functions</span>
+                            <div className="mt-1.5 flex flex-wrap gap-1">
                               {inspectedNodeAst.functions.slice(0, 4).map((fn: any, idx: number) => (
                                 <span
                                   key={idx}
-                                  className="text-[10px] font-mono bg-[#1e1e22] text-zinc-300 px-1.5 py-0.5 rounded border border-[#2c2c30]"
+                                  className="rounded-[2px] border border-rule bg-paper-3 px-1.5 py-0.5 font-mono text-[9.5px] text-ink-2"
                                 >
                                   {typeof fn === 'string' ? fn : fn?.name || 'anonymous'}()
                                 </span>
                               ))}
                               {inspectedNodeAst.functions.length > 4 && (
-                                <span className="text-[9px] font-mono text-zinc-500 self-center">
+                                <span className="self-center font-mono text-[9px] text-ink-3">
                                   +{inspectedNodeAst.functions.length - 4} more
                                 </span>
                               )}
@@ -1378,15 +1303,14 @@ ${
                           </div>
                         )}
 
-                        {/* Exports */}
                         {Array.isArray(inspectedNodeAst.exports) && inspectedNodeAst.exports.length > 0 && (
-                          <div className="space-y-1">
-                            <span className="text-[10px] font-mono text-zinc-500 block">Exports:</span>
-                            <div className="flex flex-wrap gap-1">
+                          <div>
+                            <span className="figcap">Exports</span>
+                            <div className="mt-1.5 flex flex-wrap gap-1">
                               {inspectedNodeAst.exports.slice(0, 4).map((exp: any, idx: number) => (
                                 <span
                                   key={idx}
-                                  className="text-[10px] font-mono bg-purple-950/30 text-purple-300 px-1.5 py-0.5 rounded border border-purple-800/40"
+                                  className="rounded-[2px] border border-rule bg-paper-3 px-1.5 py-0.5 font-mono text-[9.5px] text-ink-2"
                                 >
                                   {typeof exp === 'string' ? exp : exp?.name || 'export'}
                                 </span>
@@ -1397,91 +1321,86 @@ ${
                       </div>
                     )}
 
-                    {/* Cross-Workspace Navigation Actions */}
-                    <div className="pt-3 border-t border-[#27272a] space-y-2">
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold block">
-                        Cross-Workspace Investigation
-                      </span>
+                    {/* actions */}
+                    <div className="space-y-2 border-t border-rule pt-3">
+                      <div className="intel__k">Cross-workspace investigation</div>
 
-                      {/* 1. Simulate as target */}
                       {inspectedFile !== selectedFile && (
                         <button
+                          type="button"
                           onClick={() => selectTargetFile(inspectedFile)}
-                          className="w-full py-2 px-3 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-mono font-medium transition-colors flex items-center justify-between cursor-pointer"
+                          className="abtn abtn--solid w-full justify-between"
                         >
-                          <span>Simulate This File as Target</span>
-                          <span>⚡</span>
+                          <span>Simulate this file as target</span>
+                          <span>→</span>
                         </button>
                       )}
 
-                      {/* 2. Inspect in Explorer */}
                       <button
+                        type="button"
                         onClick={() => {
                           onSelectInvestigationTarget?.(inspectedFile);
                           onNavigateToExplorer(inspectedFile);
                         }}
-                        className="w-full py-1.5 px-3 bg-[#18181b] hover:bg-[#222226] border border-[#27272a] hover:border-zinc-500 text-zinc-300 hover:text-white rounded-lg text-xs font-mono transition-colors flex items-center justify-between cursor-pointer"
+                        className="abtn abtn--ghost w-full justify-between"
                       >
-                        <span>Inspect in Code Explorer</span>
-                        <span>→</span>
+                        <span>Inspect in code explorer</span>
+                        <span className="text-ink-3">→</span>
                       </button>
 
-                      {/* 3. View in Architecture Graph */}
                       {onNavigateToGraph && (
                         <button
+                          type="button"
                           onClick={() => {
                             onSelectInvestigationTarget?.(inspectedFile);
                             onNavigateToGraph(inspectedFile);
                           }}
-                          className="w-full py-1.5 px-3 bg-[#18181b] hover:bg-[#222226] border border-[#27272a] hover:border-zinc-500 text-zinc-300 hover:text-white rounded-lg text-xs font-mono transition-colors flex items-center justify-between cursor-pointer"
+                          className="abtn abtn--ghost w-full justify-between"
                         >
-                          <span>View in Architecture Graph</span>
-                          <span>→</span>
+                          <span>View in architecture graph</span>
+                          <span className="text-ink-3">→</span>
                         </button>
                       )}
 
-                      {/* 4. Trace Execution Flow */}
                       {onNavigateToTrace && (
                         <button
+                          type="button"
                           onClick={() => {
                             onSelectInvestigationTarget?.(inspectedFile);
                             onNavigateToTrace(inspectedFile);
                           }}
-                          className="w-full py-1.5 px-3 bg-[#18181b] hover:bg-[#222226] border border-[#27272a] hover:border-zinc-500 text-zinc-300 hover:text-white rounded-lg text-xs font-mono transition-colors flex items-center justify-between cursor-pointer"
+                          className="abtn abtn--ghost w-full justify-between"
                         >
-                          <span>Trace Execution Flow</span>
-                          <span>→</span>
+                          <span>Trace execution flow</span>
+                          <span className="text-ink-3">→</span>
                         </button>
                       )}
 
-                      {/* 5. Ask Archon AI about this specific node */}
                       <button
+                        type="button"
                         onClick={() =>
                           onTriggerChatQuery(
                             `In our impact analysis of "${selectedFile}", we found that "${inspectedFile}" is affected. What contracts or functions are most at risk of breaking?`
                           )
                         }
-                        className="w-full py-1.5 px-3 bg-[#1e1e24] hover:bg-purple-950/40 border border-purple-900/40 hover:border-purple-500 text-purple-300 rounded-lg text-xs font-mono transition-colors flex items-center justify-between cursor-pointer"
+                        className="abtn w-full justify-between"
                       >
-                        <span>Ask AI About This Affected File</span>
-                        <span>✦</span>
+                        <span>Ask Archon about this file</span>
+                        <span className="text-ink-3">→</span>
                       </button>
                     </div>
-
                   </div>
                 ) : (
-                  <div className="p-8 text-center text-zinc-500 font-mono text-xs">
-                    Click any node in the blast-radius tree to inspect its causal provenance, AST evidence, and cross-workspace investigation actions.
+                  <div className="panel__body text-center font-mono text-[11.5px] leading-[1.7] text-ink-3">
+                    Select any node in the blast-radius hierarchy to inspect its causal provenance, AST evidence,
+                    and cross-workspace actions.
                   </div>
                 )}
               </div>
             </div>
-
           </div>
-        )}
-
-      </main>
-
+        </>
+      )}
     </div>
   );
 }
