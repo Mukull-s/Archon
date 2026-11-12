@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Panel, Typography, Button, Badge } from '../../ui/DesignSystem';
 
 export interface DriftViolation {
   filePath: string;
@@ -45,209 +44,177 @@ export const OverviewFindings: React.FC<OverviewFindingsProps> = ({
   const displayedHotspots = showAllHotspots ? centralityHotspots : centralityHotspots.slice(0, 5);
 
   const totalIssueCount = architecturalDrift.length + circularDependencies.length;
+  const maxInDegree = centralityHotspots.reduce((max, spot) => Math.max(max, spot.inDegree), 0);
 
   return (
-    <section 
-      id="overview-findings" 
-      aria-label="Architectural Health and Critical Findings" 
-      className="space-y-6 my-8 scroll-mt-6"
-    >
-      {/* Section Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-[#27272a] pb-3 gap-2">
-        <div className="flex items-center gap-2.5">
-          <span className={`w-2 h-2 rounded-full ${totalIssueCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`} aria-hidden="true" />
-          <h2 className="text-[14px] font-mono font-bold text-[#fafafa] uppercase tracking-wider m-0">
-            Architectural Health & Critical Findings
-          </h2>
+    <section id="overview-findings" aria-label="Architectural Health and Critical Findings" className="scroll-mt-6">
+      <div className="panel mb-6">
+        <div className="panel__head">
+          <div className="t">Architectural health &amp; critical findings</div>
+          <div className="r">
+            {totalIssueCount > 0 ? (
+              <span className="st st--warn">
+                <i />
+                {totalIssueCount} {totalIssueCount === 1 ? 'condition requiring review' : 'conditions requiring review'}
+              </span>
+            ) : (
+              <span className="st st--ok">
+                <i />
+                Clean architecture state
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {totalIssueCount > 0 ? (
-            <span className="text-[11px] font-mono text-amber-400 bg-amber-950/30 border border-amber-900/40 px-2 py-0.5 rounded">
-              {totalIssueCount} {totalIssueCount === 1 ? 'Condition Requiring Review' : 'Conditions Requiring Review'}
-            </span>
+        <div className="panel__body">
+          {/* ── 3A: ARCHITECTURAL DRIFT INSPECTOR ──────────────────────── */}
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="figcap">Layer drift &amp; boundary violations</span>
+              <span className="figcap"><b>{architecturalDrift.length}</b></span>
+            </div>
+            <span className="figcap hidden sm:inline">Route ➔ Controller ➔ Service ➔ Database</span>
+          </div>
+
+          {architecturalDrift.length === 0 ? (
+            <div className="flex items-center gap-3 rounded-[3px] border border-rule bg-paper-3 px-4 py-3">
+              <span className="font-mono text-[13px] text-emerald">✓</span>
+              <p className="m-0 text-[12.5px] leading-[1.6] text-ink-2">
+                No architectural layer drift detected. Clean unidirectional boundaries preserved across
+                controllers, services, and models.
+              </p>
+            </div>
           ) : (
-            <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/30 border border-emerald-900/40 px-2 py-0.5 rounded">
-              ✓ Clean Architecture State
-            </span>
+            <div className="findings">
+              {displayedDrift.map((finding, idx) => {
+                const sourceBase = finding.filePath.split('/').pop() || finding.filePath;
+                const targetBase = finding.targetPath.split('/').pop() || finding.targetPath;
+
+                return (
+                  <div key={idx} className="finding finding--risk">
+                    <div className="finding__bar" />
+                    <div className="finding__body">
+                      <div className="finding__top">
+                        <span className="finding__t">
+                          <span
+                            className="cursor-pointer hover:text-emerald"
+                            title={finding.filePath}
+                            onClick={() => onNavigateToExplorer?.(finding.filePath)}
+                          >
+                            {sourceBase}
+                          </span>
+                          <span className="px-2 text-sig">➔</span>
+                          <span
+                            className="cursor-pointer font-normal text-ink-2 hover:text-emerald"
+                            title={finding.targetPath}
+                            onClick={() => onNavigateToExplorer?.(finding.targetPath)}
+                          >
+                            {targetBase}
+                          </span>
+                        </span>
+                      </div>
+                      <p className="finding__d m-0">{finding.violation}</p>
+
+                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                        {onNavigateToExplorer && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToExplorer(finding.filePath)}
+                            className="abtn abtn--ghost"
+                            title={`Open ${finding.filePath} in Explorer`}
+                          >
+                            Open file
+                          </button>
+                        )}
+                        {onNavigateToGraph && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToGraph(finding.filePath)}
+                            className="abtn abtn--ghost"
+                            title={`View ${finding.filePath} in Architecture Graph`}
+                          >
+                            View graph
+                          </button>
+                        )}
+                        {onNavigateToImpact && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToImpact(finding.filePath)}
+                            className="abtn abtn--ghost"
+                            title={`Analyze blast radius of ${finding.filePath}`}
+                          >
+                            Check impact
+                          </button>
+                        )}
+                        {onTriggerChat && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onTriggerChat(
+                                `Explain how to refactor ${finding.filePath} to fix this layer violation: ${finding.violation}`
+                              )
+                            }
+                            className="abtn abtn--solid"
+                            title="Ask AI how to refactor this violation"
+                          >
+                            Explain fix
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {architecturalDrift.length > 4 && (
+            <div className="mt-3 text-center">
+              <button
+                type="button"
+                onClick={() => setShowAllDrift(!showAllDrift)}
+                className="figcap hover:text-ink"
+              >
+                {showAllDrift
+                  ? 'Collapse drift list'
+                  : `Show all ${architecturalDrift.length} layer drift violations`}
+              </button>
+            </div>
           )}
         </div>
       </div>
 
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* 3A: ARCHITECTURAL DRIFT INSPECTOR                          */}
-      {/* ────────────────────────────────────────────────────────── */}
-      <div className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-5">
-        <div className="flex items-center justify-between mb-3.5">
-          <div className="flex items-center gap-2">
-            <span className="text-[12px] font-mono font-bold uppercase tracking-wider text-white">
-              Layer Drift & Boundary Violations
-            </span>
-            <Badge 
-              variant={architecturalDrift.length > 0 ? 'warning' : 'success'} 
-              className="text-[10px] font-mono"
-            >
-              {architecturalDrift.length === 0 
-                ? '0 VIOLATIONS' 
-                : `${architecturalDrift.length} ${architecturalDrift.length === 1 ? 'VIOLATION' : 'VIOLATIONS'}`}
-            </Badge>
-          </div>
-          <span className="text-[11px] font-mono text-[#919095] hidden sm:inline">
-            Layer Rules: Route ➔ Controller ➔ Service ➔ Database
-          </span>
-        </div>
-
-        {architecturalDrift.length === 0 ? (
-          <div className="p-4 rounded-[6px] bg-[#131316] border border-[#27272a] flex items-center gap-3">
-            <span className="text-emerald-400 font-mono text-[14px]">✓</span>
-            <p className="text-[12.5px] font-mono text-[#c8c5ca] m-0">
-              No architectural layer drift detected. Clean unidirectional boundaries preserved across controllers, services, and models.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            {displayedDrift.map((finding, idx) => {
-              const sourceBase = finding.filePath.split('/').pop() || finding.filePath;
-              const targetBase = finding.targetPath.split('/').pop() || finding.targetPath;
-
-              return (
-                <div
-                  key={idx}
-                  className="bg-[#131316] border border-[#27272a] hover:border-[#39393c] rounded-[6px] p-3 transition-colors"
-                >
-                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                    {/* Source -> Target Chain */}
-                    <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap text-[12px] font-mono">
-                        <span 
-                          className="text-[#fafafa] font-semibold hover:text-[#3b82f6] cursor-pointer truncate max-w-[240px]"
-                          title={finding.filePath}
-                          onClick={() => onNavigateToExplorer?.(finding.filePath)}
-                        >
-                          {sourceBase}
-                        </span>
-                        <span className="text-amber-400 font-bold shrink-0">➔</span>
-                        <span 
-                          className="text-[#c8c5ca] hover:text-[#3b82f6] cursor-pointer truncate max-w-[240px]"
-                          title={finding.targetPath}
-                          onClick={() => onNavigateToExplorer?.(finding.targetPath)}
-                        >
-                          {targetBase}
-                        </span>
-                      </div>
-                      <p className="text-[11.5px] text-[#fca5a5] font-mono m-0 flex items-center gap-1.5">
-                        <span className="w-1 h-1 rounded-full bg-red-400 shrink-0" aria-hidden="true" />
-                        {finding.violation}
-                      </p>
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-1.5 shrink-0 self-start lg:self-center">
-                      {onNavigateToExplorer && (
-                        <button
-                          type="button"
-                          onClick={() => onNavigateToExplorer(finding.filePath)}
-                          className="px-2 py-1 rounded bg-[#1f1f22] hover:bg-[#27272a] border border-[#27272a] text-[10.5px] font-mono text-[#c8c5ca] hover:text-white transition-colors cursor-pointer"
-                          title={`Open ${finding.filePath} in Explorer`}
-                        >
-                          Open File
-                        </button>
-                      )}
-                      {onNavigateToGraph && (
-                        <button
-                          type="button"
-                          onClick={() => onNavigateToGraph(finding.filePath)}
-                          className="px-2 py-1 rounded bg-[#1f1f22] hover:bg-[#27272a] border border-[#27272a] text-[10.5px] font-mono text-[#c8c5ca] hover:text-white transition-colors cursor-pointer"
-                          title={`View ${finding.filePath} in Architecture Graph`}
-                        >
-                          View Graph
-                        </button>
-                      )}
-                      {onNavigateToImpact && (
-                        <button
-                          type="button"
-                          onClick={() => onNavigateToImpact(finding.filePath)}
-                          className="px-2 py-1 rounded bg-[#1f1f22] hover:bg-[#27272a] border border-[#27272a] text-[10.5px] font-mono text-[#c8c5ca] hover:text-white transition-colors cursor-pointer"
-                          title={`Analyze blast radius of ${finding.filePath}`}
-                        >
-                          Check Impact
-                        </button>
-                      )}
-                      {onTriggerChat && (
-                        <button
-                          type="button"
-                          onClick={() => onTriggerChat(`Explain how to refactor ${finding.filePath} to fix this layer violation: ${finding.violation}`)}
-                          className="px-2 py-1 rounded bg-[#a855f7]/10 hover:bg-[#a855f7]/20 border border-[#a855f7]/30 text-[10.5px] font-mono text-[#ddb7ff] transition-colors cursor-pointer"
-                          title="Ask AI how to refactor this violation"
-                        >
-                          Explain Fix
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {architecturalDrift.length > 4 && (
-              <div className="pt-1 text-center">
-                <button
-                  type="button"
-                  onClick={() => setShowAllDrift(!showAllDrift)}
-                  className="text-[11px] font-mono text-[#3b82f6] hover:underline cursor-pointer"
-                >
-                  {showAllDrift 
-                    ? 'Collapse drift list' 
-                    : `Show all ${architecturalDrift.length} layer drift violations`}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* 3B & 3C: CIRCULAR DEPENDENCIES & CENTRALITY HOTSPOTS       */}
-      {/* ────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Left Sub-Section: Circular Dependencies */}
-        <div className="lg:col-span-6 bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-3.5">
-              <span className="text-[12px] font-mono font-bold uppercase tracking-wider text-white">
-                Circular Dependency Loops
-              </span>
-              <Badge 
-                variant={circularDependencies.length > 0 ? 'warning' : 'success'} 
-                className="text-[10px] font-mono"
-              >
-                {circularDependencies.length === 0 
-                  ? '0 CYCLES' 
-                  : `${circularDependencies.length} ${circularDependencies.length === 1 ? 'CYCLE' : 'CYCLES'}`}
-              </Badge>
+      {/* ── 3B & 3C: CIRCULAR DEPENDENCIES & CENTRALITY HOTSPOTS ───────── */}
+      <div className="ksplit--even mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Left: Circular Dependencies */}
+        <div className="panel flex flex-col">
+          <div className="panel__head">
+            <div className="t">Circular dependency loops</div>
+            <div className="r">
+              <span className="figcap"><b>{circularDependencies.length}</b></span>
             </div>
-
+          </div>
+          <div className="panel__body flex-1">
             {circularDependencies.length === 0 ? (
-              <div className="p-4 rounded-[6px] bg-[#131316] border border-[#27272a] flex items-center gap-3">
-                <span className="text-emerald-400 font-mono text-[14px]">✓</span>
-                <p className="text-[12px] font-mono text-[#c8c5ca] m-0">
+              <div className="flex items-center gap-3 rounded-[3px] border border-rule bg-paper-3 px-4 py-3">
+                <span className="font-mono text-[13px] text-emerald">✓</span>
+                <p className="m-0 text-[12px] leading-[1.6] text-ink-2">
                   Tarjan SCC algorithm detected 0 import cycles. Dependency graph is fully acyclic.
                 </p>
               </div>
             ) : (
               <div className="space-y-2.5">
                 {displayedCycles.map((cycle, idx) => (
-                  <div key={idx} className="bg-[#131316] border border-[#27272a] rounded-[6px] p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-mono text-amber-400 font-semibold uppercase tracking-wider">
-                        Cycle #{idx + 1} ({cycle.length} files)
+                  <div key={idx} className="rounded-[3px] border border-rule bg-paper-3 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="figcap">
+                        <b>Cycle #{idx + 1}</b> · {cycle.length} files
                       </span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-3">
                         {onNavigateToGraph && (
                           <button
                             type="button"
                             onClick={() => onNavigateToGraph(cycle[0])}
-                            className="text-[10px] font-mono text-[#3b82f6] hover:underline cursor-pointer"
+                            className="figcap hover:text-ink"
                           >
                             Graph
                           </button>
@@ -256,7 +223,7 @@ export const OverviewFindings: React.FC<OverviewFindingsProps> = ({
                           <button
                             type="button"
                             onClick={() => onNavigateToExplorer(cycle[0])}
-                            className="text-[10px] font-mono text-[#c8c5ca] hover:underline cursor-pointer"
+                            className="figcap hover:text-ink"
                           >
                             Explorer
                           </button>
@@ -265,22 +232,20 @@ export const OverviewFindings: React.FC<OverviewFindingsProps> = ({
                     </div>
 
                     {/* Cycle loop chain */}
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono text-[#c8c5ca]">
+                    <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-ink-2">
                       {cycle.map((node, nIdx) => (
                         <React.Fragment key={nIdx}>
                           <span
                             onClick={() => onNavigateToExplorer?.(node)}
-                            className="bg-[#18181b] border border-[#27272a] px-1.5 py-0.5 rounded hover:border-[#3b82f6] hover:text-white cursor-pointer truncate max-w-[150px]"
+                            className="max-w-[150px] cursor-pointer truncate rounded-[2px] border border-rule px-1.5 py-0.5 transition-colors hover:border-ink hover:text-ink"
                             title={node}
                           >
                             {node.split('/').pop()}
                           </span>
-                          <span className="text-[#919095]">➔</span>
+                          <span className="text-ink-3">➔</span>
                         </React.Fragment>
                       ))}
-                      <span className="text-amber-400 font-semibold text-[10px]">
-                        [loop closes]
-                      </span>
+                      <span className="figcap">[loop closes]</span>
                     </div>
                   </div>
                 ))}
@@ -290,7 +255,7 @@ export const OverviewFindings: React.FC<OverviewFindingsProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowAllCycles(!showAllCycles)}
-                      className="text-[11px] font-mono text-[#3b82f6] hover:underline cursor-pointer"
+                      className="figcap hover:text-ink"
                     >
                       {showAllCycles ? 'Collapse cycles' : `View all ${circularDependencies.length} cycles`}
                     </button>
@@ -301,68 +266,49 @@ export const OverviewFindings: React.FC<OverviewFindingsProps> = ({
           </div>
         </div>
 
-        {/* Right Sub-Section: Centrality Hotspots */}
-        <div className="lg:col-span-6 bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-3.5">
-              <div>
-                <span className="text-[12px] font-mono font-bold uppercase tracking-wider text-white">
-                  High-Centrality Hotspots
-                </span>
-                <span className="text-[11px] font-mono text-[#919095] block mt-0.5">
-                  Top incoming import frequency
-                </span>
-              </div>
-              <Badge variant="neutral" className="text-[10px] font-mono">
-                {centralityHotspots.length} ACTIVE
-              </Badge>
-            </div>
-
+        {/* Right: Centrality Hotspots */}
+        <div className="panel flex flex-col">
+          <div className="panel__head">
+            <div className="t">High-centrality hotspots</div>
+            <div className="r">Top incoming import frequency</div>
+          </div>
+          <div className="panel__body flex-1">
             {centralityHotspots.length === 0 ? (
-              <div className="p-4 rounded-[6px] bg-[#131316] border border-[#27272a] text-[12px] font-mono text-[#919095]">
+              <div className="rounded-[3px] border border-rule bg-paper-3 px-4 py-3 text-[12px] text-ink-3">
                 No centrality hotspots calculated. Codebase appears strictly flat.
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="hot -mx-4">
                 {displayedHotspots.map((spot, idx) => {
                   const baseName = spot.filePath.split('/').pop() || spot.filePath;
+                  const pct = maxInDegree > 0 ? Math.round((spot.inDegree / maxInDegree) * 100) : 0;
                   return (
-                    <div
-                      key={idx}
-                      className="bg-[#131316] border border-[#27272a] hover:border-[#39393c] rounded-[6px] px-3 py-2 flex items-center justify-between transition-colors"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="text-[11px] font-mono text-[#919095] font-semibold w-4">
-                          #{idx + 1}
+                    <div key={idx}>
+                      <div className="hotrow">
+                        <span className="rk">#{idx + 1}</span>
+                        <span
+                          onClick={() => onNavigateToExplorer?.(spot.filePath)}
+                          className="p cursor-pointer hover:text-emerald"
+                          title={spot.filePath}
+                        >
+                          {baseName}
                         </span>
-                        <div className="min-w-0">
-                          <span
-                            onClick={() => onNavigateToExplorer?.(spot.filePath)}
-                            className="text-[12px] font-mono font-medium text-[#fafafa] hover:text-[#3b82f6] cursor-pointer truncate block max-w-[200px] sm:max-w-[260px]"
-                            title={spot.filePath}
-                          >
-                            {baseName}
-                          </span>
-                          <span className="text-[10px] font-mono text-[#919095] block truncate max-w-[200px]">
-                            {spot.filePath}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-[11px] font-mono text-[#adc6ff] bg-[#3b82f6]/10 border border-[#3b82f6]/20 px-2 py-0.5 rounded">
-                          {spot.inDegree} in-degree
-                        </span>
-                        {onNavigateToImpact && (
+                        <span className="cents">{spot.inDegree} in</span>
+                        {onNavigateToImpact ? (
                           <button
                             type="button"
                             onClick={() => onNavigateToImpact(spot.filePath)}
-                            className="px-2 py-0.5 rounded bg-[#1f1f22] hover:bg-[#27272a] text-[10px] font-mono text-[#c8c5ca] hover:text-white border border-[#27272a] cursor-pointer"
+                            className="figcap text-right hover:text-ink"
                             title="Analyze Blast Radius"
                           >
                             Impact
                           </button>
+                        ) : (
+                          <span className="figcap text-right">—</span>
                         )}
+                        <span className="bar">
+                          <i style={{ width: `${pct}%` }} />
+                        </span>
                       </div>
                     </div>
                   );
@@ -373,7 +319,7 @@ export const OverviewFindings: React.FC<OverviewFindingsProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowAllHotspots(!showAllHotspots)}
-                      className="text-[11px] font-mono text-[#3b82f6] hover:underline cursor-pointer"
+                      className="figcap hover:text-ink"
                     >
                       {showAllHotspots ? 'Collapse hotspots' : `View all ${centralityHotspots.length} hotspots`}
                     </button>
@@ -385,114 +331,109 @@ export const OverviewFindings: React.FC<OverviewFindingsProps> = ({
         </div>
       </div>
 
-      {/* ────────────────────────────────────────────────────────── */}
-      {/* 3D: QUALITY GAPS: UNTESTED SERVICES & DEAD CODE CANDIDATES */}
-      {/* ────────────────────────────────────────────────────────── */}
-      <div className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-[#27272a]/60 pb-3">
-          <div>
-            <span className="text-[11.5px] font-mono font-bold uppercase tracking-wider text-[#fafafa]">
-              Code Quality & Coverage Intelligence
-            </span>
-            <span className="text-[11px] font-mono text-[#919095] block mt-0.5">
-              Discrepancies identified between service definitions, tests, and active import bounds
-            </span>
-          </div>
-
+      {/* ── 3D: QUALITY GAPS: UNTESTED SERVICES & DEAD CODE CANDIDATES ─── */}
+      <div className="panel">
+        <div className="panel__head">
+          <div className="t">Code quality &amp; coverage intelligence</div>
+          <div className="r">Discrepancies between service definitions, tests, and active import bounds</div>
+        </div>
+        <div className="panel__body">
           {/* Toggle tabs */}
-          <div className="flex items-center gap-1.5 self-start sm:self-auto">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() => setExpandedQualityTab(expandedQualityTab === 'tests' ? null : 'tests')}
-              className={`px-2.5 py-1 rounded text-[11px] font-mono transition-colors cursor-pointer border ${
-                expandedQualityTab === 'tests'
-                  ? 'bg-[#1f1f22] text-white border-[#3b82f6]/50'
-                  : 'bg-[#131316] text-[#919095] hover:text-white border-[#27272a]'
-              }`}
+              className={`abtn ${expandedQualityTab === 'tests' ? 'abtn--solid' : 'abtn--ghost'}`}
             >
-              Missing Tests ({missingTests.length})
+              Missing tests ({missingTests.length})
             </button>
             <button
               type="button"
               onClick={() => setExpandedQualityTab(expandedQualityTab === 'dead' ? null : 'dead')}
-              className={`px-2.5 py-1 rounded text-[11px] font-mono transition-colors cursor-pointer border ${
-                expandedQualityTab === 'dead'
-                  ? 'bg-[#1f1f22] text-white border-[#3b82f6]/50'
-                  : 'bg-[#131316] text-[#919095] hover:text-white border-[#27272a]'
-              }`}
+              className={`abtn ${expandedQualityTab === 'dead' ? 'abtn--solid' : 'abtn--ghost'}`}
             >
-              Dead Code ({deadCode.length})
+              Dead code ({deadCode.length})
             </button>
           </div>
+
+          {expandedQualityTab === 'tests' && (
+            <div className="mt-4 animate-[fadeIn_0.15s_ease-out] space-y-2 border-t border-rule pt-4">
+              <p className="m-0 font-mono text-[11.5px] text-ink-3">
+                Active controllers or services without a corresponding unit or integration test suite
+                detected:
+              </p>
+              {missingTests.length === 0 ? (
+                <p className="m-0 font-mono text-[12px] text-emerald">
+                  ✓ All active services have associated test suites.
+                </p>
+              ) : (
+                <div className="grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                  {missingTests.map((file, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between rounded-[2px] border border-rule bg-paper-3 p-2 font-mono text-[11px]"
+                    >
+                      <span className="max-w-[240px] truncate text-ink-2" title={file}>
+                        {file}
+                      </span>
+                      {onNavigateToExplorer && (
+                        <button
+                          type="button"
+                          onClick={() => onNavigateToExplorer(file)}
+                          className="figcap ml-2 shrink-0 hover:text-ink"
+                        >
+                          Inspect
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {expandedQualityTab === 'dead' && (
+            <div className="mt-4 animate-[fadeIn_0.15s_ease-out] space-y-2 border-t border-rule pt-4">
+              <p className="m-0 font-mono text-[11.5px] text-ink-3">
+                Source files with 0 in-degree that are not designated entrypoints or configuration files:
+              </p>
+              {deadCode.length === 0 ? (
+                <p className="m-0 font-mono text-[12px] text-emerald">
+                  ✓ No dead or unreachable code identified.
+                </p>
+              ) : (
+                <div className="grid max-h-48 grid-cols-1 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                  {deadCode.map((file, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between rounded-[2px] border border-rule bg-paper-3 p-2 font-mono text-[11px]"
+                    >
+                      <span className="max-w-[240px] truncate text-ink-2" title={file}>
+                        {file}
+                      </span>
+                      {onNavigateToExplorer && (
+                        <button
+                          type="button"
+                          onClick={() => onNavigateToExplorer(file)}
+                          className="figcap ml-2 shrink-0 hover:text-ink"
+                        >
+                          Inspect
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {expandedQualityTab === null && (
+            <div className="mt-3 flex flex-wrap items-center gap-4 font-mono text-[11px] text-ink-3">
+              <span>• {missingTests.length} active controllers/services lack test suites</span>
+              <span>• {deadCode.length} files detected with 0 incoming references</span>
+            </div>
+          )}
         </div>
-
-        {/* Content of expanded drawer */}
-        {expandedQualityTab === 'tests' && (
-          <div className="pt-3 space-y-2 animate-[fadeIn_0.15s_ease-out]">
-            <p className="text-[11.5px] text-[#919095] font-mono">
-              Active controllers or services without a corresponding unit or integration test suite detected:
-            </p>
-            {missingTests.length === 0 ? (
-              <p className="text-[12px] font-mono text-emerald-400">✓ All active services have associated test suites.</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
-                {missingTests.map((file, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-2 rounded bg-[#131316] border border-[#27272a] text-[11px] font-mono">
-                    <span className="truncate max-w-[240px] text-[#c8c5ca]" title={file}>
-                      {file}
-                    </span>
-                    {onNavigateToExplorer && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateToExplorer(file)}
-                        className="text-[#3b82f6] hover:underline cursor-pointer shrink-0 ml-2"
-                      >
-                        Inspect
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {expandedQualityTab === 'dead' && (
-          <div className="pt-3 space-y-2 animate-[fadeIn_0.15s_ease-out]">
-            <p className="text-[11.5px] text-[#919095] font-mono">
-              Source files with 0 in-degree that are not designated entrypoints or configuration files:
-            </p>
-            {deadCode.length === 0 ? (
-              <p className="text-[12px] font-mono text-emerald-400">✓ No dead or unreachable code identified.</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
-                {deadCode.map((file, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-2 rounded bg-[#131316] border border-[#27272a] text-[11px] font-mono">
-                    <span className="truncate max-w-[240px] text-[#c8c5ca]" title={file}>
-                      {file}
-                    </span>
-                    {onNavigateToExplorer && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateToExplorer(file)}
-                        className="text-[#3b82f6] hover:underline cursor-pointer shrink-0 ml-2"
-                      >
-                        Inspect
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {expandedQualityTab === null && (
-          <div className="pt-2 text-[11px] font-mono text-[#919095] flex items-center gap-4">
-            <span>• {missingTests.length} active controllers/services lack test suites</span>
-            <span>• {deadCode.length} files detected with 0 incoming references</span>
-          </div>
-        )}
       </div>
     </section>
   );

@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils';
 import { logger } from '../utils';
-import { env } from '../config';
 
 /**
  * Global error handler middleware.
@@ -41,15 +40,20 @@ export function errorHandler(
     });
   }
 
-  // Send consistent JSON response
+  // Send consistent JSON response.
+  //
+  // The stack trace is deliberately NOT included, in any environment. This
+  // response crosses a trust boundary — it is read by the browser — so shipping
+  // `err.stack` would disclose absolute server paths, dependency versions and
+  // internal call structure to anyone who can trigger an error (including an
+  // unauthenticated one). The stack is already written to the server log above,
+  // which is where it is useful and where it stays.
   res.status(statusCode).json({
     success: false,
     error: {
       message,
       ...(err instanceof AppError && err.code ? { code: err.code } : {}),
       ...(err instanceof AppError && err.details ? { details: err.details } : {}),
-      // Only include stack trace in development
-      ...(env.NODE_ENV === 'development' && { stack: err.stack }),
     },
   });
 }

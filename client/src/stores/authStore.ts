@@ -27,7 +27,7 @@ interface AuthState {
   verifyEmailCode: (email: string, code: string) => Promise<void>;
   loginWithEmail: (email: string, password: string) => Promise<void>;
   loginWithOAuth: (provider: 'github' | 'google', mode: 'login' | 'signup') => Promise<void>;
-  handleOAuthCallback: (provider: string, code: string, email?: string, name?: string) => Promise<void>;
+  handleOAuthCallback: (provider: string, code: string, state: string, email?: string, name?: string) => Promise<void>;
   fetchUser: (silent?: boolean) => Promise<void>;
   logout: () => void;
   hydrate: () => void;
@@ -48,6 +48,38 @@ function isTokenValid(token: string | null): boolean {
   }
 }
 
+/**
+ * Pull the server's message out of a failed request without typing on `any`.
+ * The API's error envelope is `{ success: false, error: { message } }`.
+ */
+function apiErrorMessage(err: unknown): string | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const e = err as { response?: { data?: { error?: { message?: string } } } };
+  return e.response?.data?.error?.message ?? null;
+}
+
+/** Same, but tolerating the plain `Error` the store throws upward. */
+function oauthErrorMessage(err: unknown): string | null {
+  const fromApi = apiErrorMessage(err);
+  if (fromApi) return fromApi;
+  if (err instanceof Error && err.message.trim()) return err.message;
+  return null;
+}
+
+/**
+ * Attach the underlying failure to an error before rethrowing, so the original
+ * stack stays reachable in devtools. `new Error(msg, { cause })` would be the
+ * modern form, but this project targets ES2020 whose `Error` constructor takes
+ * one argument — so the cause is set directly instead of raising the lib target.
+ */
+function withCause<T extends Error>(error: T, cause: unknown): T {
+  (error as Error & { cause?: unknown }).cause = cause;
+  return error;
+}
+
+/** Guards the multi-tab listener so it is registered exactly once per page. */
+let storageSyncBound = false;
+
 const storedToken = localStorage.getItem('archon_token');
 const storedUserStr = localStorage.getItem('archon_user');
 let initialUser = null;
@@ -57,7 +89,8 @@ if (storedToken && storedUserStr && isTokenValid(storedToken)) {
   try {
     initialUser = JSON.parse(storedUserStr);
     initialIsAuthenticated = true;
-  } catch (e) {
+  } catch {
+    // Corrupt payload in storage — the session cannot be trusted, so drop it.
     localStorage.removeItem('archon_token');
     localStorage.removeItem('archon_user');
   }
@@ -85,9 +118,9 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       set({ user, token, isAuthenticated: true, isLoading: false });
       return data.message || 'Account created successfully!';
-    } catch (err: any) {
+    } catch (err: unknown) {
       set({ isLoading: false });
-      throw new Error(err.response?.data?.error?.message || 'Signup failed');
+      throw withCause(new Error(apiErrorMessage(err) || 'Signup failed'), err);
     }
   },
 
@@ -101,9 +134,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       localStorage.setItem('archon_user', JSON.stringify(user));
 
       set({ user, token, isAuthenticated: true, isLoading: false });
-    } catch (err: any) {
+    } catch (err: unknown) {
       set({ isLoading: false });
-      throw new Error(err.response?.data?.error?.message || 'Verification failed');
+      throw withCause(new Error(apiErrorMessage(err) || 'Verification failed'), err);
     }
   },
 
@@ -117,9 +150,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       localStorage.setItem('archon_user', JSON.stringify(user));
 
       set({ user, token, isAuthenticated: true, isLoading: false });
-    } catch (err: any) {
+    } catch (err: unknown) {
       set({ isLoading: false });
-      throw new Error(err.response?.data?.error?.message || 'Login failed');
+      throw withCause(new Error(apiErrorMessage(err) || 'Login failed'), err);
     }
   },
 
@@ -128,17 +161,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       localStorage.setItem('auth_oauth_mode', mode);
 
-      // Save redirect URL if present
+      // Remember where to land after the round-trip. Kept in localStorage
+      // rather than the URL because the provider's redirect_uri is fixed.
       const searchParams = new URLSearchParams(window.location.search);
       const redirectUrl = searchParams.get('redirect') || '/';
       localStorage.setItem('auth_redirect_url', redirectUrl);
 
-      // Generate client-side random CSRF token
-      const csrfToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
-      localStorage.setItem('oauth_csrf_token', csrfToken);
-
-      const { data } = await api.get(`/auth/oauth/url?provider=${provider}&csrfToken=${csrfToken}`);
-      // Open popup
+      const { data } = await api.get(`/auth/oauth/url?provider=${provider}`);
+      // Open the provider in a popup so the app stays mounted below it.
       const width = 500, height = 700;
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
@@ -155,31 +185,53 @@ export const useAuthStore = create<AuthState>((set) => ({
         return;
       }
 
-      let timeoutTimer: any = null;
+      let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+      let pollTimer: ReturnType<typeof setInterval> | null = null;
       let channel: BroadcastChannel | null = null;
       let handled = false;
 
       const cleanup = () => {
         if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (pollTimer) clearInterval(pollTimer);
         window.removeEventListener('message', handleMessage);
         window.removeEventListener('storage', handleStorage);
         if (channel) {
-          try { channel.close(); } catch {}
+          try { channel.close(); } catch { /* already closed */ }
           channel = null;
         }
       };
 
-      const onAuthComplete = (payload?: any) => {
+      /** Stop loading and say why — never leave the button spinning. */
+      const abort = (message?: string) => {
         if (handled) return;
         handled = true;
         cleanup();
-        try { popup?.close(); } catch {}
+        set({ isLoading: false });
+        if (message) toast.error(message);
+      };
 
-        const user = payload?.user || JSON.parse(localStorage.getItem('archon_user') || 'null');
+      const onAuthComplete = (payload?: { user?: unknown; token?: string }) => {
+        if (handled) return;
+
         const token = payload?.token || localStorage.getItem('archon_token') || null;
-        if (token && user) {
-          set({ user, token, isAuthenticated: true, isLoading: false });
+        let user: unknown = payload?.user;
+        if (!user) {
+          try { user = JSON.parse(localStorage.getItem('archon_user') || 'null'); } catch { user = null; }
         }
+
+        // If the handover arrived but carried no session, do NOT silently
+        // swallow it with `handled = true` — that is what left the spinner
+        // turning forever. Fail visibly instead.
+        if (!token || !user) {
+          abort('Sign-in completed but the session could not be read. Please try again.');
+          return;
+        }
+
+        handled = true;
+        cleanup();
+        try { popup?.close(); } catch { /* browser refused */ }
+
+        set({ user: user as AuthState['user'], token, isAuthenticated: true, isLoading: false });
 
         const target = localStorage.getItem('auth_redirect_url') || '/';
         localStorage.removeItem('auth_redirect_url');
@@ -187,17 +239,15 @@ export const useAuthStore = create<AuthState>((set) => ({
         window.location.href = target;
       };
 
-      // 1. Listen via BroadcastChannel (safe when window.opener is severed by COOP)
+      // 1. BroadcastChannel — survives a COOP-severed opener
       try {
         channel = new BroadcastChannel('archon_oauth_channel');
         channel.onmessage = (event) => {
-          if (event.data?.type === 'oauth_complete') {
-            onAuthComplete(event.data);
-          }
+          if (event.data?.type === 'oauth_complete') onAuthComplete(event.data);
         };
-      } catch {}
+      } catch { /* unavailable — other channels still carry it */ }
 
-      // 2. Listen via localStorage storage event (cross-window fallback)
+      // 2. storage event — cross-window fallback
       const handleStorage = (e: StorageEvent) => {
         if (e.key === 'archon_oauth_event' && e.newValue) {
           try {
@@ -206,49 +256,73 @@ export const useAuthStore = create<AuthState>((set) => ({
               localStorage.removeItem('archon_oauth_event');
               onAuthComplete(parsed);
             }
-          } catch {}
+          } catch { /* malformed — ignore */ }
         }
       };
       window.addEventListener('storage', handleStorage);
 
-      // 3. Listen for postMessage from popup
+      // 3. postMessage — only when the opener is reachable
       const handleMessage = (event: MessageEvent) => {
+        // Same-origin only. In development the Vite port can differ from the
+        // port the API was configured with, in which case the browser refuses
+        // the message and this listener never fires — the popup-close poll
+        // below is what rescues that case.
         if (event.origin !== window.location.origin) return;
-        if (event.data?.type === 'oauth_complete') {
-          onAuthComplete(event.data);
+        if (event.data?.type === 'oauth_complete') onAuthComplete(event.data);
+        if (event.data?.type === 'oauth_error') {
+          abort(event.data.message || 'Sign-in failed. Please try again.');
         }
       };
       window.addEventListener('message', handleMessage);
 
-      // 4. Timeout fallback to reset loading if user abandons the window (2 minutes)
-      timeoutTimer = setTimeout(() => {
-        if (!handled && useAuthStore.getState().isLoading) {
-          cleanup();
-          set({ isLoading: false });
+      // 4. If the user simply closes the popup, stop immediately. Waiting the
+      //    full timeout for a window that is already gone is the difference
+      //    between "it failed" and "it hung".
+      pollTimer = setInterval(() => {
+        if (handled) return;
+        // `closed` is true once the user dismisses the provider window.
+        if (popup.closed) {
+          // The handover may still be in flight via storage/BroadcastChannel,
+          // so give it a beat before declaring failure.
+          setTimeout(() => {
+            if (!handled) abort('Sign-in window was closed before completing.');
+          }, 1200);
         }
-      }, 120_000);
-    } catch (err: any) {
+      }, 600);
+
+      // 5. Absolute ceiling. Long enough for a real 2FA + password entry,
+      //    short enough that a lost message never becomes a permanent spinner.
+      timeoutTimer = setTimeout(() => {
+        abort('Sign-in timed out. Please try again.');
+      }, 180_000);
+    } catch (err: unknown) {
       set({ isLoading: false });
       console.error(`${provider} OAuth failed:`, err);
-      toast.error(err.response?.data?.error?.message || `${provider} OAuth failed`);
+      toast.error(oauthErrorMessage(err) || `${provider} OAuth failed`);
     }
   },
 
-  handleOAuthCallback: async (provider, code, email, name) => {
+  handleOAuthCallback: async (provider, code, state, email, name) => {
     set({ isLoading: true });
     try {
       const mode = localStorage.getItem('auth_oauth_mode') || 'login';
-      const { data } = await api.post('/auth/oauth/callback', { provider, code, mode, email, name });
+      // `state` is forwarded so the SERVER can verify it. The server signs it
+      // with an HMAC at issue time and re-verifies before exchanging the code;
+      // that is the check that protects the flow. The browser deliberately does
+      // not re-compare it — a second, weaker comparison here only produced
+      // false "missing state" failures when the popup round-trip dropped the
+      // local value.
+      const { data } = await api.post('/auth/oauth/callback', { provider, code, mode, email, name, state });
       const { token, user } = data.data;
 
       localStorage.setItem('archon_token', token);
       localStorage.setItem('archon_user', JSON.stringify(user));
 
       set({ user, token, isAuthenticated: true, isLoading: false });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('OAuth callback failed:', err);
       set({ isLoading: false });
-      throw new Error(err.response?.data?.error?.message || 'OAuth callback failed');
+      throw withCause(new Error(oauthErrorMessage(err) || 'OAuth callback failed'), err);
     }
   },
 
@@ -295,22 +369,28 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ user: null, token: null, isAuthenticated: false });
     }
 
-    // Sync multi-tab logouts and logins via storage events
-    window.addEventListener('storage', (e) => {
-      if (e.key === 'archon_token') {
-        const newToken = e.newValue;
-        if (!newToken) {
-          // Token removed in another tab
-          set({ user: null, token: null, isAuthenticated: false });
-          if (window.location.pathname !== '/' && window.location.pathname !== '/auth') {
-            const currentPath = window.location.pathname + window.location.search;
-            window.location.href = `/auth?redirect=${encodeURIComponent(currentPath)}`;
+    /* Multi-tab sync: a logout (or login) in another tab updates this one.
+       Registered exactly once for the life of the page. `hydrate` is called
+       from a React effect, and React 18 runs effects twice in development, so
+       an unguarded registration here added a duplicate listener on every
+       mount — each one firing its own `fetchUser` on every token change. */
+    if (!storageSyncBound) {
+      storageSyncBound = true;
+      window.addEventListener('storage', (e) => {
+        if (e.key !== 'archon_token') return
+        if (!e.newValue) {
+          set({ user: null, token: null, isAuthenticated: false })
+          // Only bounce to sign-in from a protected surface; the marketing
+          // pages and the auth page itself should stay where they are.
+          const p = window.location.pathname
+          if (p !== '/' && p !== '/auth' && p !== '/pricing' && p !== '/docs') {
+            const current = p + window.location.search
+            window.location.href = `/auth?redirect=${encodeURIComponent(current)}`
           }
         } else {
-          // Token added/changed in another tab
-          useAuthStore.getState().fetchUser(true).catch(() => {});
+          useAuthStore.getState().fetchUser(true).catch(() => {})
         }
-      }
-    });
+      })
+    }
   },
 }));

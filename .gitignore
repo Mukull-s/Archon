@@ -55,3 +55,17 @@ temp/
 *.tmp
 *.bak
 *.orig
+
+# ── Design References & Screenshots (local only, never published) ──
+# Reference material used to derive the UI direction: competitor teardowns,
+# source PDFs/DOCX, extracted assets, PR preview shots, and prototypes.
+# The shipping implementation lives in client/ — these are working notes.
+_reference/
+_pr/
+client/_pr/
+
+# ── Scratch & Benchmark Scripts (local dev/debugging only) ─────
+server/scripts/bench-*
+server/scripts/run-index-repo.ts
+server/scripts/verify-insert-service.ts
+server/scripts/verify-voyage-live.ts

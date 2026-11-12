@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services';
 import { AppError } from '../utils';
+import { env } from '../config';
 
 /** POST /api/auth/signup — Register user */
 export async function signup(req: Request, res: Response, next: NextFunction) {
@@ -68,19 +69,25 @@ export async function getOAuthUrl(req: Request, res: Response, next: NextFunctio
 /** POST /api/auth/oauth/callback — Handle OAuth code exchange */
 export async function oauthCallback(req: Request, res: Response, next: NextFunction) {
   try {
-    const { provider, code, mode, email, name } = req.body;
+    const { provider, code, mode, email, name, state } = req.body;
 
     if (!code || typeof code !== 'string') {
       throw new AppError('Authorization code is required', 400);
     }
+    if (provider !== 'github' && provider !== 'google') {
+      throw new AppError('Invalid provider. Use "github" or "google".', 400);
+    }
+
+    // Verify the signed, time-limited state BEFORE exchanging the code.
+    // Throws 403 on missing/malformed/forged/expired/mismatched state
+    // (login-CSRF protection).
+    authService.verifyOAuthState(state, provider);
 
     let result;
     if (provider === 'github') {
       result = await authService.handleGitHubCallback(code, mode);
-    } else if (provider === 'google') {
-      result = await authService.handleGoogleCallback(code, mode, email, name);
     } else {
-      throw new AppError('Invalid provider. Use "github" or "google".', 400);
+      result = await authService.handleGoogleCallback(code, mode, email, name);
     }
 
     res.status(200).json({ success: true, data: result });
@@ -179,9 +186,22 @@ export async function getUsage(req: Request, res: Response, next: NextFunction) 
   } catch (err) { next(err); }
 }
 
-/** POST /api/auth/upgrade — Development/testing plan change endpoint */
+/**
+ * POST /api/auth/upgrade — Plan change.
+ *
+ * DISABLED by default: plan changes must come from a verified billing webhook,
+ * never from a self-serve request. Only `ALLOW_PLAN_SELF_SERVICE=true` (local
+ * development) re-enables it, and that flag must never be set in production.
+ */
 export async function upgradePlan(req: Request, res: Response, next: NextFunction) {
   try {
+    if (String(env.ALLOW_PLAN_SELF_SERVICE).toLowerCase() !== 'true') {
+      throw new AppError(
+        'Self-service plan changes are disabled. Please manage your subscription through billing.',
+        403,
+        'PLAN_SELF_SERVICE_DISABLED'
+      );
+    }
     const { entitlementService } = await import('../services/entitlement.service');
     const plan = req.body.plan === 'pro' ? 'pro' : 'free';
     await entitlementService.setPlan(req.user!.userId, plan);

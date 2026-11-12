@@ -63,7 +63,7 @@ interface ImpactResult {
   summary?: string;
 }
 
-type TabId = 'summary' | 'explorer' | 'graph' | 'trace' | 'impact' | 'chat' | 'settings';
+type TabId = 'summary' | 'explorer' | 'graph' | 'trace' | 'impact' | 'chat';
 
 export default function Dashboard() {
   const { id } = useParams<{ id: string }>();
@@ -337,9 +337,7 @@ export default function Dashboard() {
             fileCount={repo.fileCount}
             totalSize={repo.totalSize}
             confidence={repo.confidenceDetails?.score ?? repo.confidence}
-            checklist={repo.confidenceDetails?.checklist ?? (repo.confidence >= 80
-              ? ['✓ Dependency graph resolved', '✓ Entry points detected', '✓ Code structure mapped']
-              : ['⚠ Partial scan completed'])}
+            checklist={repo.confidenceDetails?.checklist ?? []}
             setActiveTab={setActiveTab}
             onNavigateToExplorer={handleNavigateToExplorer}
             onNavigateToGraph={handleNavigateToGraph}
@@ -460,88 +458,6 @@ export default function Dashboard() {
             framework={repo.framework}
           />
         </Suspense>
-      )}
-
-      {/* 7. SETTINGS TAB */}
-      {activeTab === 'settings' && (
-        <div className="flex flex-col gap-4">
-          <Panel className="p-5" variant="base">
-            <Typography variant="headline" as="h3" className="mb-1">Repository Details & Metadata</Typography>
-            <Typography variant="body-sm" className="mb-6">Technical specifications and metadata generated during repository ingestion.</Typography>
-
-            <div className="space-y-6">
-              {/* Repo Metadata Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div>
-                  <Typography variant="label-caps" className="mb-1 text-[#919095] block">Repository ID</Typography>
-                  <div className="bg-[#09090b] border border-[#27272a] rounded-[6px] p-2.5 font-mono text-[12px] text-[#fafafa] select-all">
-                    {repo.id}
-                  </div>
-                </div>
-
-                <div>
-                  <Typography variant="label-caps" className="mb-1 text-[#919095] block">Ingestion Source Type</Typography>
-                  <div className="bg-[#09090b] border border-[#27272a] rounded-[6px] p-2.5 text-[13px] text-[#fafafa] flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${repo.isLocal ? 'bg-orange-500' : 'bg-emerald-500'}`} />
-                    {repo.isLocal ? 'Local ZIP Upload' : `GitHub Repository (${repo.owner || 'Unknown'})`}
-                  </div>
-                </div>
-
-                <div>
-                  <Typography variant="label-caps" className="mb-1 text-[#919095] block">Framework / Runtime</Typography>
-                  <div className="bg-[#09090b] border border-[#27272a] rounded-[6px] p-2.5 text-[13px] text-[#fafafa]">
-                    {repo.framework || 'Generic Codebase / Undetected'}
-                  </div>
-                </div>
-
-                <div>
-                  <Typography variant="label-caps" className="mb-1 text-[#919095] block">Confidence Level</Typography>
-                  <div className="bg-[#09090b] border border-[#27272a] rounded-[6px] p-2.5 text-[13px] text-[#fafafa] flex items-center gap-2">
-                    <div className="flex-1 bg-[#1c1c1e] rounded-full h-1.5 overflow-hidden">
-                      <div className="bg-[#a855f7] h-full" style={{ width: `${repo.confidence}%` }} />
-                    </div>
-                    <span className="font-mono text-[12px] text-[#a855f7] font-semibold">{repo.confidence}%</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Statistics */}
-              <div className="border-t border-[#27272a] pt-5">
-                <Typography variant="label-caps" className="mb-3 text-[#919095] block">Analysis Metrics</Typography>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="bg-[#0e0e11] border border-[#27272a] p-4 rounded-[6px] text-center">
-                    <div className="text-[20px] font-mono font-bold text-[#fafafa]">{repo.fileCount}</div>
-                    <div className="text-[10px] uppercase tracking-wider text-[#919095] mt-1">Files Scanned</div>
-                  </div>
-                  <div className="bg-[#0e0e11] border border-[#27272a] p-4 rounded-[6px] text-center">
-                    <div className="text-[20px] font-mono font-bold text-[#fafafa]">{(repo.totalSize / 1024).toFixed(1)} KB</div>
-                    <div className="text-[10px] uppercase tracking-wider text-[#919095] mt-1">Total Size</div>
-                  </div>
-                  <div className="bg-[#0e0e11] border border-[#27272a] p-4 rounded-[6px] text-center">
-                    <div className="text-[20px] font-mono font-bold text-[#fafafa]">{repo.languages.length}</div>
-                    <div className="text-[10px] uppercase tracking-wider text-[#919095] mt-1">Languages</div>
-                  </div>
-                  <div className="bg-[#0e0e11] border border-[#27272a] p-4 rounded-[6px] text-center">
-                    <div className="text-[20px] font-mono font-bold text-[#fafafa]">{repo.entryPoints.length}</div>
-                    <div className="text-[10px] uppercase tracking-wider text-[#919095] mt-1">Entry Points</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Languages List */}
-              <div className="border-t border-[#27272a] pt-5">
-                <Typography variant="label-caps" className="mb-2.5 text-[#919095] block">Ingested Languages</Typography>
-                <div className="flex flex-wrap gap-2">
-                  {repo.languages.map((lang: string) => (
-                    <span key={lang} className="bg-[#1c1c1e] border border-[#27272a] rounded-[4px] px-2.5 py-1 text-[11px] font-mono text-[#e4e1e5]">
-                      {lang}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </Panel>
-        </div>
       )}
     </AppShell>
   );

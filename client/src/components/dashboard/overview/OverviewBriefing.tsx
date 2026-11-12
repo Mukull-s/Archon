@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Panel, Typography, Button, Badge } from '../../ui/DesignSystem';
 
 interface AISummaryData {
   summary?: string;
@@ -35,51 +34,57 @@ export const OverviewBriefing: React.FC<OverviewBriefingProps> = ({
   if (!summaryData) {
     if (showManualButton) {
       return (
-        <section aria-label="Technical Briefing" className="my-6">
-          <div className="p-5 border border-dashed border-[#27272a] bg-[#0e0e11]/60 rounded-[8px] text-center">
-            <h2 className="text-[12px] font-mono font-bold text-[#919095] tracking-wider uppercase mb-1">
-              Codebase Technical Briefing
-            </h2>
-            <p className="text-[12.5px] text-[#919095] max-w-md mx-auto mb-3 leading-relaxed">
-              Generate a structured synthesis of the domain, purpose, modules, and tech stack derived from repository AST and entry points.
-            </p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={onGenerateSummary}
-              isLoading={summaryLoading}
-              className="font-mono text-[11px]"
-            >
-              {summaryLoading ? 'Synthesizing...' : 'Generate Technical Briefing'}
-            </Button>
+        <section aria-label="Technical Briefing">
+          <div className="panel">
+            <div className="panel__head">
+              <div className="t">Codebase technical briefing</div>
+              <div className="r">{indexingStatus || 'not generated'}</div>
+            </div>
+            <div className="panel__body">
+              <p className="text-[13px] leading-[1.65] text-ink-2">
+                Generate a structured synthesis of the domain, purpose, modules, and tech stack derived
+                from repository AST and entry points.
+              </p>
+              <button
+                type="button"
+                className="abtn abtn--ghost mt-4"
+                onClick={onGenerateSummary}
+                disabled={summaryLoading}
+              >
+                {summaryLoading ? 'Synthesizing…' : 'Generate technical briefing'}
+              </button>
+            </div>
           </div>
         </section>
       );
     }
 
     return (
-      <section aria-label="Technical Briefing" className="my-6">
-        <div className="p-4 border border-[#27272a]/60 bg-[#0e0e11]/40 rounded-[8px] flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-[#3b82f6]/30 border-t-[#3b82f6] rounded-full animate-spin shrink-0" aria-hidden="true" />
-            <div>
-              <h2 className="text-[11.5px] font-mono font-semibold text-[#e4e1e5] uppercase tracking-wider">
-                Synthesizing Codebase Briefing...
-              </h2>
-              <p className="text-[11px] text-[#71717a] font-mono mt-0.5">
-                Analyzing architecture entrypoints, routes, and package boundaries in background.
-              </p>
+      <section aria-label="Technical Briefing">
+        <div className="panel">
+          <div className="panel__head">
+            <div className="t">
+              <span className="st st--live">
+                <i />
+                Synthesizing
+              </span>
             </div>
+            {onGenerateSummary && (
+              <button
+                type="button"
+                className="abtn abtn--ghost"
+                onClick={onGenerateSummary}
+                disabled={summaryLoading}
+              >
+                Force generate
+              </button>
+            )}
           </div>
-          {onGenerateSummary && (
-            <button
-              onClick={onGenerateSummary}
-              disabled={summaryLoading}
-              className="text-[11px] font-mono text-[#3b82f6] hover:underline cursor-pointer shrink-0 disabled:opacity-50"
-            >
-              Force Generate
-            </button>
-          )}
+          <div className="panel__body">
+            <p className="figcap">
+              Analyzing architecture entrypoints, routes, and package boundaries in background.
+            </p>
+          </div>
         </div>
       </section>
     );
@@ -92,159 +97,124 @@ export const OverviewBriefing: React.FC<OverviewBriefingProps> = ({
     keyFeatures = [],
     coreModules = [],
     techStack = [],
-    complexity = 'Medium'
+    complexity,
   } = summaryData;
 
-  const getComplexityBadge = (level: string) => {
-    switch (level?.toLowerCase()) {
-      case 'low':
-        return <Badge variant="success" className="text-[10px]">COMPLEXITY: LOW</Badge>;
-      case 'high':
-        return <Badge variant="danger" className="text-[10px]">COMPLEXITY: HIGH</Badge>;
-      default:
-        return <Badge variant="warning" className="text-[10px]">COMPLEXITY: MEDIUM</Badge>;
-    }
-  };
-
   return (
-    <section 
-      aria-label="Codebase Technical Briefing" 
-      className="bg-[#0e0e11] border border-[#27272a] rounded-[8px] p-5 my-6 relative select-text"
-    >
-      {/* Header bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-3.5 mb-4 border-b border-[#27272a]/60 gap-2">
-        <div className="flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#a855f7]" aria-hidden="true" />
-          <h2 className="text-[11px] font-mono font-bold text-[#fafafa] uppercase tracking-wider m-0">
-            Technical Briefing
-          </h2>
-          <span className="text-[11px] font-mono text-[#919095]">
-            · Architectural & Domain Synthesis
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {getComplexityBadge(complexity)}
-          {onTriggerChat && (
-            <button
-              onClick={() => onTriggerChat(`Explain the architectural intent and design choices of ${summary || purpose || 'this codebase'}`)}
-              className="text-[11px] font-mono text-[#919095] hover:text-[#a855f7] transition-colors flex items-center gap-1 cursor-pointer"
-              title="Query AI Assistant about this architecture"
-            >
-              <span>Ask AI</span>
-              <span>➔</span>
-            </button>
-          )}
-        </div>
-      </div>
+    <section aria-label="Codebase Technical Briefing">
+      <div className="brief mb-6">
+        <div className="brief__k">Technical briefing · architectural &amp; domain synthesis</div>
 
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
-        {/* Left Column (Purpose & Summary narrative) */}
-        <div className="md:col-span-7 space-y-3.5">
-          {purpose && (
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#919095] block mb-1">
-                Primary Purpose
-              </span>
-              <p className="text-[13px] leading-relaxed text-[#fafafa] font-body bg-[#131316] border border-[#27272a] p-3 rounded-[6px]">
-                {purpose}
+        {(summary || purpose) && (
+          <>
+            {purpose && (
+              <p>
+                <b>Purpose.</b> {purpose}
               </p>
-            </div>
-          )}
+            )}
+            {summary && <p>{summary}</p>}
+          </>
+        )}
 
-          {summary && (
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#919095] block mb-1">
-                System Context
-              </span>
-              <p className="text-[12.5px] leading-relaxed text-[#c8c5ca] font-body">
-                {summary}
-              </p>
-            </div>
-          )}
-
-          {targetUsers.length > 0 && (
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#919095] block mb-1.5">
-                Target Consumers
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {targetUsers.map((user, idx) => (
-                  <span
-                    key={idx}
-                    className="bg-[#18181b] border border-[#27272a] text-[#c8c5ca] text-[10.5px] font-mono px-2 py-0.5 rounded-[4px]"
-                  >
-                    {user}
-                  </span>
-                ))}
+        <div className="mt-5 grid grid-cols-1 gap-6 border-t border-rule pt-4 md:grid-cols-12">
+          <div className="space-y-4 md:col-span-7">
+            {targetUsers.length > 0 && (
+              <div>
+                <span className="figcap mb-2 block">Target consumers</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {targetUsers.map((user, idx) => (
+                    <span
+                      key={idx}
+                      className="rounded-[2px] border border-rule bg-paper-3 px-2 py-0.5 font-mono text-[10.5px] text-ink-2"
+                    >
+                      {user}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
 
-        {/* Right Column (Modules, Features, Stack) */}
-        <div className="md:col-span-5 space-y-3.5 border-t md:border-t-0 md:border-l border-[#27272a]/60 pt-4 md:pt-0 md:pl-5">
-          {coreModules.length > 0 && (
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#919095] block mb-1.5">
-                Identified Core Modules
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {coreModules.map((module, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => onExploreModule?.(module)}
-                    className="bg-[#3b82f6]/10 border border-[#3b82f6]/25 hover:border-[#3b82f6]/60 text-[#93c5fd] hover:text-white text-[10.5px] font-mono px-2 py-0.5 rounded-[4px] transition-colors cursor-pointer text-left"
-                    title={`Inspect module: ${module}`}
-                  >
-                    {module}
-                  </button>
-                ))}
+            {techStack.length > 0 && (
+              <div>
+                <span className="figcap mb-2 block">Technology profile</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {techStack.map((tech, idx) => (
+                    <span
+                      key={idx}
+                      className="rounded-[2px] border border-rule bg-paper-3 px-2 py-0.5 font-mono text-[10.5px] text-ink-2"
+                    >
+                      {tech}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
-          {keyFeatures.length > 0 && (
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#919095] block mb-1">
-                Key Architectural Capabilities
-              </span>
-              <ul className="list-disc list-inside space-y-1 text-[12px] text-[#c8c5ca]">
-                {keyFeatures.slice(0, isExpanded ? undefined : 3).map((feat, idx) => (
-                  <li key={idx} className="truncate" title={feat}>
-                    {feat}
-                  </li>
-                ))}
-              </ul>
-              {keyFeatures.length > 3 && (
+          <div className="space-y-4 border-t border-rule pt-4 md:col-span-5 md:border-l md:border-t-0 md:pl-6 md:pt-0">
+            <div className="flex items-center justify-between gap-3">
+              {complexity && (
+                <span className={complexity.toLowerCase() === 'high' ? 'st st--risk' : complexity.toLowerCase() === 'low' ? 'st st--ok' : 'st st--warn'}>
+                  <i />
+                  Complexity {complexity}
+                </span>
+              )}
+              {onTriggerChat && (
                 <button
                   type="button"
-                  onClick={() => setIsExpanded(!isExpanded)}
-                  className="text-[10px] font-mono text-[#3b82f6] hover:underline mt-1 cursor-pointer"
+                  onClick={() =>
+                    onTriggerChat(
+                      `Explain the architectural intent and design choices of ${summary || purpose || 'this codebase'}`
+                    )
+                  }
+                  className="figcap hover:text-ink"
+                  title="Query AI Assistant about this architecture"
                 >
-                  {isExpanded ? 'Show less' : `+ ${keyFeatures.length - 3} more capabilities`}
+                  Ask AI ›
                 </button>
               )}
             </div>
-          )}
 
-          {techStack.length > 0 && (
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#919095] block mb-1.5">
-                Technology Profile
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {techStack.map((tech, idx) => (
-                  <span
-                    key={idx}
-                    className="bg-[#18181b] border border-[#27272a] text-[#c8c5ca] text-[10.5px] font-mono px-2 py-0.5 rounded-[4px]"
-                  >
-                    {tech}
-                  </span>
-                ))}
+            {coreModules.length > 0 && (
+              <div>
+                <span className="figcap mb-2 block">Identified core modules</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {coreModules.map((module, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => onExploreModule?.(module)}
+                      className="rounded-[2px] border border-rule bg-paper-3 px-2 py-0.5 font-mono text-[10.5px] text-ink-2 transition-colors hover:border-ink hover:text-ink"
+                      title={`Inspect module: ${module}`}
+                    >
+                      {module}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+
+            {keyFeatures.length > 0 && (
+              <div>
+                <span className="figcap mb-2 block">Key architectural capabilities</span>
+                <ul className="m-0 list-disc space-y-1 pl-4 text-[12px] leading-[1.6] text-ink-2">
+                  {keyFeatures.slice(0, isExpanded ? undefined : 3).map((feat, idx) => (
+                    <li key={idx} className="truncate" title={feat}>
+                      {feat}
+                    </li>
+                  ))}
+                </ul>
+                {keyFeatures.length > 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className="figcap mt-2 hover:text-ink"
+                  >
+                    {isExpanded ? 'Show less' : `+ ${keyFeatures.length - 3} more capabilities`}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </section>

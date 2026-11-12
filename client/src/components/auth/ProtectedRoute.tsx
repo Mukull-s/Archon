@@ -8,11 +8,18 @@ interface ProtectedRouteProps {
 }
 
 /**
- * Route guard component that requires authentication.
- * 
- * - If auth is still hydrating/loading: renders a sleek dark loading state.
- * - If unauthenticated: redirects to /auth preserving the destination in ?redirect=
- * - If authenticated: renders the protected children cleanly.
+ * Route guard for signed-in-only pages.
+ *
+ *   hydrating  → a quiet paper holding state (not a dark splash)
+ *   anonymous  → redirect to /auth, preserving where they were headed
+ *   signed in  → children
+ *
+ * The holding state uses the same instrument-paper surface as the marketing
+ * and auth pages, so a session check never flashes a differently-styled app.
+ *
+ * `Spinner` still carries the legacy dark-theme stroke, so it is tinted to the
+ * paper palette locally rather than restyling the shared component (which the
+ * dashboard still uses on its own dark surfaces).
  */
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading } = useAuthStore();
@@ -20,23 +27,12 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (isLoading) {
     return (
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '100vh',
-          background: '#09090b',
-          color: '#a1a1aa',
-          fontFamily: 'var(--font-sans, system-ui, sans-serif)',
-        }}
-      >
-        <div style={{ marginBottom: '16px' }}>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-paper">
+        <span className="text-ink-3">
           <Spinner size="lg" />
-        </div>
-        <span style={{ fontSize: '13px', letterSpacing: '-0.01em', color: '#71717a' }}>
-          Verifying session...
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-3">
+          Verifying session
         </span>
       </div>
     );

@@ -6,91 +6,86 @@ interface DocCalloutProps {
   children: React.ReactNode;
 }
 
+/**
+ * Callouts.
+ *
+ * Four kinds, and the colour carries the meaning rather than decorating it:
+ * note is neutral, tip is the engine's emerald, important is the amber used
+ * everywhere else for "pay attention", warning is signal red for things that
+ * can cost you data. No colour is used that is not already a token in the
+ * Plate & Paper palette, so a callout never looks imported from another system.
+ */
 export default function DocCallout({ type = 'note', title, children }: DocCalloutProps) {
   const configs = {
     note: {
-      border: 'rgba(176, 38, 255, 0.4)',
-      bg: 'rgba(176, 38, 255, 0.04)',
-      color: '#c084fc',
+      border: 'var(--rule-strong)',
+      bg: 'var(--paper-3)',
+      color: 'var(--ink-2)',
       defaultTitle: 'Note',
       icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="16" x2="12" y2="12"/>
-          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
         </svg>
-      )
+      ),
     },
     tip: {
-      border: 'rgba(34, 197, 94, 0.4)',
-      bg: 'rgba(34, 197, 94, 0.04)',
-      color: '#4ade80',
+      border: 'rgba(13,107,79,.34)',
+      bg: 'rgba(13,107,79,.055)',
+      color: 'var(--emerald)',
       defaultTitle: 'Tip',
       icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z" />
         </svg>
-      )
+      ),
     },
     important: {
-      border: 'rgba(59, 130, 246, 0.4)',
-      bg: 'rgba(59, 130, 246, 0.04)',
-      color: '#60a5fa',
+      border: 'rgba(184,122,18,.34)',
+      bg: 'rgba(184,122,18,.055)',
+      color: 'var(--amber)',
       defaultTitle: 'Important',
       icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 8v4M12 16h.01" />
         </svg>
-      )
+      ),
     },
     warning: {
-      border: 'rgba(234, 179, 8, 0.4)',
-      bg: 'rgba(234, 179, 8, 0.04)',
-      color: '#facc15',
+      border: 'rgba(226,70,47,.34)',
+      bg: 'rgba(226,70,47,.055)',
+      color: 'var(--signal)',
       defaultTitle: 'Warning',
       icon: (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
-          <line x1="12" y1="9" x2="12" y2="13"/>
-          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3 2 20h20L12 3Z" />
+          <path d="M12 10v4M12 17h.01" />
         </svg>
-      )
-    }
+      ),
+    },
   };
 
-  const c = configs[type];
+  const cfg = configs[type] ?? configs.note;
 
   return (
-    <div style={{
-      margin: '24px 0',
-      padding: '16px 20px',
-      borderRadius: '8px',
-      background: c.bg,
-      border: `1px solid ${c.border}`,
-      borderLeft: `4px solid ${c.color}`,
-      fontFamily: 'var(--font-sans, system-ui, sans-serif)',
-    }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        color: c.color,
-        fontSize: '13px',
-        fontWeight: 600,
-        letterSpacing: '0.01em',
-        marginBottom: '6px',
-      }}>
-        {c.icon}
-        <span>{title || c.defaultTitle}</span>
-      </div>
-      <div style={{
-        color: '#d4d4d8',
-        fontSize: '14px',
-        lineHeight: 1.65,
-      }}>
-        {children}
+    <div
+      className="my-5 flex gap-3 rounded-[3px] border px-4 py-3.5"
+      style={{ borderColor: cfg.border, background: cfg.bg }}
+    >
+      <span className="mt-px flex-none" style={{ color: cfg.color }} aria-hidden="true">
+        {cfg.icon}
+      </span>
+      <div className="min-w-0">
+        <div
+          className="mb-1.5 font-mono text-[9px] font-medium uppercase tracking-[0.16em]"
+          style={{ color: cfg.color }}
+        >
+          {title || cfg.defaultTitle}
+        </div>
+        <div className="text-[13.5px] leading-[1.68] text-ink-2 [&_a]:text-emerald [&_a]:underline [&_code]:rounded-[2px] [&_code]:bg-paper-3 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[12px] [&_code]:text-ink [&_p]:m-0 [&_p+p]:mt-2">
+          {children}
+        </div>
       </div>
     </div>
   );

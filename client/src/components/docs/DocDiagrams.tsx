@@ -1,8 +1,13 @@
 import React from 'react';
 
 /**
- * Clean, production-grade SVG/CSS diagrams for Archon Documentation.
- * High-level, developer-friendly, and privacy-respecting.
+ * Diagrams for the Archon documentation.
+ *
+ * Each one is a `mini` panel — the system's small container — so a diagram reads
+ * as one more instrument on the page rather than an illustration pasted in from
+ * somewhere else. Colour is load-bearing: emerald for what the pipeline proves,
+ * amber for what needs attention, signal red for a cycle or a high-risk band.
+ * Nothing glows, nothing is violet.
  */
 
 export function IndexingPipelineDiagram() {
@@ -17,62 +22,20 @@ export function IndexingPipelineDiagram() {
   ];
 
   return (
-    <div style={{
-      margin: '24px 0',
-      padding: '24px',
-      borderRadius: '8px',
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-    }}>
-      <div style={{
-        fontSize: '11px',
-        fontWeight: 600,
-        textTransform: 'uppercase',
-        letterSpacing: '0.06em',
-        color: 'var(--accent, #b026ff)',
-        marginBottom: '16px',
-      }}>
-        Codebase Intelligence Pipeline
+    <div className="mini my-6">
+      <div className="mini__head">
+        <span className="figcap">
+          <b>Codebase Intelligence Pipeline</b>
+        </span>
       </div>
-
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-        gap: '12px',
-        position: 'relative',
-      }}>
+      <div className="mini__body grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3 p-4">
         {steps.map((s) => (
-          <div key={s.num} style={{
-            background: 'rgba(255, 255, 255, 0.03)',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
-            borderRadius: '6px',
-            padding: '12px 14px',
-            position: 'relative',
-          }}>
-            <div style={{
-              fontSize: '10px',
-              fontWeight: 700,
-              color: '#71717a',
-              marginBottom: '4px',
-              fontFamily: 'monospace',
-            }}>
+          <div key={s.num} className="rounded-[3px] border border-rule bg-paper-2 px-3.5 py-3">
+            <div className="mb-1 font-mono text-[10px] font-semibold tracking-[0.08em] text-ink-3">
               STAGE {s.num}
             </div>
-            <div style={{
-              fontSize: '13px',
-              fontWeight: 600,
-              color: '#f4f4f5',
-              marginBottom: '4px',
-            }}>
-              {s.title}
-            </div>
-            <div style={{
-              fontSize: '11px',
-              color: '#a1a1aa',
-              lineHeight: 1.4,
-            }}>
-              {s.desc}
-            </div>
+            <div className="mb-1 text-[13px] font-semibold text-ink">{s.title}</div>
+            <div className="text-[11px] leading-[1.4] text-ink-2">{s.desc}</div>
           </div>
         ))}
       </div>
@@ -82,27 +45,32 @@ export function IndexingPipelineDiagram() {
 
 export function ASTDecompositionDiagram() {
   return (
-    <div style={{
-      margin: '24px 0',
-      padding: '20px 24px',
-      borderRadius: '8px',
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-      fontFamily: 'ui-monospace, monospace',
-    }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', color: '#b026ff', marginBottom: '12px' }}>
-        Syntax Tree (AST) Symbol Hierarchy
+    <div className="mini my-6">
+      <div className="mini__head">
+        <span className="figcap">
+          <b>Syntax Tree (AST) Symbol Hierarchy</b>
+        </span>
       </div>
-      <div style={{ fontSize: '12px', color: '#e4e4e7', lineHeight: 1.8 }}>
-        <div style={{ color: '#60a5fa' }}>SourceFile (orderService.ts)</div>
-        <div style={{ paddingLeft: '16px', color: '#a1a1aa' }}>├── ImportDeclaration: <span style={{ color: '#4ade80' }}>'../models/order'</span></div>
-        <div style={{ paddingLeft: '16px', color: '#a1a1aa' }}>├── ImportDeclaration: <span style={{ color: '#4ade80' }}>'../services/payment'</span></div>
-        <div style={{ paddingLeft: '16px', color: '#f43f5e' }}>└── ClassDeclaration: <span style={{ color: '#f4f4f5' }}>OrderProcessor</span></div>
-        <div style={{ paddingLeft: '32px', color: '#c084fc' }}>├── MethodDeclaration: <span style={{ color: '#facc15' }}>createOrder</span></div>
-        <div style={{ paddingLeft: '48px', color: '#71717a' }}>├── Parameter: (items, customerId)</div>
-        <div style={{ paddingLeft: '48px', color: '#71717a' }}>└── CallExpression: paymentService.charge</div>
-        <div style={{ paddingLeft: '32px', color: '#c084fc' }}>└── MethodDeclaration: <span style={{ color: '#facc15' }}>validateDiscount</span></div>
-        <div style={{ paddingLeft: '48px', color: '#71717a' }}>└── CallExpression: calculatePercentage</div>
+      <div className="mini__body p-4 font-mono text-[12px] leading-[1.8] text-ink">
+        <div className="text-emerald">SourceFile (orderService.ts)</div>
+        <div className="pl-4 text-ink-2">
+          ├── ImportDeclaration: <span className="text-mint">'../models/order'</span>
+        </div>
+        <div className="pl-4 text-ink-2">
+          ├── ImportDeclaration: <span className="text-mint">'../services/payment'</span>
+        </div>
+        <div className="pl-4 text-sig">
+          └── ClassDeclaration: <span className="text-ink">OrderProcessor</span>
+        </div>
+        <div className="pl-8 text-emerald">
+          ├── MethodDeclaration: <span className="text-amber">createOrder</span>
+        </div>
+        <div className="pl-12 text-ink-3">├── Parameter: (items, customerId)</div>
+        <div className="pl-12 text-ink-3">└── CallExpression: paymentService.charge</div>
+        <div className="pl-8 text-emerald">
+          └── MethodDeclaration: <span className="text-amber">validateDiscount</span>
+        </div>
+        <div className="pl-12 text-ink-3">└── CallExpression: calculatePercentage</div>
       </div>
     </div>
   );
@@ -110,65 +78,29 @@ export function ASTDecompositionDiagram() {
 
 export function TarjanSCCDiagram() {
   return (
-    <div style={{
-      margin: '24px 0',
-      padding: '20px 24px',
-      borderRadius: '8px',
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-    }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', color: '#facc15', marginBottom: '12px' }}>
-        Circular Dependency Detection
+    <div className="mini my-6">
+      <div className="mini__head">
+        <span className="figcap">
+          <b>Circular Dependency Detection</b>
+        </span>
       </div>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '16px',
-        padding: '16px 0',
-        flexWrap: 'wrap',
-      }}>
-        <div style={{
-          padding: '8px 16px',
-          background: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid rgba(239, 68, 68, 0.3)',
-          borderRadius: '6px',
-          color: '#f87171',
-          fontSize: '12px',
-          fontFamily: 'monospace',
-          fontWeight: 600,
-        }}>
-          orderService.ts
+      <div className="mini__body p-4">
+        <div className="flex flex-wrap items-center justify-center gap-4 py-4">
+          <span className="rounded-[3px] border border-sig/30 bg-sig/[0.08] px-4 py-2 font-mono text-[12px] font-semibold text-sig">
+            orderService.ts
+          </span>
+          <span className="font-semibold text-sig">➔ (imports)</span>
+          <span className="rounded-[3px] border border-sig/30 bg-sig/[0.08] px-4 py-2 font-mono text-[12px] font-semibold text-sig">
+            invoiceService.ts
+          </span>
+          <span className="font-semibold text-sig">➔ (imports back)</span>
+          <span className="rounded-[3px] border border-sig/30 bg-sig/[0.08] px-4 py-2 font-mono text-[12px] font-semibold text-sig">
+            orderService.ts
+          </span>
         </div>
-        <span style={{ color: '#ef4444', fontWeight: 700 }}>➔ (imports)</span>
-        <div style={{
-          padding: '8px 16px',
-          background: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid rgba(239, 68, 68, 0.3)',
-          borderRadius: '6px',
-          color: '#f87171',
-          fontSize: '12px',
-          fontFamily: 'monospace',
-          fontWeight: 600,
-        }}>
-          invoiceService.ts
+        <div className="text-center text-[12px] text-ink-2">
+          Circular dependency component detected and highlighted in your codebase workspace.
         </div>
-        <span style={{ color: '#ef4444', fontWeight: 700 }}>➔ (imports back)</span>
-        <div style={{
-          padding: '8px 16px',
-          background: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid rgba(239, 68, 68, 0.3)',
-          borderRadius: '6px',
-          color: '#f87171',
-          fontSize: '12px',
-          fontFamily: 'monospace',
-          fontWeight: 600,
-        }}>
-          orderService.ts
-        </div>
-      </div>
-      <div style={{ fontSize: '12px', color: '#a1a1aa', textAlign: 'center' }}>
-        Circular dependency component detected and highlighted in your codebase workspace.
       </div>
     </div>
   );
@@ -176,84 +108,57 @@ export function TarjanSCCDiagram() {
 
 export function RiskScoreFormulaDiagram() {
   return (
-    <div style={{
-      margin: '24px 0',
-      padding: '20px 24px',
-      borderRadius: '8px',
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-    }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', color: '#60a5fa', marginBottom: '8px' }}>
-        Change Impact & Risk Formula
-      </div>
-      <div style={{
-        fontFamily: 'monospace',
-        fontSize: '15px',
-        color: '#f4f4f5',
-        padding: '12px 16px',
-        background: 'rgba(0, 0, 0, 0.4)',
-        borderRadius: '6px',
-        border: '1px solid rgba(255, 255, 255, 0.06)',
-        marginBottom: '12px',
-        display: 'inline-block',
-      }}>
-        Risk Score = 0.6 &times; InDegree + 0.4 &times; BlastRadiusDepth
-      </div>
-      <div style={{ fontSize: '12px', color: '#a1a1aa', lineHeight: 1.6 }}>
-        Combines direct module dependency count with maximum downstream dependency chain length to quantify regression risk.
-      </div>
-      <div style={{ display: 'flex', gap: '12px', marginTop: '12px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', background: 'rgba(34, 197, 94, 0.15)', color: '#4ade80' }}>
-          LOW RISK (&lt; 2.0)
+    <div className="mini my-6">
+      <div className="mini__head">
+        <span className="figcap">
+          <b>Change Impact &amp; Risk Formula</b>
         </span>
-        <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', background: 'rgba(234, 179, 8, 0.15)', color: '#facc15' }}>
-          MEDIUM RISK (2.0 – 5.0)
-        </span>
-        <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171' }}>
-          HIGH RISK (&ge; 5.0)
-        </span>
+      </div>
+      <div className="mini__body p-4">
+        <div className="mb-3 inline-block rounded-[3px] border border-rule bg-paper-3 px-4 py-3 font-mono text-[15px] text-ink">
+          Risk Score = 0.6 &times; InDegree + 0.4 &times; BlastRadiusDepth
+        </div>
+        <div className="text-[12px] leading-[1.6] text-ink-2">
+          Combines direct module dependency count with maximum downstream dependency chain length to quantify regression risk.
+        </div>
+        <div className="mt-3 flex flex-wrap gap-3">
+          <span className="rounded-[3px] border border-emerald/30 bg-emerald/[0.08] px-2 py-0.5 font-mono text-[11px] text-emerald">
+            LOW RISK (&lt; 2.0)
+          </span>
+          <span className="rounded-[3px] border border-amber/30 bg-amber/[0.08] px-2 py-0.5 font-mono text-[11px] text-amber">
+            MEDIUM RISK (2.0 – 5.0)
+          </span>
+          <span className="rounded-[3px] border border-sig/30 bg-sig/[0.08] px-2 py-0.5 font-mono text-[11px] text-sig">
+            HIGH RISK (&ge; 5.0)
+          </span>
+        </div>
       </div>
     </div>
   );
 }
 
 export function RAGArchitectureDiagram() {
+  const steps = [
+    { n: '1. Developer Question', v: '\u201CWhere is user session created?\u201D' },
+    { n: '2. Semantic Search', v: 'Vector similarity match across codebase' },
+    { n: '3. Evidence Assembly', v: 'Relevant code snippets & dependency metrics' },
+    { n: '4. Grounded Answer', v: 'Precise response with clickable file links' },
+  ];
+
   return (
-    <div style={{
-      margin: '24px 0',
-      padding: '20px 24px',
-      borderRadius: '8px',
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-    }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', color: '#c084fc', marginBottom: '14px' }}>
-        Context-Grounded Code Search & Q&A
+    <div className="mini my-6">
+      <div className="mini__head">
+        <span className="figcap">
+          <b>Context-Grounded Code Search &amp; Q&amp;A</b>
+        </span>
       </div>
-
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-        gap: '12px',
-      }}>
-        <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '4px' }}>1. Developer Question</div>
-          <div style={{ fontSize: '12px', color: '#f4f4f5', fontWeight: 500 }}>&ldquo;Where is user session created?&rdquo;</div>
-        </div>
-
-        <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '4px' }}>2. Semantic Search</div>
-          <div style={{ fontSize: '12px', color: '#f4f4f5', fontWeight: 500 }}>Vector similarity match across codebase</div>
-        </div>
-
-        <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '4px' }}>3. Evidence Assembly</div>
-          <div style={{ fontSize: '12px', color: '#f4f4f5', fontWeight: 500 }}>Relevant code snippets & dependency metrics</div>
-        </div>
-
-        <div style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '4px' }}>4. Grounded Answer</div>
-          <div style={{ fontSize: '12px', color: '#f4f4f5', fontWeight: 500 }}>Precise response with clickable file links</div>
-        </div>
+      <div className="mini__body grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 p-4">
+        {steps.map((s) => (
+          <div key={s.n} className="rounded-[3px] border border-rule bg-paper-2 p-3">
+            <div className="mb-1 font-mono text-[11px] text-ink-3">{s.n}</div>
+            <div className="text-[12px] font-medium text-ink">{s.v}</div>
+          </div>
+        ))}
       </div>
     </div>
   );

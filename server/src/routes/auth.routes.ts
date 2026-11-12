@@ -28,7 +28,7 @@ const authLimiter = rateLimit({
  * GET   /api/auth/verify/:token       → Email verification with token link
  * GET   /api/auth/me                  → Get current user (protected)
  * GET   /api/auth/usage               → Get entitlement usage & limits (protected)
- * POST  /api/auth/upgrade             → Update plan tier (protected)
+ * POST  /api/auth/upgrade             → Plan change (DISABLED unless ALLOW_PLAN_SELF_SERVICE=true)
  * GET   /api/auth/plans               → Public plan tier metadata
  * POST  /api/auth/logout              → Logout (protected)
  * PATCH /api/auth/profile             → Update name/avatar (protected)

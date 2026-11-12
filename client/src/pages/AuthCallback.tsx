@@ -1,153 +1,148 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
-import { toast } from 'sonner'
-import { Spinner } from '../components/ui/DesignSystem'
+import { Substrate } from '../components/site/Substrate'
 
 /**
- * OAuth Callback Page
- * 
- * Works in 2 modes:
- * 1. POPUP mode: sends message back to parent window and closes
- * 2. DIRECT mode: exchanges code directly (fallback if popup is blocked)
+ * The OAuth redirect target. Providers are configured with
+ * `redirect_uri=<CLIENT_URL>/auth/callback`, so every provider round-trip
+ * lands here.
+ *
+ * This page is a *transport*, not a destination. It does exactly three things:
+ *   1. exchange the authorization code (through the store)
+ *   2. tell the window that is waiting for the result
+ *   3. get out of the way
+ *
+ * On success it either closes (popup mode) or navigates on (direct mode). On
+ * failure it does NOT render an error screen — it returns to the sign-in page
+ * with `?error=…` so the message appears where the user already is, which is
+ * how every mainstream product handles this. A dead-end error page for a
+ * retryable social sign-in is worse UX than a toast on the form.
+ *
+ * Note there is deliberately no client-side CSRF comparison here. The server
+ * signs its OAuth `state` with an HMAC and verifies it before exchanging the
+ * code (`authService.verifyOAuthState`), which is the check that actually
+ * matters; a second, weaker check in the browser only produced false failures
+ * when the nonce did not survive the popup round-trip.
  */
+
+/** Pull a readable message out of a failed request without typing on `any`. */
+function messageOf(err: unknown): string {
+  if (typeof err === 'object' && err !== null) {
+    const e = err as { message?: string }
+    if (typeof e.message === 'string' && e.message.trim()) return e.message
+  }
+  return 'Sign-in failed. Please try again.'
+}
+
 export default function AuthCallback() {
   const navigate = useNavigate()
   const handleOAuthCallback = useAuthStore((s) => s.handleOAuthCallback)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
+
+  // Read the callback parameters once, during the first render.
+  const [params] = useState(() => new URLSearchParams(window.location.search))
+  const code = params.get('code')
+  const state = params.get('state') || ''
+  const email = params.get('email') || undefined
+  const name = params.get('name') || undefined
+  const started = useRef(false)
+
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const code = params.get('code')
-    const state = params.get('state') || ''
-    const email = params.get('email') || undefined
-    const name = params.get('name') || undefined
+    // React 18 StrictMode mounts effects twice in development. Exchanging the
+    // same authorization code twice gets the second attempt rejected by the
+    // provider, so guard against the repeat.
+    if (started.current) return
+    started.current = true
 
+    /** Send the failure back to the sign-in form rather than parking here. */
+    const fail = (msg: string) => {
+      localStorage.removeItem('auth_redirect_url')
+      navigate(`/auth?error=${encodeURIComponent(msg)}`, { replace: true })
+    }
+
+    // The provider reported a problem, or sent no code at all.
     if (!code) {
-      setError('No authorization code received.')
+      fail(params.get('error_description') || 'Sign-in was cancelled or denied.')
       return
     }
 
-    // CSRF Token Validation
-    const storedCsrf = localStorage.getItem('oauth_csrf_token')
-    const [providerFromState, csrfToken] = (state || '').split(':')
-
-    if (storedCsrf && csrfToken && csrfToken !== storedCsrf) {
-      setError('Security verification failed. OAuth CSRF token mismatch.')
-      toast.error('OAuth security check failed. CSRF mismatch.')
+    // `state` is `provider:nonce:issuedAt:hmac`. The first field names the
+    // provider; the server re-verifies the whole value before using the code.
+    const provider = state.split(':')[0]
+    if (provider !== 'github' && provider !== 'google') {
+      fail('Sign-in response was not recognised.')
       return
     }
 
-    // Clear CSRF token once validated
-    localStorage.removeItem('oauth_csrf_token')
+    const isPopup =
+      window.opener !== null ||
+      window.name === 'google_auth' ||
+      window.name === 'github_auth' ||
+      window.innerWidth < 650
 
-    const provider = providerFromState || (window.location.href.includes('google') ? 'google' : 'github')
-    const isPopup = window.opener !== null || window.name === 'google_auth' || window.name === 'github_auth' || window.innerWidth < 650
-
-    // Exchange OAuth code directly
-    handleOAuthCallback(provider, code, email, name)
+    handleOAuthCallback(provider, code, state, email, name)
       .then(() => {
-        setSuccess(true)
         const target = localStorage.getItem('auth_redirect_url') || '/'
+        const { user, token } = useAuthStore.getState()
+        const payload = { type: 'oauth_complete', provider, target, user, token }
 
-        const completionPayload = {
-          type: 'oauth_complete',
-          provider,
-          target,
-          user: useAuthStore.getState().user,
-          token: useAuthStore.getState().token,
-        }
-
-        // 1. Broadcast via BroadcastChannel (handles COOP severed opener)
+        // 1. BroadcastChannel — survives a COOP-severed opener
         try {
           const channel = new BroadcastChannel('archon_oauth_channel')
-          channel.postMessage(completionPayload)
+          channel.postMessage(payload)
           setTimeout(() => {
-            try { channel.close() } catch {}
+            try { channel.close() } catch { /* already closed */ }
           }, 1000)
-        } catch {}
+        } catch { /* unavailable — the other channels still carry it */ }
 
-        // 2. Broadcast via localStorage storage event (cross-window fallback)
+        // 2. storage event — cross-window fallback
         try {
-          localStorage.setItem('archon_oauth_event', JSON.stringify({ ...completionPayload, timestamp: Date.now() }))
-        } catch {}
+          localStorage.setItem('archon_oauth_event', JSON.stringify({ ...payload, timestamp: Date.now() }))
+        } catch { /* storage full or blocked */ }
 
-        // 3. Send via postMessage if window.opener is still accessible
+        // 3. postMessage — only when the opener is reachable
         if (window.opener) {
-          try {
-            window.opener.postMessage(completionPayload, window.location.origin)
-          } catch {}
+          try { window.opener.postMessage(payload, window.location.origin) } catch { /* severed */ }
         }
 
         if (isPopup) {
-          // Close popup after letting opener process
+          // Close; the opener already navigated itself on receipt.
           setTimeout(() => {
-            try {
-              window.close()
-            } catch {}
-          }, 800)
+            try { window.close() } catch { /* browser refused the close */ }
+          }, 400)
         } else {
           localStorage.removeItem('auth_redirect_url')
           navigate(target, { replace: true })
         }
       })
-      .catch((err: any) => {
-        console.error('OAuth exchange error:', err)
-        const errMsg = err?.message || 'Authentication failed. Please try again.'
-        setError(errMsg)
-        toast.error(errMsg)
+      .catch((err: unknown) => {
+        const msg = messageOf(err)
+        // Tell a waiting opener too, so it can clear its loading state.
+        if (window.opener) {
+          try {
+            window.opener.postMessage({ type: 'oauth_error', message: msg }, window.location.origin)
+          } catch { /* severed */ }
+        }
+        fail(msg)
       })
-  }, [handleOAuthCallback, navigate])
+  }, [code, state, email, name, handleOAuthCallback, navigate, params])
 
+  // Only ever visible for the moment the exchange takes, or if this tab was
+  // opened directly with no waiting opener and the redirect is in flight.
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: '#09090b',
-      color: '#e4e1e5',
-      fontFamily: 'var(--font-sans, system-ui, sans-serif)',
-    }}>
-      <div style={{ textAlign: 'center', maxWidth: '400px', padding: '24px' }}>
-        {error ? (
-          <>
-            <div style={{ fontSize: '42px', marginBottom: '16px' }}>⚠️</div>
-            <p style={{ color: '#ef4444', fontSize: '15px', fontWeight: 600, marginBottom: '16px' }}>{error}</p>
-            <button className="btn-primary" onClick={() => navigate('/auth')} style={{ padding: '8px 20px', fontSize: '13px' }}>
-              Back to Sign In
-            </button>
-          </>
-        ) : success ? (
-          <>
-            <div style={{ fontSize: '42px', marginBottom: '16px', color: '#4ade80' }}>✓</div>
-            <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', marginBottom: '8px' }}>
-              Authentication Successful
-            </h2>
-            <p style={{ color: '#a1a1aa', fontSize: '13px', marginBottom: '20px', lineHeight: 1.5 }}>
-              You are signed in. This window will close automatically, or you can continue below.
-            </p>
-            <button
-              className="btn-primary"
-              onClick={() => {
-                const target = localStorage.getItem('auth_redirect_url') || '/';
-                navigate(target, { replace: true });
-              }}
-              style={{ padding: '8px 20px', fontSize: '13px' }}
-            >
-              Continue to Archon
-            </button>
-          </>
-        ) : (
-          <>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-              <Spinner size="lg" />
-            </div>
-            <p style={{ color: '#a1a1aa', fontSize: '14px', fontWeight: 500 }}>
-              Completing authentication...
-            </p>
-          </>
-        )}
+    <>
+      <Substrate />
+      <div className="relative z-[2] flex min-h-screen items-center justify-center px-6 py-16">
+        <div className="flex flex-col items-center gap-4">
+          <svg className="animate-spin-mark text-emerald" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+            <path d="M12 2v4M12 18v4M2 12h4M18 12h4" strokeLinecap="round" />
+          </svg>
+          <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-3">
+            Completing sign-in
+          </span>
+        </div>
       </div>
-    </div>
+    </>
   )
 }

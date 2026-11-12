@@ -1,6 +1,6 @@
 import React from 'react';
 import { FileIntelligence } from './explorerTypes';
-import { getRoleBadgeStyle } from './explorerUtils';
+import { getRoleLabel } from './explorerUtils';
 
 interface ExplorerIntelligencePanelProps {
   intelligence: FileIntelligence;
@@ -21,150 +21,156 @@ export default function ExplorerIntelligencePanel({
   onTriggerChat,
   onClose
 }: ExplorerIntelligencePanelProps) {
-  const roleStyle = getRoleBadgeStyle(intelligence.role);
+  const roleLabel = getRoleLabel(intelligence.role);
+
+  const inbound = intelligence.inboundDependents;
+  const outbound = intelligence.outboundDependencies;
+  const driftCount = intelligence.driftViolations.length;
 
   return (
-    <div className="h-full flex flex-col bg-[#0d0d10] border-l border-zinc-800/80 overflow-y-auto select-none font-mono text-[12px] scrollbar-thin scrollbar-thumb-zinc-800">
+    <div className="intel flex h-full flex-col overflow-y-auto select-none font-mono text-[11px]">
       {/* 1. HEADER */}
-      <div className="p-3.5 border-b border-zinc-800/80 flex items-center justify-between flex-shrink-0 bg-[#111114]">
+      <div className="intel__sec flex shrink-0 items-center justify-between bg-paper-2">
         <div className="flex items-center gap-2">
-          <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-          <span className="font-heading font-semibold text-white text-[13px] tracking-tight">
-            Architectural Intelligence
+          <span className="st st--live" title="Intelligence inspector live">
+            <i /> architectural intelligence
           </span>
         </div>
         {onClose && (
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 p-1 rounded hover:bg-zinc-800"
-            title="Collapse Inspector"
+            className="cursor-pointer rounded-[2px] p-1 text-ink-3 transition-colors hover:bg-paper-3 hover:text-ink"
+            title="Collapse inspector"
           >
             ✕
           </button>
         )}
       </div>
 
-      <div className="p-3.5 space-y-4 flex-1">
+      <div className="flex-1 space-y-0">
         {/* 2. IDENTITY & ARCHITECTURAL ROLE */}
-        <div className="bg-[#141418] border border-zinc-800/90 rounded-[6px] p-3 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-wider">
-              Architectural Role
-            </span>
-            <span
-              className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider ${roleStyle.bg} ${roleStyle.text} border ${roleStyle.border}`}
-            >
-              {roleStyle.label}
-            </span>
+        <div className="intel__sec space-y-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <span className="intel__k mb-0">Architectural role</span>
+            <span className="figcap text-ink-2">{roleLabel}</span>
           </div>
 
           <div>
-            <span className="text-[13px] font-bold text-white block truncate" title={intelligence.name}>
+            <span className="block truncate font-mono text-[12.5px] font-semibold text-ink" title={intelligence.name}>
               {intelligence.name}
             </span>
-            <span className="text-[11px] text-zinc-500 block truncate" title={intelligence.path}>
+            <span className="block truncate text-[10px] text-ink-3" title={intelligence.path}>
               {intelligence.path}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-zinc-800/60 text-[11px]">
-            <div>
-              <span className="text-zinc-500 block">Lines</span>
-              <span className="text-zinc-200 font-semibold">{intelligence.lines}</span>
+          <div className="border-t border-rule pt-1">
+            <div className="ikv">
+              <span className="k">lines</span>
+              <span className="v">{intelligence.lines}</span>
             </div>
-            <div>
-              <span className="text-zinc-500 block">Language</span>
-              <span className="text-zinc-200 font-semibold">{intelligence.language}</span>
+            <div className="ikv">
+              <span className="k">language</span>
+              <span className="v">{intelligence.language}</span>
+            </div>
+            <div className="ikv">
+              <span className="k">size</span>
+              <span className="v">{intelligence.size} B</span>
+            </div>
+            <div className="ikv">
+              <span className="k">entry point</span>
+              <span className="v">{intelligence.isEntryPoint ? 'yes' : 'no'}</span>
             </div>
           </div>
         </div>
 
         {/* 3. HEALTH & CENTRALITY METRICS */}
-        <div className="bg-[#141418] border border-zinc-800/90 rounded-[6px] p-3 space-y-2.5">
-          <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-wider block">
-            Health & Topology
-          </span>
+        <div className="intel__sec space-y-2.5">
+          <span className="intel__k">Health & topology</span>
 
           <div className="grid grid-cols-2 gap-2">
-            <div className="bg-[#0e0e11] p-2 rounded border border-zinc-800">
-              <span className="text-[10px] text-zinc-500 block uppercase">Inbound Callers</span>
-              <span className="text-[16px] font-bold text-white block mt-0.5">
-                {intelligence.inboundDependents.length}
+            <div className="rounded-[3px] border border-rule bg-paper-2 p-2">
+              <span className="block text-[9px] uppercase tracking-[.12em] text-ink-3">Inbound callers</span>
+              <span className="mt-0.5 block text-[18px] font-semibold leading-none text-ink">
+                {inbound.length}
               </span>
-              <span className="text-[10px] text-zinc-500">
-                {intelligence.inboundDependents.length > 5 ? 'High Blast Radius' : 'Low Impact'}
+              <span className="text-[9.5px] text-ink-3">
+                {inbound.length > 5 ? 'high blast radius' : 'low impact'}
               </span>
             </div>
 
-            <div className="bg-[#0e0e11] p-2 rounded border border-zinc-800">
-              <span className="text-[10px] text-zinc-500 block uppercase">Outbound Deps</span>
-              <span className="text-[16px] font-bold text-white block mt-0.5">
-                {intelligence.outboundDependencies.length}
+            <div className="rounded-[3px] border border-rule bg-paper-2 p-2">
+              <span className="block text-[9px] uppercase tracking-[.12em] text-ink-3">Outbound deps</span>
+              <span className="mt-0.5 block text-[18px] font-semibold leading-none text-ink">
+                {outbound.length}
               </span>
-              <span className="text-[10px] text-zinc-500">Direct Imports</span>
+              <span className="text-[9.5px] text-ink-3">direct imports</span>
             </div>
           </div>
 
-          {/* Centrality Hotspot callout */}
+          {/* Centrality hotspot callout */}
           {intelligence.inDegree >= 5 && (
-            <div className="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300">
-              ★ <strong className="font-semibold">Centrality Anchor:</strong> This file is heavily coupled with {intelligence.inDegree} incoming dependencies. Modifications will ripple across the codebase.
+            <div className="rounded-[3px] border border-amber/30 bg-amber/10 p-2 text-[10.5px] leading-[1.5] text-amber">
+              <strong className="font-semibold">Centrality anchor.</strong> Heavily coupled with {intelligence.inDegree} incoming dependencies; modifications ripple across the codebase.
             </div>
           )}
 
-          {/* Architectural Drift Callout */}
-          {intelligence.driftViolations.length > 0 && (
-            <div className="p-2 rounded bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-300">
-              ⚠ <strong className="font-semibold">Layer Violation:</strong> Violates architectural boundaries ({intelligence.driftViolations.length} occurrences).
+          {/* Architectural drift callout */}
+          {driftCount > 0 && (
+            <div className="rounded-[3px] border border-sig/30 bg-sig/10 p-2 text-[10.5px] leading-[1.5] text-sig">
+              <strong className="font-semibold">Layer violation.</strong> Breaches architectural boundaries ({driftCount} occurrence{driftCount === 1 ? '' : 's'}).
+            </div>
+          )}
+
+          {/* Cycle callout */}
+          {intelligence.cycleInvolvement.length > 0 && (
+            <div className="rounded-[3px] border border-amber/30 bg-amber/10 p-2 text-[10.5px] leading-[1.5] text-amber">
+              <strong className="font-semibold">Import cycle.</strong> Participates in {intelligence.cycleInvolvement.length} dependency loop{intelligence.cycleInvolvement.length === 1 ? '' : 's'}.
             </div>
           )}
         </div>
 
         {/* 4. ACTIONS CONTINUITY DECK */}
-        <div className="bg-[#141418] border border-zinc-800/90 rounded-[6px] p-3 space-y-2">
-          <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-wider block">
-            Direct Investigations
-          </span>
+        <div className="intel__sec space-y-2">
+          <span className="intel__k">Direct investigations</span>
 
           <div className="space-y-1.5">
             {onNavigateToGraph && (
               <button
                 onClick={() => onNavigateToGraph(intelligence.path)}
-                className="w-full text-left px-2.5 py-1.5 rounded bg-[#1b1b22] hover:bg-[#252530] text-zinc-200 border border-zinc-700/60 transition-colors flex items-center justify-between text-[11.5px] cursor-pointer"
+                className="abtn abtn--ghost w-full justify-between px-2.5 py-1.5 text-[10.5px]"
               >
-                <span>View in Architecture Graph</span>
-                <span className="text-primary">➔</span>
+                <span>View in architecture graph</span>
+                <span className="text-ink-3">→</span>
               </button>
             )}
 
             {onNavigateToImpact && (
               <button
                 onClick={() => onNavigateToImpact(intelligence.path)}
-                className="w-full text-left px-2.5 py-1.5 rounded bg-[#1b1b22] hover:bg-[#252530] text-zinc-200 border border-zinc-700/60 transition-colors flex items-center justify-between text-[11.5px] cursor-pointer"
+                className="abtn abtn--ghost w-full justify-between px-2.5 py-1.5 text-[10.5px]"
               >
-                <span>Analyze Blast Radius</span>
-                <span className="text-amber-400">➔</span>
+                <span>Analyze blast radius</span>
+                <span className="text-ink-3">→</span>
               </button>
             )}
 
             {onNavigateToTrace && (
               <button
                 onClick={() => onNavigateToTrace(intelligence.path)}
-                className="w-full text-left px-2.5 py-1.5 rounded bg-[#1b1b22] hover:bg-[#252530] text-zinc-200 border border-zinc-700/60 transition-colors flex items-center justify-between text-[11.5px] cursor-pointer"
+                className="abtn abtn--ghost w-full justify-between px-2.5 py-1.5 text-[10.5px]"
               >
-                <span>Trace Execution Flow</span>
-                <span className="text-blue-400">➔</span>
+                <span>Trace execution flow</span>
+                <span className="text-ink-3">→</span>
               </button>
             )}
 
             {onTriggerChat && (
               <button
                 onClick={() => onTriggerChat(`Explain the architectural responsibilities and design patterns of ${intelligence.path}`)}
-                className="w-full text-left px-2.5 py-1.5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-colors flex items-center justify-between text-[11.5px] cursor-pointer"
+                className="abtn abtn--solid w-full justify-between px-2.5 py-1.5 text-[10.5px]"
               >
-                <span>Ask Archon AI About File</span>
+                <span>Ask Archon about this file</span>
                 <span>✦</span>
               </button>
             )}
@@ -172,92 +178,103 @@ export default function ExplorerIntelligencePanel({
         </div>
 
         {/* 5. INBOUND DEPENDENTS ("USED BY") */}
-        <div className="bg-[#141418] border border-zinc-800/90 rounded-[6px] p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-wider">
-              Used By ({intelligence.inboundDependents.length})
-            </span>
-            <span className="text-[10px] text-zinc-500">Inbound Callers</span>
+        <div className="intel__sec space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="intel__k mb-0">Used by ({inbound.length})</span>
+            <span className="figcap">inbound callers</span>
           </div>
 
-          {intelligence.inboundDependents.length > 0 ? (
-            <div className="max-h-40 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-              {intelligence.inboundDependents.map((dep) => (
-                <div
+          {inbound.length > 0 ? (
+            <div className="max-h-40 space-y-0.5 overflow-y-auto">
+              {inbound.map((dep) => (
+                <button
                   key={dep}
                   onClick={() => onSelectFile(dep)}
-                  className="p-1.5 rounded bg-[#0e0e11] hover:bg-primary/10 hover:text-primary hover:border-primary/40 border border-transparent text-zinc-300 text-[11px] truncate cursor-pointer transition-colors"
+                  className="block w-full truncate rounded-[2px] border border-transparent px-1.5 py-1 text-left font-mono text-[10.5px] text-ink-2 transition-colors hover:border-forest/40 hover:bg-forest/10 hover:text-emerald"
                   title={`Pivot to ${dep}`}
                 >
                   {dep}
-                </div>
+                </button>
               ))}
             </div>
           ) : (
-            <p className="text-[11px] text-zinc-600 italic py-1">
-              No inbound dependents detected. (File is an entry point or unreferenced).
+            <p className="py-1 text-[10.5px] italic text-ink-3">
+              No inbound dependents — file is an entry point or unreferenced.
             </p>
           )}
         </div>
 
         {/* 6. OUTBOUND DEPENDENCIES ("DEPENDS ON") */}
-        <div className="bg-[#141418] border border-zinc-800/90 rounded-[6px] p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-wider">
-              Depends On ({intelligence.outboundDependencies.length})
-            </span>
-            <span className="text-[10px] text-zinc-500">Imports</span>
+        <div className="intel__sec space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="intel__k mb-0">Depends on ({outbound.length})</span>
+            <span className="figcap">imports</span>
           </div>
 
-          {intelligence.outboundDependencies.length > 0 ? (
-            <div className="max-h-40 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-              {intelligence.outboundDependencies.map((dep) => (
-                <div
+          {outbound.length > 0 ? (
+            <div className="max-h-40 space-y-0.5 overflow-y-auto">
+              {outbound.map((dep) => (
+                <button
                   key={dep}
                   onClick={() => onSelectFile(dep)}
-                  className="p-1.5 rounded bg-[#0e0e11] hover:bg-primary/10 hover:text-primary hover:border-primary/40 border border-transparent text-zinc-300 text-[11px] truncate cursor-pointer transition-colors"
+                  className="block w-full truncate rounded-[2px] border border-transparent px-1.5 py-1 text-left font-mono text-[10.5px] text-ink-2 transition-colors hover:border-forest/40 hover:bg-forest/10 hover:text-emerald"
                   title={`Pivot to ${dep}`}
                 >
                   {dep}
-                </div>
+                </button>
               ))}
             </div>
           ) : (
-            <p className="text-[11px] text-zinc-600 italic py-1">
+            <p className="py-1 text-[10.5px] italic text-ink-3">
               No local repository imports detected.
             </p>
           )}
         </div>
 
         {/* 7. AST INTERFACE MAP */}
-        {intelligence.astInfo && (intelligence.astInfo.classes?.length > 0 || intelligence.astInfo.functions?.length > 0) && (
-          <div className="bg-[#141418] border border-zinc-800/90 rounded-[6px] p-3 space-y-2">
-            <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-wider block">
-              AST Interface Symbols
-            </span>
+        {intelligence.astInfo && (
+          (intelligence.astInfo.classes?.length || 0) > 0 ||
+          (intelligence.astInfo.functions?.length || 0) > 0
+        ) && (
+          <div className="intel__sec space-y-2">
+            <span className="intel__k">AST interface symbols</span>
 
             {/* Classes */}
             {intelligence.astInfo.classes && intelligence.astInfo.classes.length > 0 && (
               <div className="space-y-1">
-                <span className="text-[10px] text-blue-400 font-bold uppercase">Classes:</span>
-                {intelligence.astInfo.classes.map((c, i) => (
-                  <div key={i} className="text-[11px] text-zinc-300 bg-[#0e0e11] px-2 py-1 rounded">
-                    class <span className="text-white font-semibold">{typeof c?.name === 'string' ? c.name : 'AnonymousClass'}</span>
+                <span className="figcap text-ink-2">Classes — {intelligence.astInfo.classes.length}</span>
+                <div className="mini">
+                  <div className="mini__body">
+                    {intelligence.astInfo.classes.map((c, i) => (
+                      <div key={i} className="mini__row !grid-cols-[1fr_auto]">
+                        <span className="p">
+                          <span className="text-ink-3">class </span>
+                          <span className="font-semibold text-ink">{typeof c?.name === 'string' ? c.name : 'AnonymousClass'}</span>
+                        </span>
+                        <span className="n">{c?.methods?.length ?? 0}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
               </div>
             )}
 
             {/* Functions */}
             {intelligence.astInfo.functions && intelligence.astInfo.functions.length > 0 && (
               <div className="space-y-1 pt-1">
-                <span className="text-[10px] text-emerald-400 font-bold uppercase">Functions:</span>
-                <div className="max-h-32 overflow-y-auto space-y-1 scrollbar-thin">
-                  {intelligence.astInfo.functions.map((f, i) => (
-                    <div key={i} className="text-[11px] text-zinc-300 bg-[#0e0e11] px-2 py-1 rounded truncate">
-                      function <span className="text-white font-semibold">{typeof f?.name === 'string' ? f.name : 'anonymous'}</span>
-                    </div>
-                  ))}
+                <span className="figcap text-ink-2">Functions — {intelligence.astInfo.functions.length}</span>
+                <div className="mini">
+                  <div className="mini__body max-h-40 overflow-y-auto">
+                    {intelligence.astInfo.functions.map((f, i) => (
+                      <div key={i} className="mini__row !grid-cols-[1fr_auto]">
+                        <span className="p">
+                          <span className="text-ink-3">function </span>
+                          <span className="font-semibold text-ink">{typeof f?.name === 'string' ? f.name : 'anonymous'}</span>
+                        </span>
+                        <span className="n">{f?.params?.length ?? 0}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
