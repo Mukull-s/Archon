@@ -66,8 +66,12 @@ export async function fetchLatestCommitSha(
   try {
     return await attempt(userToken);
   } catch (err: any) {
-    if (err?.response?.status === 401 && fallbackToken && userToken !== fallbackToken) {
-      console.warn('[Indexing] User token rejected for commit SHA; retrying with GITHUB_FALLBACK_TOKEN...');
+    const status = err?.response?.status;
+    // 403 as well as 401: an unauthenticated attempt is limited to 60 requests
+    // per hour per IP, and hosted platforms share one IP across tenants. See
+    // the note in `downloadGithubRepo` for the full reasoning.
+    if ((status === 401 || status === 403) && fallbackToken && fallbackToken !== userToken) {
+      console.warn(`[Indexing] Commit SHA lookup returned ${status}; retrying with GITHUB_FALLBACK_TOKEN...`);
       return await attempt(fallbackToken);
     }
     throw err;

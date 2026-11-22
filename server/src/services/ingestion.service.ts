@@ -105,19 +105,44 @@ class IngestionService {
     // Fall back to server's global token if the user is not authenticated
     const fallbackToken = process.env.GITHUB_FALLBACK_TOKEN;
     let activeToken = token || fallbackToken;
-    
+
     console.log(`Downloading repository zipball from ${url} (authenticated: ${!!activeToken}, timeout: ${DOWNLOAD_TIMEOUT_MS}ms)...`);
-    
+
     try {
       try {
         const response = await axios(this.githubZipballRequest(url, activeToken));
         fs.writeFileSync(filePath, response.data);
         return filePath;
       } catch (firstError: any) {
-        // If the user's personal OAuth token is expired/revoked (401 Bad credentials),
-        // and we have a valid server GITHUB_FALLBACK_TOKEN, retry with the fallback token!
-        if (firstError.response?.status === 401 && token && fallbackToken && token !== fallbackToken) {
-          console.warn(`[GitHub Download] User token returned 401 (expired/revoked). Retrying download with GITHUB_FALLBACK_TOKEN...`);
+        const status = firstError.response?.status;
+
+        /*
+         * Retry once with the server token when the attempt that failed could
+         * plausibly succeed with a better credential.
+         *
+         * Two cases, and the second one is what broke on hosted infrastructure:
+         *
+         *   401  the user's stored OAuth token has been revoked or expired.
+         *   403  rate limited. GitHub gives 60 requests/hour per IP when
+         *        unauthenticated, and a hosting provider puts every tenant
+         *        behind one IP — so an anonymous or exhausted attempt fails
+         *        within minutes of real traffic, while the server's own token
+         *        would still have quota.
+         *
+         * Only retry when we actually have a different token to offer, so this
+         * can never loop and can never retry with the credential that just
+         * failed.
+         */
+        const canRetryWithFallback =
+          (status === 401 || status === 403) &&
+          !!fallbackToken &&
+          fallbackToken !== activeToken;
+
+        if (canRetryWithFallback) {
+          console.warn(
+            `[GitHub Download] Attempt with ${activeToken ? 'the supplied token' : 'no token'} returned ${status}. ` +
+              `Retrying with GITHUB_FALLBACK_TOKEN...`
+          );
           activeToken = fallbackToken;
           const retryResponse = await axios(this.githubZipballRequest(url, fallbackToken));
           fs.writeFileSync(filePath, retryResponse.data);
@@ -126,7 +151,7 @@ class IngestionService {
 
         // Single retry for transient network/5xx failures.
         if (this.isRetryableDownloadError(firstError)) {
-          console.warn(`[GitHub Download] Transient failure (status ${firstError.response?.status ?? 'network'}). Retrying once...`);
+          console.warn(`[GitHub Download] Transient failure (status ${status ?? 'network'}). Retrying once...`);
           const retryResponse = await axios(this.githubZipballRequest(url, activeToken));
           fs.writeFileSync(filePath, retryResponse.data);
           return filePath;

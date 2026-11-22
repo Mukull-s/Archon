@@ -42,6 +42,18 @@ const envSchema = z.object({
 
   // Encryption (falls back to JWT_SECRET if unset)
   GITHUB_TOKEN_ENCRYPTION_KEY: z.string().default(''),
+  /**
+   * Server-side GitHub token used when a user has no token of their own, or
+   * theirs has expired.
+   *
+   * This is not optional in practice. GitHub allows 60 unauthenticated requests
+   * per hour *per IP*, and a hosting platform puts every tenant behind the same
+   * IP — so without a server token, indexing works on a laptop and fails on
+   * Render within minutes of any real traffic. Validated here so a missing token
+   * is visible, rather than surfacing as a confusing "rate limit" error at the
+   * moment a user presses Analyze.
+   */
+  GITHUB_FALLBACK_TOKEN: z.string().default(''),
 
   // OAuth CSRF state signing (falls back to JWT_SECRET if unset)
   OAUTH_STATE_SECRET: z.string().default(''),

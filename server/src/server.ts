@@ -25,6 +25,24 @@ async function bootstrap() {
     });
     logger.info(`?? Health check: http://localhost:${env.PORT}/api/health`);
 
+    /*
+     * Say out loud when there is no server-side GitHub token.
+     *
+     * GitHub allows 60 unauthenticated requests per hour, counted per IP, and a
+     * hosting platform puts every tenant behind the same IP. Without this token
+     * indexing works locally and fails on Render within minutes of real traffic,
+     * surfacing to the user as "rate limit exceeded" the moment they press
+     * Analyze. That is a deployment fault, not a user error, so it is reported
+     * at boot where the operator will see it.
+     */
+    if (!env.GITHUB_FALLBACK_TOKEN && !process.env.GITHUB_TOKEN) {
+      logger.warn(
+        'GITHUB_FALLBACK_TOKEN is not set. Repository indexing will run unauthenticated ' +
+          '(60 requests/hour, shared across all tenants on this host) and will fail under load. ' +
+          'Set GITHUB_FALLBACK_TOKEN to a fine-grained personal access token with public repo read access.',
+      );
+    }
+
     // Initialize durable PostgreSQL background queue and start worker
     queueService.initQueue().then(() => {
       queueService.startWorker({ concurrency: 2 });
