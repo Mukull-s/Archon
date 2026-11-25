@@ -117,6 +117,13 @@ export async function prepareChatContext(
   });
 
   let similarChunks: any[] = [];
+  /*
+   * `limit: 0` means the planner decided this is conversation, not a codebase
+   * question. Retrieval is skipped entirely so an aside ("hi", "thanks", "you
+   * are useless") cannot be answered with an unrelated chunk of source. The
+   * model gets no context and replies in its own voice.
+   */
+  if (plan.limit > 0) {
   if (plan.intent === 'DEPENDENCY' && plan.dependencyAnalysis) {
     const targetFilePaths: string[] = [];
     if (plan.dependencyAnalysis.sourceFile) targetFilePaths.push(plan.dependencyAnalysis.sourceFile);
@@ -150,6 +157,7 @@ export async function prepareChatContext(
       take: plan.limit
     });
   }
+  } // end `plan.limit > 0`
 
   /* ── retrieval quality ────────────────────────────────────────────────
      The best cosine distance of the top chunk says how well the repository

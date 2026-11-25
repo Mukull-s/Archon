@@ -120,6 +120,26 @@ export class PlannerService {
       steps.push('Fetch configuration chunks (package.json, tsconfig.json)');
       steps.push('Retrieve architectural layout rules');
       limit = 12;
+    } else if (isConversational(queryText)) {
+      /*
+       * Not a codebase question at all — a greeting, thanks, an aside, or
+       * something rude. Retrieval must NOT run for these.
+       *
+       * Without this branch an off-topic message falls through to GENERAL and
+       * gets vector-matched against the code, so "fuck you" returned the
+       * nearest chunk — which happened to be auth code — and the model dutifully
+       * explained authentication. The answer was grounded and irrelevant, which
+       * is worse than not answering: it reads as if the assistant ignored you.
+       *
+       * Marked so the orchestrator sends no context and the model replies in its
+       * own voice. This is a routing decision, not a content filter — abuse is
+       * answered calmly and briefly, never with the repository's source code.
+       */
+      intent = 'GENERAL';
+      steps.push('Classify as conversation — no repository retrieval');
+      useVector = false;
+      useFts = false;
+      limit = 0;
     } else {
       intent = 'GENERAL';
       steps.push('Generate query vector embedding');
@@ -137,6 +157,61 @@ export class PlannerService {
       dependencyAnalysis
     };
   }
+}
+
+/**
+ * Is this message addressed to the assistant rather than to the repository?
+ *
+ * Deliberately narrow. It must not swallow a real question that merely contains
+ * a small talk word — "what is the auth flow?" contains no trigger and is left
+ * to retrieval, while "hi", "thanks" and "are you stupid?" are caught.
+ *
+ * The list is short and literal on purpose. A loose matcher here would silently
+ * disable retrieval for legitimate questions, which is a far worse failure than
+ * answering an aside with an aside.
+ */
+const CONVERSATIONAL = [
+  /^(hi|hey|hello|yo|sup|good (morning|afternoon|evening))\b/i,
+  /^(thanks|thank you|ty|cheers|nice|great|cool|ok|okay|got it|perfect|awesome)\b[.!]*$/i,
+  /^(bye|goodbye|see you|good night)\b/i,
+  /^(who are you|what are you|what can you do|how do you work|help)[?!.]*$/i,
+  // Profanity and abuse, aimed at the assistant. Answered plainly, not echoed.
+  // `\b` on both sides — a leading lookahead cannot match at index 0 because the
+  // first character is itself a word character, which made "fuck you" fail while
+  // "you are useless" (matched by its own rule) passed.
+  /\b(fuck|fucking|shit|bitch|asshole|idiot|stupid|dumb|useless|trash|garbage)\b/i,
+  /^you (suck|are (dumb|stupid|useless|wrong))\b/i,
+  /^(are you|why are you|what is wrong with you)\b/i,
+];
+
+/**
+ * Is this message addressed to the assistant rather than to the repository?
+ *
+ * Deliberately narrow. It must not swallow a real question that merely contains
+ * a small-talk word — "what is the auth flow?" is left to retrieval, while "hi",
+ * "thanks" and "are you stupid?" are caught.
+ *
+ * The guard order matters: a codebase question always wins. "why is this
+ * auth broken" contains "auth", so it is retrieved for even though it is blunt.
+ * Only when no code signal and no length signal is present does the small-talk
+ * match decide.
+ */
+function isConversational(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+
+  // A codebase question always wins. If the message names code, it is not an
+  // aside, whatever else it contains.
+  const CODE_SIGNAL = new RegExp(
+    '(?=$|[^A-Za-z0-9_])(file|function|class|module|method|import|export|route|controller|service|model|schema|database|auth|api|endpoint|test|bug|error|type|interface|component|hook|repo|repository|codebase|dependency|architecture|flow|trace)(?=$|[^A-Za-z0-9_])',
+    'i',
+  );
+  if (CODE_SIGNAL.test(t)) return false;
+
+  // A long message is almost always a real question, not an aside.
+  if (t.split(/\s+/).length > 12) return false;
+
+  return CONVERSATIONAL.some((re) => re.test(t));
 }
 
 export const plannerService = new PlannerService();

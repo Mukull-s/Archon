@@ -440,9 +440,10 @@ button, input, select, textarea {
 .mini__head { padding: 12px 16px; border-bottom: 1px solid var(--rule); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mini__body { padding: 0; }
 .mini__row {
-  display: grid; grid-template-columns: 22px 1fr auto; gap: 12px; align-items: center;
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px; align-items: center;
   padding: 9px 16px; border-bottom: 1px solid var(--rule-2);
   font-family: var(--font-app-mono); font-size: 11px;
+  min-width: 0;
 }
 .mini__row:last-child { border-bottom: 0; }
 .mini__row .ic {
@@ -451,8 +452,11 @@ button, input, select, textarea {
 }
 .mini__row .ic--ts { color: #1f6feb; border-color: #c3d7f5; background: #eef4fd; }
 .mini__row .ic--js { color: #8a6d1f; border-color: #e0d3a8; background: #f8f2df; }
-.mini__row .p { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mini__row .n { color: var(--ink-3); font-size: 9.5px; }
+/* `min-width: 0` is what lets the ellipsis work: a grid item defaults to
+   `min-width: auto`, so a long path expands the column instead of truncating
+   and pushes the row wider than its container. */
+.mini__row .p { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mini__row .n { color: var(--ink-3); font-size: 9.5px; white-space: nowrap; }
 
 /* the readiness verdict */
 .verdict { border: 1.5px solid var(--ink); border-radius: 4px; background: var(--paper-2); overflow: hidden; }
@@ -711,9 +715,42 @@ button, input, select, textarea {
 .heat i.h4 { background: var(--signal); }
 
 /* ── AI ASSISTANT ──────────────────────────────────────────────────────── */
-.chatw { display: grid; grid-template-columns: 1fr 300px; gap: 24px; align-items: start; height: 660px; }
-.chat { display: flex; flex-direction: column; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper-2); overflow: hidden; height: 100%; }
-.chat__log { flex: 1; overflow-y: auto; padding: 26px 28px 34px; }
+/* The conversation grid. Height comes from the shell, not a magic number:
+   a fixed 660px pane overflowed once the feed, the rail and the composer were
+   all counted, and it clipped on shorter viewports. */
+.chatw {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 20px;
+  align-items: stretch;
+  height: 100%;
+  min-height: 0;
+}
+.chat {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper-2);
+  overflow: hidden;
+  min-height: 0;
+  height: 100%;
+}
+.chat__log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 26px 28px 34px; min-height: 0; }
+
+/* The side rail scrolls on its own so a long file list never pushes the
+   composer off-screen. `min-height: 0` is what allows a grid child to scroll
+   rather than expand its parent. */
+.chat__side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.chat__side::-webkit-scrollbar { width: 8px; }
+.chat__side::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 4px; }
 .chat__log::-webkit-scrollbar { width: 9px; }
 .chat__log::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 5px; }
 .msg { margin-bottom: 26px; max-width: 88%; }
@@ -741,10 +778,17 @@ button, input, select, textarea {
 .msg__cite .ln { color: var(--ink-3); font-size: 9.5px; }
 .msg__steps { margin-top: 12px; font-family: var(--font-app-mono); font-size: 9.5px; line-height: 1.9; color: var(--ink-3); }
 .msg__steps .st-t { letter-spacing: .14em; text-transform: uppercase; font-size: 8.5px; margin-bottom: 4px; }
-.chat__in { border-top: 1px solid var(--rule); padding: 16px 18px 18px; display: flex; gap: 12px; align-items: flex-end; background: var(--paper-3); }
-.chat__in textarea { flex: 1; resize: none; border: 1.5px solid var(--rule-strong); border-radius: 3px; background: var(--paper-2); font-family: var(--font-app-sans); font-size: 14px; line-height: 1.6; color: var(--ink); padding: 13px 15px; outline: none; min-height: 52px; max-height: 220px; }
+.chat__in { border-top: 1px solid var(--rule); padding: 16px 18px 18px; display: flex; gap: 12px; align-items: flex-end; background: var(--paper-3); flex: none; }
+.chat__in textarea { flex: 1; resize: none; border: 1.5px solid var(--rule-strong); border-radius: 3px; background: var(--paper-2); font-family: var(--font-app-sans); font-size: 14px; line-height: 1.6; color: var(--ink); padding: 13px 15px; outline: none; min-height: 64px; max-height: 260px; }
 .chat__in textarea:focus { border-color: var(--ink); }
 .chat__in textarea::placeholder { color: var(--ink-3); }
+.chat__in > div:first-child { min-width: 0; }
+
+/* Long answers and long paths must wrap inside the feed, never widen it. */
+.msg__txt { overflow-wrap: anywhere; word-break: break-word; }
+.msg__txt pre { overflow-x: auto; max-width: 100%; }
+.msg { min-width: 0; }
+.chat__log > div { min-width: 0; }
 .chat__extra { border: 1px solid var(--rule); border-radius: 4px; background: var(--paper-2); overflow: hidden; margin-bottom: 16px; }
 .chat__extra:last-child { margin-bottom: 0; }
 .chat__eh { padding: 11px 14px; border-bottom: 1px solid var(--rule); font-family: var(--font-app-mono); font-size: 9px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }

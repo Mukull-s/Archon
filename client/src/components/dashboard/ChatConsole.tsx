@@ -248,13 +248,13 @@ export default function ChatConsole({
     }
   }, [messages, loading, loadingStep, isAtBottom]);
 
-  // Auto-grow textarea height. The ceiling here must match the CSS max-height on
-  // `.chat__in textarea` (220px) or the smaller of the two silently wins.
+  // Auto-grow textarea height. The ceiling must match the CSS max-height on
+  // `.chat__in textarea` or the smaller of the two silently wins.
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 52), 220)}px`;
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 64), 260)}px`;
   }, [input]);
 
   // Ensure codebase vector index is ready
@@ -1297,20 +1297,12 @@ export default function ChatConsole({
                   );
                 })}
 
-                {/* planner intent steps */}
-                {currentPlan && loading && (
-                  <div className="msg__steps select-none">
-                    <div className="st-t">
-                      Intent — {currentPlan.intent}
-                    </div>
-                    {currentPlan.steps.map((step, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <span className="text-emerald">✓</span>
-                        <span>{step}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {/* The planner's intent classification and step list used to be
+                    printed here. It described machinery the reader cannot act on
+                    ("classify intent · dependency → resolve target …") and made
+                    every answer open with a block of internal process. The
+                    retrieval that actually happened is already exposed next to
+                    the citations, where it is useful. */}
 
                 {/* streaming indicator */}
                 {loading && (
@@ -1450,7 +1442,9 @@ export default function ChatConsole({
         </div>
 
         {/* ══ side rail ══════════════════════════════════════════════════ */}
-        <div className="space-y-4">
+        {/* Scrolls independently: a long cited-file list used to push the
+            composer off-screen because the rail grew with its content. */}
+        <div className="chat__side space-y-4">
           <div className="chat__extra">
             <div className="chat__eh">Session</div>
             <div className="chat__eb">

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../../lib/api';
 import { toast } from 'sonner';
-import ModuleGraphCanvas from './ModuleGraphCanvas';
+import ModuleGraph from './ModuleGraph';
 import { getDependencies, getDependents, classifyFile } from './graph/graphQueries';
 import { formatBytes } from './explorer/explorerUtils';
 
@@ -187,7 +187,7 @@ export default function CodeGraph({
       {/* ── the plate and the rail ─────────────────────────────────────── */}
       <div className={`flex min-h-[420px] flex-1 gap-4 ${rail && railOpen ? 'flex-col xl:flex-row' : ''}`}>
         <div className="flex min-h-[420px] min-w-0 flex-1 flex-col">
-          <ModuleGraphCanvas
+          <ModuleGraph
             scannedFiles={scannedFiles}
             dependencyGraph={dependencyGraph}
             astMetadata={astMetadata}
@@ -197,7 +197,7 @@ export default function CodeGraph({
               setRailOpen(true);
             }}
             onClearSelection={() => setRailOpen(false)}
-            hideDetailPlate={railOpen}
+            selectedFile={railOpen ? investigationTarget : undefined}
             criticalFiles={criticalFiles}
             cyclicFiles={cyclicFiles}
             loading={loading}
